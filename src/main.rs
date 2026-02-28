@@ -39,6 +39,16 @@ enum Command {
         phrase: Option<String>,
     },
 
+    /// Import secrets from a .env file
+    Import {
+        /// Path to the .env file to import
+        #[arg(default_value = ".env")]
+        file: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
     /// Add or update a secret
     Add {
         /// Secret key name
@@ -320,17 +330,30 @@ fn decrypt_mote(
     serde_json::from_slice(&plaintext).ok()
 }
 
+/// Resolve the secret key from MURK_KEY or MURK_KEY_FILE.
+/// MURK_KEY takes priority; MURK_KEY_FILE reads the key from a file.
+fn resolve_key() -> String {
+    if let Ok(k) = env::var("MURK_KEY") {
+        return k;
+    }
+    if let Ok(path) = env::var("MURK_KEY_FILE") {
+        match fs::read_to_string(&path) {
+            Ok(contents) => return contents.trim().to_string(),
+            Err(e) => {
+                eprintln!("error: cannot read MURK_KEY_FILE ({path}): {e}");
+                process::exit(1);
+            }
+        }
+    }
+    eprintln!("error: MURK_KEY not set (or use MURK_KEY_FILE)");
+    process::exit(1);
+}
+
 /// Load the vault: read the file, decrypt the shared blob, return all parts.
 /// Exits with an error message if anything fails.
 fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity, String) {
     let path = Path::new(vault);
-    let secret_key = match env::var("MURK_KEY") {
-        Ok(k) => k,
-        Err(_) => {
-            eprintln!("error: MURK_KEY not set");
-            process::exit(1);
-        }
-    };
+    let secret_key = resolve_key();
 
     // Warn if .env has loose permissions.
     #[cfg(unix)]
@@ -462,6 +485,74 @@ fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &st
     }
 
     save_vault(vault, &mut header, &murk);
+}
+
+/// Keys to skip when importing from a .env file.
+const IMPORT_SKIP: &[&str] = &["MURK_KEY", "MURK_KEY_FILE", "MURK_VAULT"];
+
+fn cmd_import(file: &str, vault: &str) {
+    let contents = match fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: cannot read {file}: {e}");
+            process::exit(1);
+        }
+    };
+
+    let (mut header, mut murk, _identity, _secret_key) = load_vault(vault);
+    let mut count = 0;
+
+    for line in contents.lines() {
+        let line = line.trim();
+
+        // Skip empty lines and comments.
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        // Strip optional "export " prefix.
+        let line = line.strip_prefix("export ").unwrap_or(line);
+
+        // Split on first '='.
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let key = key.trim();
+        let value = value.trim();
+
+        // Strip surrounding quotes from value.
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+
+        if key.is_empty() || IMPORT_SKIP.contains(&key) {
+            continue;
+        }
+
+        murk.values.insert(key.into(), value.into());
+
+        if !header.schema.iter().any(|e| e.key == key) {
+            header.schema.push(types::SchemaEntry {
+                key: key.into(),
+                description: String::new(),
+                example: None,
+            });
+        }
+
+        count += 1;
+        eprintln!("  + {key}");
+    }
+
+    if count == 0 {
+        eprintln!("no secrets found in {file}");
+        return;
+    }
+
+    save_vault(vault, &mut header, &murk);
+    eprintln!("imported {count} secret{}", if count == 1 { "" } else { "s" });
 }
 
 fn cmd_rm(key: &str, vault: &str) {
@@ -698,13 +789,7 @@ fn cmd_restore(phrase: Option<&str>) {
 }
 
 fn cmd_recover() {
-    let secret_key = match env::var("MURK_KEY") {
-        Ok(k) => k,
-        Err(_) => {
-            eprintln!("error: MURK_KEY not set");
-            process::exit(1);
-        }
-    };
+    let secret_key = resolve_key();
 
     match recovery::phrase_from_key(&secret_key) {
         Ok(phrase) => println!("{phrase}"),
@@ -813,6 +898,7 @@ fn main() {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
         Command::Restore { phrase } => cmd_restore(phrase.as_deref()),
+        Command::Import { file, vault } => cmd_import(&file, &vault),
         Command::Add {
             key,
             value,
