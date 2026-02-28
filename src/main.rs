@@ -1,4 +1,6 @@
-#![warn(clippy::pedantic)]
+//! Encrypted secrets manager for developers — one file, age encryption, git-friendly.
+
+#![warn(missing_docs, clippy::pedantic)]
 #![allow(
     clippy::doc_markdown,
     clippy::cast_possible_wrap,
