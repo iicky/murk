@@ -56,7 +56,6 @@ pub fn phrase_from_key(secret_key: &str) -> Result<String, RecoveryError> {
 
 /// Recover an age secret key from a BIP39 24-word mnemonic phrase.
 /// Returns the same MURK_KEY that was originally generated.
-#[allow(dead_code)]
 pub fn recover(phrase: &str) -> Result<String, RecoveryError> {
     let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, phrase)
         .map_err(|e| RecoveryError::Bip39(e.to_string()))?;

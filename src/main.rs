@@ -26,12 +26,18 @@ enum Command {
     /// Initialize a new vault and generate a keypair
     Init {
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
     /// Re-derive recovery phrase from current MURK_KEY
     Recover,
+
+    /// Restore MURK_KEY from a BIP39 recovery phrase
+    Restore {
+        /// 24-word recovery phrase (prompted if not given)
+        phrase: Option<String>,
+    },
 
     /// Add or update a secret
     Add {
@@ -39,11 +45,14 @@ enum Command {
         key: String,
         /// Secret value
         value: String,
+        /// Description for this key
+        #[arg(long)]
+        desc: Option<String>,
         /// Store in personal blob only
         #[arg(long)]
         private: bool,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
@@ -52,7 +61,7 @@ enum Command {
         /// Secret key name
         key: String,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
@@ -61,14 +70,14 @@ enum Command {
         /// Secret key name
         key: String,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
     /// List all key names
     Ls {
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
@@ -82,21 +91,21 @@ enum Command {
         #[arg(long)]
         example: Option<String>,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
     /// Show public schema and key info
     Info {
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
     /// Export all secrets as shell export statements
     Export {
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
@@ -107,7 +116,7 @@ enum Command {
         /// Optional display name (stored in encrypted blob only)
         name: Option<String>,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
@@ -116,14 +125,14 @@ enum Command {
         /// Recipient pubkey or display name
         recipient: String,
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 
     /// List all recipients
     Recipients {
         /// Vault filename
-        #[arg(long, default_value = ".murk")]
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
 }
@@ -239,6 +248,14 @@ fn cmd_init(vault_name: &str) {
         .open(env_path)
         .unwrap();
     writeln!(env_file, "export MURK_KEY={secret_key}").unwrap();
+    drop(env_file);
+
+    // Restrict .env to owner-only (chmod 600).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(env_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     // Build empty shared blob with the recipient name mapping.
     let mut recipient_names = HashMap::new();
@@ -315,6 +332,24 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
         }
     };
 
+    // Warn if .env has loose permissions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let env_path = Path::new(".env");
+        if env_path.exists()
+            && let Ok(meta) = fs::metadata(env_path)
+        {
+            let mode = meta.permissions().mode();
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "warning: .env is readable by others (mode {:o}). Run: chmod 600 .env",
+                    mode & 0o777
+                );
+            }
+        }
+    }
+
     let identity = match crypto::parse_identity(&secret_key) {
         Ok(id) => id,
         Err(e) => {
@@ -377,7 +412,7 @@ fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
     }
 }
 
-fn cmd_add(key: &str, value: &str, private: bool, vault: &str) {
+fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &str) {
     let (mut header, mut murk, identity, _secret_key) = load_vault(vault);
 
     if private {
@@ -410,14 +445,20 @@ fn cmd_add(key: &str, value: &str, private: bool, vault: &str) {
         murk.values.insert(key.into(), value.into());
     }
 
-    // Add schema entry if key is new.
-    if !header.schema.iter().any(|e| e.key == key) {
+    // Add schema entry if key is new, or update description if --desc provided.
+    if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
+        if let Some(d) = desc {
+            entry.description = d.into();
+        }
+    } else {
         header.schema.push(types::SchemaEntry {
             key: key.into(),
-            description: String::new(),
+            description: desc.unwrap_or("").into(),
             example: None,
         });
-        eprintln!("hint: no description set. Run: murk describe {key} \"your description\"");
+        if desc.is_none() {
+            eprintln!("hint: no description set. Run: murk describe {key} \"your description\"");
+        }
     }
 
     save_vault(vault, &mut header, &murk);
@@ -620,6 +661,32 @@ fn cmd_recipients(vault: &str) {
     }
 }
 
+fn cmd_restore(phrase: Option<&str>) {
+    let phrase = match phrase {
+        Some(p) => p.to_string(),
+        None => {
+            eprint!("Enter 24-word recovery phrase: ");
+            io::stdout().flush().ok();
+            let mut line = String::new();
+            io::stdin().lock().read_line(&mut line).unwrap_or(0);
+            line.trim().to_string()
+        }
+    };
+
+    if phrase.is_empty() {
+        eprintln!("error: recovery phrase is required");
+        process::exit(1);
+    }
+
+    match recovery::recover(&phrase) {
+        Ok(key) => println!("{key}"),
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+    }
+}
+
 fn cmd_recover() {
     let secret_key = match env::var("MURK_KEY") {
         Ok(k) => k,
@@ -735,12 +802,14 @@ fn main() {
     match cli.command {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
+        Command::Restore { phrase } => cmd_restore(phrase.as_deref()),
         Command::Add {
             key,
             value,
+            desc,
             private,
             vault,
-        } => cmd_add(&key, &value, private, &vault),
+        } => cmd_add(&key, &value, desc.as_deref(), private, &vault),
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
         Command::Ls { vault } => cmd_ls(&vault),
