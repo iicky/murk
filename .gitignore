@@ -1,4 +1,6 @@
-/target
-.env
 .beads/
-*.murk
+.claude/
+.env
+/target
+AGENTS.md
+CLAUDE.md
