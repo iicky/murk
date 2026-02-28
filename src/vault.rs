@@ -69,8 +69,7 @@ pub fn read_header(path: &Path) -> Result<Header, VaultError> {
 
     let header_str = contents
         .split_once(SECTION_SEP)
-        .map(|(h, _)| h)
-        .unwrap_or(&contents);
+        .map_or(contents.as_str(), |(h, _)| h);
 
     let header: Header = serde_json::from_str(header_str)
         .map_err(|e| VaultError::Parse(format!("invalid header JSON: {e}")))?;
