@@ -9,6 +9,7 @@ pub fn hash(data: &[u8]) -> String {
 
 /// Verify that `data` matches an expected hash string (e.g. "sha256:abc123...").
 /// Returns Ok(()) if valid, Err with a message if not.
+#[allow(dead_code)]
 pub fn verify(data: &[u8], expected: &str) -> Result<(), IntegrityError> {
     let actual = hash(data);
     if actual == expected {
@@ -22,6 +23,7 @@ pub fn verify(data: &[u8], expected: &str) -> Result<(), IntegrityError> {
 }
 
 /// Errors that can occur during integrity verification.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum IntegrityError {
     Mismatch { expected: String, actual: String },

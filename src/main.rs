@@ -213,7 +213,7 @@ fn cmd_init(vault_name: &str) {
     let env_path = Path::new(".env");
     if env_path.exists() {
         let contents = fs::read_to_string(env_path).unwrap_or_default();
-        if contents.lines().any(|l| l.starts_with("MURK_KEY=")) {
+        if contents.lines().any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY=")) {
             let answer = prompt(
                 "MURK_KEY already exists in .env. Overwrite? [y/N]",
                 Some("N"),
@@ -225,7 +225,7 @@ fn cmd_init(vault_name: &str) {
             // Remove existing MURK_KEY line(s).
             let filtered: Vec<&str> = contents
                 .lines()
-                .filter(|l| !l.starts_with("MURK_KEY="))
+                .filter(|l| !l.starts_with("MURK_KEY=") && !l.starts_with("export MURK_KEY="))
                 .collect();
             fs::write(env_path, filtered.join("\n") + "\n").unwrap();
         }
@@ -238,7 +238,7 @@ fn cmd_init(vault_name: &str) {
         .append(true)
         .open(env_path)
         .unwrap();
-    writeln!(env_file, "MURK_KEY={secret_key}").unwrap();
+    writeln!(env_file, "export MURK_KEY={secret_key}").unwrap();
 
     // Build empty shared blob with the recipient name mapping.
     let mut recipient_names = HashMap::new();

@@ -1,12 +1,10 @@
 use std::io::{Read, Write};
 
-use age::secrecy::ExposeSecret;
 use age::x25519::{Identity, Recipient};
 
 /// Errors that can occur during crypto operations.
 #[derive(Debug)]
 pub enum CryptoError {
-    Generate(String),
     Encrypt(String),
     Decrypt(String),
     InvalidKey(String),
@@ -15,21 +13,11 @@ pub enum CryptoError {
 impl std::fmt::Display for CryptoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CryptoError::Generate(msg) => write!(f, "key generation failed: {msg}"),
             CryptoError::Encrypt(msg) => write!(f, "encryption failed: {msg}"),
             CryptoError::Decrypt(msg) => write!(f, "decryption failed: {msg}"),
             CryptoError::InvalidKey(msg) => write!(f, "invalid key: {msg}"),
         }
     }
-}
-
-/// Generate a new age keypair.
-/// Returns (secret_key_string, public_key_string).
-pub fn generate_keypair() -> (String, String) {
-    let identity = Identity::generate();
-    let secret = identity.to_string();
-    let pubkey = identity.to_public().to_string();
-    (secret.expose_secret().to_string(), pubkey)
 }
 
 /// Parse a public key from its string representation (age1...).
@@ -94,6 +82,14 @@ pub fn decrypt(ciphertext: &[u8], identity: &Identity) -> Result<Vec<u8>, Crypto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use age::secrecy::ExposeSecret;
+
+    fn generate_keypair() -> (String, String) {
+        let identity = Identity::generate();
+        let secret = identity.to_string();
+        let pubkey = identity.to_public().to_string();
+        (secret.expose_secret().to_string(), pubkey)
+    }
 
     #[test]
     fn roundtrip_single_recipient() {
