@@ -54,6 +54,7 @@ jobs:
       - run: cargo tarpaulin --out xml --skip-clean
       - uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: cobertura.xml
           fail_ci_if_error: false
 
