@@ -93,6 +93,7 @@ mod tests {
                 key: "DATABASE_URL".into(),
                 description: "postgres connection string".into(),
                 example: Some("postgres://user:pass@host/db".into()),
+                tags: vec![],
             }],
         }
     }

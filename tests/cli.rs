@@ -687,6 +687,319 @@ fn authorized_recipient_can_decrypt() {
         .stdout(predicate::str::contains("hello_world"));
 }
 
+// ── tagging ──
+
+#[test]
+fn add_with_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // info should show the tag.
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[db]"));
+}
+
+#[test]
+fn add_with_multiple_tags() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--tag",
+            "backend",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[db, backend]"));
+}
+
+#[test]
+fn add_merges_tags_on_existing_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "v1", "--tag", "db", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Update value and add another tag.
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "v2",
+            "--tag",
+            "backend",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[db, backend]"));
+}
+
+#[test]
+fn describe_sets_tags() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "secret", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "TOKEN",
+            "API token",
+            "--tag",
+            "auth",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[auth]"));
+}
+
+#[test]
+fn describe_replaces_tags() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "TOKEN",
+            "secret",
+            "--tag",
+            "old",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "TOKEN",
+            "API token",
+            "--tag",
+            "new",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[new]").and(predicate::str::contains("[old]").not()));
+}
+
+#[test]
+fn ls_filters_by_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_KEY",
+            "sk-123",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Filter by "db" tag — should only show DB_URL.
+    murk(&dir, &key)
+        .args(["ls", "--tag", "db", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DB_URL").and(predicate::str::contains("API_KEY").not()));
+}
+
+#[test]
+fn export_filters_by_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_KEY",
+            "sk-123",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["add", "UNTAGGED", "val", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Export with --tag db — only DB_URL.
+    murk(&dir, &key)
+        .args(["export", "--tag", "db", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("export DB_URL=")
+                .and(predicate::str::contains("API_KEY").not())
+                .and(predicate::str::contains("UNTAGGED").not()),
+        );
+}
+
+#[test]
+fn export_without_tag_exports_all() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["add", "UNTAGGED", "val", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Export without --tag — should get everything.
+    murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("export DB_URL=")
+                .and(predicate::str::contains("export UNTAGGED=")),
+        );
+}
+
+#[test]
+fn info_filters_by_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_KEY",
+            "sk-123",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--tag", "api", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("API_KEY").and(predicate::str::contains("DB_URL").not()));
+}
+
 // ── end-to-end workflow ──
 
 #[test]

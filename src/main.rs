@@ -72,6 +72,9 @@ enum Command {
         /// Store in personal blob only
         #[arg(long)]
         private: bool,
+        /// Tag for grouping (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -97,6 +100,9 @@ enum Command {
 
     /// List all key names
     Ls {
+        /// Filter by tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -111,6 +117,9 @@ enum Command {
         /// Example value
         #[arg(long)]
         example: Option<String>,
+        /// Tag for grouping (repeatable, replaces existing tags)
+        #[arg(long)]
+        tag: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -118,6 +127,9 @@ enum Command {
 
     /// Show public schema and key info
     Info {
+        /// Filter by tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -125,6 +137,9 @@ enum Command {
 
     /// Export all secrets as shell export statements
     Export {
+        /// Filter by tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -462,7 +477,14 @@ fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
     }
 }
 
-fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &str) {
+fn cmd_add(
+    key: &str,
+    value: &str,
+    desc: Option<&str>,
+    private: bool,
+    tags: &[String],
+    vault: &str,
+) {
     let (mut header, mut murk, identity, _secret_key) = load_vault(vault);
 
     if private {
@@ -495,16 +517,24 @@ fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &st
         murk.values.insert(key.into(), value.into());
     }
 
-    // Add schema entry if key is new, or update description if --desc provided.
+    // Add schema entry if key is new, or update description/tags if provided.
     if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
         if let Some(d) = desc {
             entry.description = d.into();
+        }
+        if !tags.is_empty() {
+            for t in tags {
+                if !entry.tags.contains(t) {
+                    entry.tags.push(t.clone());
+                }
+            }
         }
     } else {
         header.schema.push(types::SchemaEntry {
             key: key.into(),
             description: desc.unwrap_or("").into(),
             example: None,
+            tags: tags.to_vec(),
         });
         if desc.is_none() {
             eprintln!(
@@ -570,6 +600,7 @@ fn cmd_import(file: &str, vault: &str) {
                 key: key.into(),
                 description: String::new(),
                 example: None,
+                tags: vec![],
             });
         }
 
@@ -623,7 +654,7 @@ fn cmd_get(key: &str, vault: &str) {
     }
 }
 
-fn cmd_ls(vault: &str) {
+fn cmd_ls(tags: &[String], vault: &str) {
     let path = Path::new(vault);
     let header = match vault::read_header(path) {
         Ok(h) => h,
@@ -634,29 +665,36 @@ fn cmd_ls(vault: &str) {
     };
 
     for entry in &header.schema {
+        if !tags.is_empty() && !entry.tags.iter().any(|t| tags.contains(t)) {
+            continue;
+        }
         println!("{}", entry.key);
     }
 }
 
-fn cmd_describe(key: &str, description: &str, example: Option<&str>, vault: &str) {
+fn cmd_describe(key: &str, description: &str, example: Option<&str>, tags: &[String], vault: &str) {
     let (mut header, murk, _identity, _secret_key) = load_vault(vault);
 
     if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
         entry.description = description.into();
         entry.example = example.map(Into::into);
+        if !tags.is_empty() {
+            entry.tags = tags.to_vec();
+        }
     } else {
         header.schema.push(types::SchemaEntry {
             key: key.into(),
             description: description.into(),
             example: example.map(Into::into),
+            tags: tags.to_vec(),
         });
     }
 
     save_vault(vault, &mut header, &murk);
 }
 
-fn cmd_export(vault: &str) {
-    let (_header, murk, identity, _secret_key) = load_vault(vault);
+fn cmd_export(tags: &[String], vault: &str) {
+    let (header, murk, identity, _secret_key) = load_vault(vault);
 
     // Start with shared values.
     let mut values = murk.values.clone();
@@ -669,10 +707,29 @@ fn cmd_export(vault: &str) {
         }
     }
 
+    // Filter by tag if specified.
+    let allowed_keys: Option<std::collections::HashSet<&str>> = if tags.is_empty() {
+        None
+    } else {
+        Some(
+            header
+                .schema
+                .iter()
+                .filter(|e| e.tags.iter().any(|t| tags.contains(t)))
+                .map(|e| e.key.as_str())
+                .collect(),
+        )
+    };
+
     // Print as shell export statements, sorted for deterministic output.
     let mut keys: Vec<&String> = values.keys().collect();
     keys.sort();
     for k in keys {
+        if let Some(ref allowed) = allowed_keys {
+            if !allowed.contains(k.as_str()) {
+                continue;
+            }
+        }
         let v = &values[k];
         // Shell-escape: wrap in single quotes, escape embedded single quotes.
         let escaped = v.replace('\'', "'\\''");
@@ -851,7 +908,7 @@ fn cmd_recover() {
     }
 }
 
-fn cmd_info(vault: &str) {
+fn cmd_info(tags: &[String], vault: &str) {
     let path = Path::new(vault);
     let header = match vault::read_header(path) {
         Ok(h) => h,
@@ -861,7 +918,18 @@ fn cmd_info(vault: &str) {
         }
     };
 
-    if header.schema.is_empty() {
+    // Filter by tag if specified.
+    let entries: Vec<&types::SchemaEntry> = if tags.is_empty() {
+        header.schema.iter().collect()
+    } else {
+        header
+            .schema
+            .iter()
+            .filter(|e| e.tags.iter().any(|t| tags.contains(t)))
+            .collect()
+    };
+
+    if entries.is_empty() {
         println!("{}", "no keys in vault".dimmed());
         return;
     }
@@ -877,17 +945,11 @@ fn cmd_info(vault: &str) {
     });
 
     // Compute column widths for aligned output.
-    let key_width = header.schema.iter().map(|e| e.key.len()).max().unwrap();
+    let key_width = entries.iter().map(|e| e.key.len()).max().unwrap();
 
-    let desc_width = header
-        .schema
-        .iter()
-        .map(|e| e.description.len())
-        .max()
-        .unwrap();
+    let desc_width = entries.iter().map(|e| e.description.len()).max().unwrap();
 
-    let example_width = header
-        .schema
+    let example_width = entries
         .iter()
         .map(|e| {
             e.example
@@ -897,17 +959,36 @@ fn cmd_info(vault: &str) {
         .max()
         .unwrap();
 
-    for entry in &header.schema {
+    let tag_width = entries
+        .iter()
+        .map(|e| {
+            if e.tags.is_empty() {
+                0
+            } else {
+                format!("[{}]", e.tags.join(", ")).len()
+            }
+        })
+        .max()
+        .unwrap();
+
+    for entry in &entries {
         let example_str = entry
             .example
             .as_ref()
             .map(|ex| format!("(e.g. {ex})"))
             .unwrap_or_default();
 
+        let tag_str = if entry.tags.is_empty() {
+            String::new()
+        } else {
+            format!("[{}]", entry.tags.join(", "))
+        };
+
         // Pad plain strings for alignment, then apply colors.
         let key_padded = format!("{:<key_width$}", entry.key);
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
+        let tag_padded = format!("{tag_str:<tag_width$}");
 
         if let Some(ref murk) = murk_data {
             let recipients = murk.per_key_access.get(&entry.key).map_or_else(
@@ -921,18 +1002,20 @@ fn cmd_info(vault: &str) {
                 },
             );
             println!(
-                "{}  {}  {}  {}",
+                "{}  {}  {}  {}  {}",
                 key_padded.bold(),
                 desc_padded,
                 ex_padded.dimmed(),
+                tag_padded.cyan(),
                 recipients.dimmed()
             );
         } else {
             println!(
-                "{}  {}  {}",
+                "{}  {}  {}  {}",
                 key_padded.bold(),
                 desc_padded,
-                ex_padded.dimmed()
+                ex_padded.dimmed(),
+                tag_padded.cyan()
             );
         }
     }
@@ -951,19 +1034,21 @@ fn main() {
             value,
             desc,
             private,
+            tag,
             vault,
-        } => cmd_add(&key, &value, desc.as_deref(), private, &vault),
+        } => cmd_add(&key, &value, desc.as_deref(), private, &tag, &vault),
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
-        Command::Ls { vault } => cmd_ls(&vault),
+        Command::Ls { tag, vault } => cmd_ls(&tag, &vault),
         Command::Describe {
             key,
             description,
             example,
+            tag,
             vault,
-        } => cmd_describe(&key, &description, example.as_deref(), &vault),
-        Command::Info { vault } => cmd_info(&vault),
-        Command::Export { vault } => cmd_export(&vault),
+        } => cmd_describe(&key, &description, example.as_deref(), &tag, &vault),
+        Command::Info { tag, vault } => cmd_info(&tag, &vault),
+        Command::Export { tag, vault } => cmd_export(&tag, &vault),
         Command::Authorize {
             pubkey,
             name,
