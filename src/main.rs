@@ -7,6 +7,7 @@ use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process;
 
+use age::secrecy::ExposeSecret;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
@@ -304,14 +305,14 @@ fn cmd_init(vault_name: &str) {
     eprintln!("Next: {}", "murk add KEY VALUE".bold());
 }
 
-fn resolve_key() -> String {
+fn resolve_key() -> age::secrecy::SecretString {
     murk_cli::resolve_key().unwrap_or_else(|e| {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     })
 }
 
-fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity, String) {
+fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity) {
     murk_cli::warn_env_permissions();
     murk_cli::load_vault(vault).unwrap_or_else(|e| {
         eprintln!("{} {e}", "error:".red().bold());
@@ -374,7 +375,7 @@ fn cmd_add(
     tags: &[String],
     vault: &str,
 ) {
-    let (mut header, mut murk, identity, _secret_key) = load_vault(vault);
+    let (mut header, mut murk, identity) = load_vault(vault);
 
     if private {
         // Add to personal blob (mote).
@@ -449,7 +450,7 @@ fn cmd_import(file: &str, vault: &str) {
         }
     };
 
-    let (mut header, mut murk, _identity, _secret_key) = load_vault(vault);
+    let (mut header, mut murk, _identity) = load_vault(vault);
     let mut count = 0;
 
     for line in contents.lines() {
@@ -511,7 +512,7 @@ fn cmd_import(file: &str, vault: &str) {
 }
 
 fn cmd_rm(key: &str, vault: &str) {
-    let (mut header, mut murk, _identity, _secret_key) = load_vault(vault);
+    let (mut header, mut murk, _identity) = load_vault(vault);
 
     murk.values.remove(key);
     murk.per_key_access.remove(key);
@@ -522,7 +523,7 @@ fn cmd_rm(key: &str, vault: &str) {
 }
 
 fn cmd_get(key: &str, vault: &str) {
-    let (_header, murk, identity, _secret_key) = load_vault(vault);
+    let (_header, murk, identity) = load_vault(vault);
 
     let pubkey = identity.to_public().to_string();
 
@@ -567,7 +568,7 @@ fn cmd_ls(tags: &[String], vault: &str) {
 }
 
 fn cmd_describe(key: &str, description: &str, example: Option<&str>, tags: &[String], vault: &str) {
-    let (mut header, murk, _identity, _secret_key) = load_vault(vault);
+    let (mut header, murk, _identity) = load_vault(vault);
 
     if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
         entry.description = description.into();
@@ -588,7 +589,7 @@ fn cmd_describe(key: &str, description: &str, example: Option<&str>, tags: &[Str
 }
 
 fn cmd_export(tags: &[String], vault: &str) {
-    let (header, murk, identity, _secret_key) = load_vault(vault);
+    let (header, murk, identity) = load_vault(vault);
 
     // Start with shared values.
     let mut values = murk.values.clone();
@@ -638,7 +639,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
         process::exit(1);
     }
 
-    let (mut header, mut murk, _identity, _secret_key) = load_vault(vault);
+    let (mut header, mut murk, _identity) = load_vault(vault);
 
     // Check if already a recipient.
     if header.recipients.contains(&pubkey.to_string()) {
@@ -661,7 +662,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
 }
 
 fn cmd_revoke(recipient: &str, vault: &str) {
-    let (mut header, mut murk, _identity, _secret_key) = load_vault(vault);
+    let (mut header, mut murk, _identity) = load_vault(vault);
 
     // Resolve recipient to pubkey — could be a name or a pubkey.
     let pubkey = if header.recipients.contains(&recipient.to_string()) {
@@ -793,7 +794,7 @@ fn cmd_restore(phrase: Option<&str>) {
 fn cmd_recover() {
     let secret_key = resolve_key();
 
-    match recovery::phrase_from_key(&secret_key) {
+    match recovery::phrase_from_key(secret_key.expose_secret()) {
         Ok(phrase) => println!("{phrase}"),
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());

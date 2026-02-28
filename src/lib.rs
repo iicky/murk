@@ -23,6 +23,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+use age::secrecy::{ExposeSecret, SecretString};
+
 /// Try to decrypt a personal mote for the given pubkey.
 /// Returns None if no mote exists or decryption fails.
 pub fn decrypt_mote(
@@ -39,13 +41,14 @@ pub fn decrypt_mote(
 
 /// Resolve the secret key from `MURK_KEY` or `MURK_KEY_FILE`.
 /// `MURK_KEY` takes priority; `MURK_KEY_FILE` reads the key from a file.
-pub fn resolve_key() -> Result<String, String> {
+/// Returns the key wrapped in `SecretString` so it is zeroized on drop.
+pub fn resolve_key() -> Result<SecretString, String> {
     if let Ok(k) = env::var("MURK_KEY") {
-        return Ok(k);
+        return Ok(SecretString::from(k));
     }
     if let Ok(path) = env::var("MURK_KEY_FILE") {
         return fs::read_to_string(&path)
-            .map(|contents| contents.trim().to_string())
+            .map(|contents| SecretString::from(contents.trim().to_string()))
             .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));
     }
     Err("MURK_KEY not set. Add it to .env and load with direnv or `eval $(cat .env)`. Alternatively, set MURK_KEY_FILE to a path containing the key".into())
@@ -54,12 +57,12 @@ pub fn resolve_key() -> Result<String, String> {
 /// Load the vault: read the file, decrypt the shared blob, return all parts.
 pub fn load_vault(
     vault: &str,
-) -> Result<(types::Header, types::Murk, age::x25519::Identity, String), String> {
+) -> Result<(types::Header, types::Murk, age::x25519::Identity), String> {
     let path = Path::new(vault);
     let secret_key = resolve_key()?;
 
     let identity =
-        crypto::parse_identity(&secret_key).map_err(|e| {
+        crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
             format!("invalid MURK_KEY (expected AGE-SECRET-KEY-1...): {e}. Run `murk restore` to recover from your 24-word phrase")
         })?;
 
@@ -73,7 +76,7 @@ pub fn load_vault(
     let murk: types::Murk =
         serde_json::from_slice(&plaintext).map_err(|e| format!("invalid vault data: {e}"))?;
 
-    Ok((header, murk, identity, secret_key))
+    Ok((header, murk, identity))
 }
 
 /// Re-encrypt the shared blob and write the vault back to disk.
