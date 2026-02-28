@@ -48,7 +48,7 @@ pub fn resolve_key() -> Result<String, String> {
             .map(|contents| contents.trim().to_string())
             .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));
     }
-    Err("MURK_KEY not set (or use MURK_KEY_FILE)".into())
+    Err("MURK_KEY not set. Add it to .env and load with direnv or `eval $(cat .env)`. Alternatively, set MURK_KEY_FILE to a path containing the key".into())
 }
 
 /// Load the vault: read the file, decrypt the shared blob, return all parts.
@@ -59,12 +59,16 @@ pub fn load_vault(
     let secret_key = resolve_key()?;
 
     let identity =
-        crypto::parse_identity(&secret_key).map_err(|e| format!("invalid MURK_KEY: {e}"))?;
+        crypto::parse_identity(&secret_key).map_err(|e| {
+            format!("invalid MURK_KEY (expected AGE-SECRET-KEY-1...): {e}. Run `murk restore` to recover from your 24-word phrase")
+        })?;
 
     let (header, encrypted) = vault::read(path).map_err(|e| e.to_string())?;
 
     let plaintext =
-        crypto::decrypt(&encrypted, &identity).map_err(|e| format!("decryption failed: {e}"))?;
+        crypto::decrypt(&encrypted, &identity).map_err(|_| {
+            "decryption failed — your MURK_KEY may not be a recipient of this vault. Check with `murk recipients`".to_string()
+        })?;
 
     let murk: types::Murk =
         serde_json::from_slice(&plaintext).map_err(|e| format!("invalid vault data: {e}"))?;

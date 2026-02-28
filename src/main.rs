@@ -498,7 +498,12 @@ fn cmd_get(key: &str, vault: &str) {
     if let Some(value) = murk.values.get(key) {
         println!("{value}");
     } else {
-        eprintln!("{} key not found: {}", "error:".red().bold(), key.bold());
+        eprintln!(
+            "{} key not found: {}. Run {} to see available keys",
+            "error:".red().bold(),
+            key.bold(),
+            "murk ls".bold()
+        );
         process::exit(1);
     }
 }

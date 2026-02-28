@@ -18,6 +18,9 @@ pub enum VaultError {
 impl std::fmt::Display for VaultError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            VaultError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                write!(f, "vault file not found. Run `murk init` to create one")
+            }
             VaultError::Io(e) => write!(f, "vault I/O error: {e}"),
             VaultError::Parse(msg) => write!(f, "vault parse error: {msg}"),
         }
@@ -35,16 +38,23 @@ impl From<std::io::Error> for VaultError {
 pub fn read(path: &Path) -> Result<(Header, Vec<u8>), VaultError> {
     let contents = fs::read_to_string(path)?;
 
-    let (header_str, murk_b64) = contents
-        .split_once(SECTION_SEP)
-        .ok_or_else(|| VaultError::Parse("missing section separator".into()))?;
+    let (header_str, murk_b64) = contents.split_once(SECTION_SEP).ok_or_else(|| {
+        VaultError::Parse(
+            "missing section separator. Vault may be corrupted — restore from git".into(),
+        )
+    })?;
 
-    let header: Header = serde_json::from_str(header_str)
-        .map_err(|e| VaultError::Parse(format!("invalid header JSON: {e}")))?;
+    let header: Header = serde_json::from_str(header_str).map_err(|e| {
+        VaultError::Parse(format!(
+            "invalid header JSON: {e}. Vault may be corrupted — restore from git"
+        ))
+    })?;
 
-    let murk_bytes = BASE64
-        .decode(murk_b64.trim())
-        .map_err(|e| VaultError::Parse(format!("invalid base64 in vault: {e}")))?;
+    let murk_bytes = BASE64.decode(murk_b64.trim()).map_err(|e| {
+        VaultError::Parse(format!(
+            "invalid base64 in vault: {e}. Vault may be corrupted — restore from git"
+        ))
+    })?;
 
     Ok((header, murk_bytes))
 }
