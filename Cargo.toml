@@ -2,6 +2,11 @@
 name = "murk"
 version = "0.1.0"
 edition = "2024"
+description = "Encrypted secrets manager for developers — one file, age encryption, git-friendly"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/iicky/murk"
+keywords = ["secrets", "encryption", "age", "dotenv", "security"]
+categories = ["command-line-utilities", "cryptography"]
 
 [dependencies]
 age = "0.11.2"
