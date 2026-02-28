@@ -1,5 +1,5 @@
 [package]
-name = "murk"
+name = "murk-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Encrypted secrets manager for developers — one file, age encryption, git-friendly"
@@ -8,6 +8,10 @@ repository = "https://github.com/iicky/murk"
 keywords = ["secrets", "encryption", "age", "dotenv", "security"]
 categories = ["command-line-utilities", "cryptography"]
 exclude = ["CLAUDE.md", "AGENTS.md", "SPEC.md", ".beads/"]
+
+[[bin]]
+name = "murk"
+path = "src/main.rs"
 
 [dependencies]
 age = "0.11.2"
