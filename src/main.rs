@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 
 /// Encrypted secrets manager for developers.
 #[derive(Parser)]
@@ -207,23 +208,23 @@ fn cmd_init(vault_name: &str) {
 
     // Don't overwrite an existing vault.
     if vault_path.exists() {
-        eprintln!("error: {vault_name} already exists");
+        eprintln!("{} {vault_name} already exists", "error:".red().bold());
         process::exit(1);
     }
 
     // Prompt for display name and vault name.
     let name = prompt("Enter your name or email", None);
     if name.is_empty() {
-        eprintln!("error: name is required");
+        eprintln!("{} name is required", "error:".red().bold());
         process::exit(1);
     }
 
     // Generate keypair via BIP39.
-    eprintln!("Generating keypair...");
+    eprintln!("{}", "Generating keypair...".dimmed());
     let (phrase, secret_key, pubkey) = match recovery::generate() {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -251,7 +252,7 @@ fn cmd_init(vault_name: &str) {
     }
 
     // Append MURK_KEY to .env.
-    eprintln!("Writing MURK_KEY to .env...");
+    eprintln!("{}", "Writing MURK_KEY to .env...".dimmed());
     let mut env_file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -303,17 +304,22 @@ fn cmd_init(vault_name: &str) {
 
     // Write vault.
     if let Err(e) = vault::write(vault_path, &header, &encrypted) {
-        eprintln!("error: {e}");
+        eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     }
 
     // Print recovery phrase.
     eprintln!();
-    eprintln!("WARNING: RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:");
-    println!("{phrase}");
+    eprintln!(
+        "{}",
+        "RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:"
+            .yellow()
+            .bold()
+    );
+    eprintln!("{}", phrase.bold());
     eprintln!();
-    eprintln!("Vault initialized. Added as recipient.");
-    eprintln!("Next: murk add KEY VALUE");
+    eprintln!("{}", "Vault initialized. Added as recipient.".green());
+    eprintln!("Next: {}", "murk add KEY VALUE".bold());
 }
 
 /// Try to decrypt a personal mote for the given pubkey.
@@ -340,12 +346,12 @@ fn resolve_key() -> String {
         match fs::read_to_string(&path) {
             Ok(contents) => return contents.trim().to_string(),
             Err(e) => {
-                eprintln!("error: cannot read MURK_KEY_FILE ({path}): {e}");
+                eprintln!("{} cannot read MURK_KEY_FILE ({path}): {e}", "error:".red().bold());
                 process::exit(1);
             }
         }
     }
-    eprintln!("error: MURK_KEY not set (or use MURK_KEY_FILE)");
+    eprintln!("{} MURK_KEY not set (or use MURK_KEY_FILE)", "error:".red().bold());
     process::exit(1);
 }
 
@@ -366,8 +372,10 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
             let mode = meta.permissions().mode();
             if mode & 0o077 != 0 {
                 eprintln!(
-                    "warning: .env is readable by others (mode {:o}). Run: chmod 600 .env",
-                    mode & 0o777
+                    "{} .env is readable by others (mode {:o}). Run: {}",
+                    "warning:".yellow().bold(),
+                    mode & 0o777,
+                    "chmod 600 .env".bold()
                 );
             }
         }
@@ -376,7 +384,7 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
     let identity = match crypto::parse_identity(&secret_key) {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -384,7 +392,7 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
     let (header, encrypted) = match vault::read(path) {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -392,7 +400,7 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
     let plaintext = match crypto::decrypt(&encrypted, &identity) {
         Ok(pt) => pt,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -400,7 +408,7 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
     let murk: types::Murk = match serde_json::from_slice(&plaintext) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("error: invalid vault data: {e}");
+            eprintln!("{} invalid vault data: {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -422,7 +430,7 @@ fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
     let encrypted = match crypto::encrypt(&murk_json, &recipients) {
         Ok(blob) => blob,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -430,7 +438,7 @@ fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
     header.murk_hash = integrity::hash(&encrypted);
 
     if let Err(e) = vault::write(Path::new(vault), header, &encrypted) {
-        eprintln!("error: {e}");
+        eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     }
 }
@@ -455,7 +463,7 @@ fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &st
         let encrypted_mote = match crypto::encrypt(&mote_json, &[recipient]) {
             Ok(blob) => blob,
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("{} {e}", "error:".red().bold());
                 process::exit(1);
             }
         };
@@ -480,7 +488,11 @@ fn cmd_add(key: &str, value: &str, desc: Option<&str>, private: bool, vault: &st
             example: None,
         });
         if desc.is_none() {
-            eprintln!("hint: no description set. Run: murk describe {key} \"your description\"");
+            eprintln!(
+                "{} no description set. Run: {}",
+                "hint:".dimmed(),
+                format!("murk describe {key} \"your description\"").bold()
+            );
         }
     }
 
@@ -494,7 +506,7 @@ fn cmd_import(file: &str, vault: &str) {
     let contents = match fs::read_to_string(file) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("error: cannot read {file}: {e}");
+            eprintln!("{} cannot read {file}: {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -543,7 +555,7 @@ fn cmd_import(file: &str, vault: &str) {
         }
 
         count += 1;
-        eprintln!("  + {key}");
+        eprintln!("  {} {}", "+".green(), key.bold());
     }
 
     if count == 0 {
@@ -552,7 +564,11 @@ fn cmd_import(file: &str, vault: &str) {
     }
 
     save_vault(vault, &mut header, &murk);
-    eprintln!("imported {count} secret{}", if count == 1 { "" } else { "s" });
+    eprintln!(
+        "{} {count} secret{}",
+        "imported".green(),
+        if count == 1 { "" } else { "s" }
+    );
 }
 
 fn cmd_rm(key: &str, vault: &str) {
@@ -563,7 +579,7 @@ fn cmd_rm(key: &str, vault: &str) {
     header.schema.retain(|e| e.key != key);
 
     save_vault(vault, &mut header, &murk);
-    eprintln!("removed {key}");
+    eprintln!("{} {}", "removed".green(), key.bold());
 }
 
 fn cmd_get(key: &str, vault: &str) {
@@ -583,7 +599,7 @@ fn cmd_get(key: &str, vault: &str) {
     match murk.values.get(key) {
         Some(value) => println!("{value}"),
         None => {
-            eprintln!("error: key not found: {key}");
+            eprintln!("{} key not found: {}", "error:".red().bold(), key.bold());
             process::exit(1);
         }
     }
@@ -594,7 +610,7 @@ fn cmd_ls(vault: &str) {
     let header = match vault::read_header(path) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -649,7 +665,7 @@ fn cmd_export(vault: &str) {
 fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
     // Validate the pubkey.
     if crypto::parse_recipient(pubkey).is_err() {
-        eprintln!("error: invalid public key: {pubkey}");
+        eprintln!("{} invalid public key: {pubkey}", "error:".red().bold());
         process::exit(1);
     }
 
@@ -657,7 +673,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
 
     // Check if already a recipient.
     if header.recipients.contains(&pubkey.to_string()) {
-        eprintln!("error: {pubkey} is already a recipient");
+        eprintln!("{} {pubkey} is already a recipient", "error:".red().bold());
         process::exit(1);
     }
 
@@ -672,7 +688,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
     save_vault(vault, &mut header, &murk);
 
     let display = name.unwrap_or(pubkey);
-    eprintln!("authorized {display}");
+    eprintln!("{} {}", "authorized".green(), display.bold());
 }
 
 fn cmd_revoke(recipient: &str, vault: &str) {
@@ -688,7 +704,7 @@ fn cmd_revoke(recipient: &str, vault: &str) {
             .find(|(_, name)| name.as_str() == recipient)
             .map(|(pk, _)| pk.clone())
             .unwrap_or_else(|| {
-                eprintln!("error: recipient not found: {recipient}");
+                eprintln!("{} recipient not found: {recipient}", "error:".red().bold());
                 process::exit(1);
             })
     };
@@ -696,7 +712,8 @@ fn cmd_revoke(recipient: &str, vault: &str) {
     // Last-recipient protection.
     if header.recipients.len() == 1 {
         eprintln!(
-            "error: cannot revoke last recipient — vault would become permanently inaccessible"
+            "{} cannot revoke last recipient — vault would become permanently inaccessible",
+            "error:".red().bold()
         );
         process::exit(1);
     }
@@ -716,19 +733,30 @@ fn cmd_revoke(recipient: &str, vault: &str) {
     save_vault(vault, &mut header, &murk);
 
     let display = display_name.as_deref().unwrap_or(&pubkey);
-    eprintln!("Removed {display} ({pubkey}) from recipients. Vault re-encrypted.");
+    eprintln!(
+        "{} {} ({}) from recipients. Vault re-encrypted.",
+        "removed".green(),
+        display.bold(),
+        pubkey.dimmed()
+    );
 
     // List secrets they had access to so the revoker knows what to rotate.
     let exposed: Vec<&str> = header.schema.iter().map(|e| e.key.as_str()).collect();
     if !exposed.is_empty() {
         eprintln!();
-        eprintln!("warning: {display} had access to these secrets (rotate them):");
+        eprintln!(
+            "{} {display} had access to these secrets (rotate them):",
+            "warning:".yellow().bold()
+        );
         for key in &exposed {
-            eprintln!("  - {key}");
+            eprintln!("  {} {}", "-".dimmed(), key.bold());
         }
     }
     eprintln!();
-    eprintln!("This recipient can still decrypt previous versions from git history.");
+    eprintln!(
+        "{}",
+        "This recipient can still decrypt previous versions from git history.".dimmed()
+    );
 }
 
 fn cmd_recipients(vault: &str) {
@@ -736,7 +764,7 @@ fn cmd_recipients(vault: &str) {
     let header = match vault::read_header(path) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
@@ -754,8 +782,12 @@ fn cmd_recipients(vault: &str) {
     for pk in &header.recipients {
         if let Some((ref murk, ref my_pubkey)) = murk_data {
             let name = murk.recipients.get(pk).map(|s| s.as_str()).unwrap_or("");
-            let marker = if pk == my_pubkey { "  (you)" } else { "" };
-            println!("{pk}  {name}{marker}");
+            let marker = if pk == my_pubkey {
+                "  (you)".green().to_string()
+            } else {
+                String::new()
+            };
+            println!("{}  {}{}", pk.dimmed(), name.bold(), marker);
         } else {
             println!("{pk}");
         }
@@ -775,14 +807,14 @@ fn cmd_restore(phrase: Option<&str>) {
     };
 
     if phrase.is_empty() {
-        eprintln!("error: recovery phrase is required");
+        eprintln!("{} recovery phrase is required", "error:".red().bold());
         process::exit(1);
     }
 
     match recovery::recover(&phrase) {
         Ok(key) => println!("{key}"),
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     }
@@ -794,7 +826,7 @@ fn cmd_recover() {
     match recovery::phrase_from_key(&secret_key) {
         Ok(phrase) => println!("{phrase}"),
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     }
@@ -805,13 +837,13 @@ fn cmd_info(vault: &str) {
     let header = match vault::read_header(path) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
 
     if header.schema.is_empty() {
-        println!("no keys in vault");
+        println!("{}", "no keys in vault".dimmed());
         return;
     }
 
@@ -854,7 +886,12 @@ fn cmd_info(vault: &str) {
             .map(|ex| format!("(e.g. {ex})"))
             .unwrap_or_default();
 
-        let line = if let Some(ref murk) = murk_data {
+        // Pad plain strings for alignment, then apply colors.
+        let key_padded = format!("{:<key_w$}", entry.key, key_w = key_width);
+        let desc_padded = format!("{:<desc_w$}", entry.description, desc_w = desc_width);
+        let ex_padded = format!("{:<ex_w$}", example_str, ex_w = example_width);
+
+        if let Some(ref murk) = murk_data {
             let recipients = murk
                 .per_key_access
                 .get(&entry.key)
@@ -866,28 +903,21 @@ fn cmd_info(vault: &str) {
                     format!("[{}]", names.join(", "))
                 })
                 .unwrap_or_else(|| "[]".into());
-            format!(
-                "{:<key_w$}  {:<desc_w$}  {:<ex_w$}  {}",
-                entry.key,
-                entry.description,
-                example_str,
-                recipients,
-                key_w = key_width,
-                desc_w = desc_width,
-                ex_w = example_width,
-            )
+            println!(
+                "{}  {}  {}  {}",
+                key_padded.bold(),
+                desc_padded,
+                ex_padded.dimmed(),
+                recipients.dimmed()
+            );
         } else {
-            format!(
-                "{:<key_w$}  {:<desc_w$}  {}",
-                entry.key,
-                entry.description,
-                example_str,
-                key_w = key_width,
-                desc_w = desc_width,
-            )
-        };
-
-        println!("{}", line.trim_end());
+            println!(
+                "{}  {}  {}",
+                key_padded.bold(),
+                desc_padded,
+                ex_padded.dimmed()
+            );
+        }
     }
 }
 

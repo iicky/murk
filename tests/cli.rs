@@ -483,7 +483,8 @@ fn revoke_removes_recipient() {
         .args(["revoke", "bob", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Removed bob"));
+        .stderr(predicate::str::contains("removed"))
+        .stderr(predicate::str::contains("bob"));
 
     // Should no longer appear in recipients.
     murk(&dir, &key)
