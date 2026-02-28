@@ -233,7 +233,10 @@ fn cmd_init(vault_name: &str) {
     let env_path = Path::new(".env");
     if env_path.exists() {
         let contents = fs::read_to_string(env_path).unwrap_or_default();
-        if contents.lines().any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY=")) {
+        if contents
+            .lines()
+            .any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY="))
+        {
             let answer = prompt(
                 "MURK_KEY already exists in .env. Overwrite? [y/N]",
                 Some("N"),
@@ -346,12 +349,18 @@ fn resolve_key() -> String {
         match fs::read_to_string(&path) {
             Ok(contents) => return contents.trim().to_string(),
             Err(e) => {
-                eprintln!("{} cannot read MURK_KEY_FILE ({path}): {e}", "error:".red().bold());
+                eprintln!(
+                    "{} cannot read MURK_KEY_FILE ({path}): {e}",
+                    "error:".red().bold()
+                );
                 process::exit(1);
             }
         }
     }
-    eprintln!("{} MURK_KEY not set (or use MURK_KEY_FILE)", "error:".red().bold());
+    eprintln!(
+        "{} MURK_KEY not set (or use MURK_KEY_FILE)",
+        "error:".red().bold()
+    );
     process::exit(1);
 }
 
