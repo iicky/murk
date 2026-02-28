@@ -1,4 +1,4 @@
-use bech32::{FromBase32, ToBase32, Variant};
+use bech32::{Bech32, Hrp};
 
 /// Errors that can occur during recovery phrase operations.
 #[derive(Debug)]
@@ -18,7 +18,7 @@ impl std::fmt::Display for RecoveryError {
 
 /// The Bech32 human-readable prefix for age secret keys.
 /// age uses lowercase internally, then uppercases the full string for display.
-const AGE_SECRET_KEY_HRP: &str = "age-secret-key-";
+const AGE_SECRET_KEY_HRP: Hrp = Hrp::parse_unchecked("age-secret-key-");
 
 /// Generate a new age keypair and return the BIP39 24-word mnemonic,
 /// secret key string, and public key string.
@@ -45,10 +45,8 @@ pub fn generate() -> Result<(String, String, String), RecoveryError> {
 pub fn phrase_from_key(secret_key: &str) -> Result<String, RecoveryError> {
     // age keys are uppercase; bech32 decoding requires lowercase.
     let lowercase = secret_key.to_lowercase();
-    let (_, data, _) =
+    let (_, key_bytes) =
         bech32::decode(&lowercase).map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
-    let key_bytes = Vec::<u8>::from_base32(&data)
-        .map_err(|e: bech32::Error| RecoveryError::InvalidKey(e.to_string()))?;
     let mnemonic = bip39::Mnemonic::from_entropy(&key_bytes)
         .map_err(|e| RecoveryError::Bip39(e.to_string()))?;
     Ok(mnemonic.to_string())
@@ -67,7 +65,7 @@ pub fn recover(phrase: &str) -> Result<String, RecoveryError> {
 /// Bech32-encode raw key bytes as an AGE-SECRET-KEY-1... string.
 /// This matches exactly how the age crate encodes keys internally.
 fn bytes_to_age_key(key_bytes: &[u8]) -> Result<String, RecoveryError> {
-    let encoded = bech32::encode(AGE_SECRET_KEY_HRP, key_bytes.to_base32(), Variant::Bech32)
+    let encoded = bech32::encode::<Bech32>(AGE_SECRET_KEY_HRP, key_bytes)
         .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
 
     let key_str = encoded.to_uppercase();
