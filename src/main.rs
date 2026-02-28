@@ -1,18 +1,4 @@
-//! Encrypted secrets manager for developers — one file, age encryption, git-friendly.
-
-#![warn(missing_docs, clippy::pedantic)]
-#![allow(
-    clippy::doc_markdown,
-    clippy::cast_possible_wrap,
-    clippy::similar_names,
-    clippy::unreadable_literal
-)]
-
-mod crypto;
-mod integrity;
-mod recovery;
-mod types;
-mod vault;
+use murk_cli::{crypto, decrypt_mote, integrity, now_utc, recovery, types, vault};
 
 use std::collections::HashMap;
 use std::env;
@@ -196,38 +182,6 @@ fn prompt(label: &str, default: Option<&str>) -> String {
     }
 }
 
-/// Generate a simple ISO-8601 UTC timestamp (no chrono dependency).
-fn now_utc() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    // Convert epoch seconds to date-time components.
-    // Good enough for a creation timestamp — not a general-purpose calendar.
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Days since 1970-01-01 to (year, month, day).
-    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
-    let z = days as i64 + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    format!("{y:04}-{m:02}-{d:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
-}
-
 fn cmd_init(vault_name: &str) {
     let vault_path = Path::new(vault_name);
 
@@ -350,131 +304,26 @@ fn cmd_init(vault_name: &str) {
     eprintln!("Next: {}", "murk add KEY VALUE".bold());
 }
 
-/// Try to decrypt a personal mote for the given pubkey.
-/// Returns None if no mote exists or decryption fails.
-fn decrypt_mote(
-    murk: &types::Murk,
-    pubkey: &str,
-    identity: &age::x25519::Identity,
-) -> Option<types::Mote> {
-    let encrypted_mote = murk.motes.get(pubkey)?;
-    let mote_bytes =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted_mote).ok()?;
-    let plaintext = crypto::decrypt(&mote_bytes, identity).ok()?;
-    serde_json::from_slice(&plaintext).ok()
-}
-
-/// Resolve the secret key from MURK_KEY or MURK_KEY_FILE.
-/// MURK_KEY takes priority; MURK_KEY_FILE reads the key from a file.
 fn resolve_key() -> String {
-    if let Ok(k) = env::var("MURK_KEY") {
-        return k;
-    }
-    if let Ok(path) = env::var("MURK_KEY_FILE") {
-        match fs::read_to_string(&path) {
-            Ok(contents) => return contents.trim().to_string(),
-            Err(e) => {
-                eprintln!(
-                    "{} cannot read MURK_KEY_FILE ({path}): {e}",
-                    "error:".red().bold()
-                );
-                process::exit(1);
-            }
-        }
-    }
-    eprintln!(
-        "{} MURK_KEY not set (or use MURK_KEY_FILE)",
-        "error:".red().bold()
-    );
-    process::exit(1);
-}
-
-/// Load the vault: read the file, decrypt the shared blob, return all parts.
-/// Exits with an error message if anything fails.
-fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity, String) {
-    let path = Path::new(vault);
-    let secret_key = resolve_key();
-
-    // Warn if .env has loose permissions.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let env_path = Path::new(".env");
-        if env_path.exists()
-            && let Ok(meta) = fs::metadata(env_path)
-        {
-            let mode = meta.permissions().mode();
-            if mode & 0o077 != 0 {
-                eprintln!(
-                    "{} .env is readable by others (mode {:o}). Run: {}",
-                    "warning:".yellow().bold(),
-                    mode & 0o777,
-                    "chmod 600 .env".bold()
-                );
-            }
-        }
-    }
-
-    let identity = match crypto::parse_identity(&secret_key) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    let (header, encrypted) = match vault::read(path) {
-        Ok(result) => result,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    let plaintext = match crypto::decrypt(&encrypted, &identity) {
-        Ok(pt) => pt,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    let murk: types::Murk = match serde_json::from_slice(&plaintext) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("{} invalid vault data: {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    (header, murk, identity, secret_key)
-}
-
-/// Re-encrypt the shared blob and write the vault back to disk.
-fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
-    let murk_json = serde_json::to_vec(murk).unwrap();
-
-    // Build recipient list from the header pubkeys.
-    let recipients: Vec<age::x25519::Recipient> = header
-        .recipients
-        .iter()
-        .map(|pk| crypto::parse_recipient(pk).unwrap())
-        .collect();
-
-    let encrypted = match crypto::encrypt(&murk_json, &recipients) {
-        Ok(blob) => blob,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    header.murk_hash = integrity::hash(&encrypted);
-
-    if let Err(e) = vault::write(Path::new(vault), header, &encrypted) {
+    murk_cli::resolve_key().unwrap_or_else(|e| {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
-    }
+    })
+}
+
+fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity, String) {
+    murk_cli::warn_env_permissions();
+    murk_cli::load_vault(vault).unwrap_or_else(|e| {
+        eprintln!("{} {e}", "error:".red().bold());
+        process::exit(1);
+    })
+}
+
+fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
+    murk_cli::save_vault(vault, header, murk).unwrap_or_else(|e| {
+        eprintln!("{} {e}", "error:".red().bold());
+        process::exit(1);
+    });
 }
 
 fn cmd_add(

@@ -10,6 +10,10 @@ keywords = ["secrets", "encryption", "age", "dotenv", "security"]
 categories = ["command-line-utilities", "cryptography"]
 exclude = ["CLAUDE.md", "AGENTS.md", "SPEC.md", ".beads/"]
 
+[lib]
+name = "murk_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "murk"
 path = "src/main.rs"
@@ -20,6 +24,7 @@ base64 = "0.22.1"
 bech32 = "0.11.1"
 bip39 = "2.2.2"
 clap = { version = "4.5.60", features = ["derive", "env"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 colored = "3"
 rand = "0.10.0"
 serde = { version = "1.0.228", features = ["derive"] }
