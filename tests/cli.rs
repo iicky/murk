@@ -1073,3 +1073,75 @@ fn full_lifecycle() {
         .success()
         .stdout(predicate::str::contains("localhost"));
 }
+
+// ── stdin support ──
+
+#[test]
+fn add_via_stdin_pipe() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Pipe value via stdin (omit value argument).
+    murk(&dir, &key)
+        .args(["add", "PIPED_SECRET", "--vault", "test.murk"])
+        .write_stdin("s3cr3t-from-pipe\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["get", "PIPED_SECRET", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3cr3t-from-pipe"));
+}
+
+#[test]
+fn add_via_stdin_dash() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Explicit "-" means read from stdin.
+    murk(&dir, &key)
+        .args(["add", "DASH_SECRET", "-", "--vault", "test.murk"])
+        .write_stdin("val-from-dash\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["get", "DASH_SECRET", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("val-from-dash"));
+}
+
+#[test]
+fn add_via_stdin_empty_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Empty stdin should fail.
+    murk(&dir, &key)
+        .args(["add", "EMPTY", "--vault", "test.murk"])
+        .write_stdin("")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty value"));
+}
+
+#[test]
+fn add_explicit_value_still_works() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Explicit value on CLI still works as before.
+    murk(&dir, &key)
+        .args(["add", "CLI_VAL", "direct-value", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["get", "CLI_VAL", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("direct-value"));
+}

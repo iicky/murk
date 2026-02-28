@@ -3,7 +3,7 @@ use murk_cli::{crypto, decrypt_mote, integrity, now_utc, recovery, types, vault}
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::path::Path;
 use std::process;
 
@@ -51,8 +51,8 @@ enum Command {
     Add {
         /// Secret key name
         key: String,
-        /// Secret value
-        value: String,
+        /// Secret value (use "-" or omit to read from stdin)
+        value: Option<String>,
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
@@ -325,6 +325,46 @@ fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     });
+}
+
+/// Resolve the secret value from a CLI argument, stdin pipe, or interactive prompt.
+/// Returns the value or exits with an error.
+fn resolve_value(value: Option<String>, key: &str) -> String {
+    // Explicit value on the command line (or "-" means read stdin).
+    if let Some(v) = value {
+        if v != "-" {
+            return v;
+        }
+    }
+
+    let stdin = io::stdin();
+    if !stdin.is_terminal() {
+        // Piped input: `echo "secret" | murk add KEY`
+        let mut buf = String::new();
+        stdin.lock().read_to_string(&mut buf).unwrap_or_else(|e| {
+            eprintln!("{} reading stdin: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+        let trimmed = buf.trim_end_matches('\n').to_string();
+        if trimmed.is_empty() {
+            eprintln!("{} empty value from stdin", "error:".red().bold());
+            process::exit(1);
+        }
+        return trimmed;
+    }
+
+    // Interactive TTY: prompt without echo.
+    eprint!("value for {key}: ");
+    io::stderr().flush().ok();
+    let password = rpassword::read_password().unwrap_or_else(|e| {
+        eprintln!("\n{} reading input: {e}", "error:".red().bold());
+        process::exit(1);
+    });
+    if password.is_empty() {
+        eprintln!("{} empty value", "error:".red().bold());
+        process::exit(1);
+    }
+    password
 }
 
 fn cmd_add(
@@ -891,7 +931,10 @@ fn main() {
             private,
             tag,
             vault,
-        } => cmd_add(&key, &value, desc.as_deref(), private, &tag, &vault),
+        } => {
+            let resolved = resolve_value(value, &key);
+            cmd_add(&key, &resolved, desc.as_deref(), private, &tag, &vault);
+        }
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
         Command::Ls { tag, vault } => cmd_ls(&tag, &vault),
