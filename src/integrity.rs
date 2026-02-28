@@ -45,7 +45,13 @@ impl std::fmt::Display for IntegrityError {
 /// Simple hex encoding (no extra dependency needed).
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+        use std::fmt::Write;
+        let bytes = bytes.as_ref();
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            write!(s, "{b:02x}").unwrap();
+        }
+        s
     }
 }
 

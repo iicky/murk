@@ -1,3 +1,11 @@
+#![warn(clippy::pedantic)]
+#![allow(
+    clippy::doc_markdown,
+    clippy::cast_possible_wrap,
+    clippy::similar_names,
+    clippy::unreadable_literal
+)]
+
 mod crypto;
 mod integrity;
 mod recovery;
@@ -605,12 +613,11 @@ fn cmd_get(key: &str, vault: &str) {
     }
 
     // Fall back to shared values.
-    match murk.values.get(key) {
-        Some(value) => println!("{value}"),
-        None => {
-            eprintln!("{} key not found: {}", "error:".red().bold(), key.bold());
-            process::exit(1);
-        }
+    if let Some(value) = murk.values.get(key) {
+        println!("{value}");
+    } else {
+        eprintln!("{} key not found: {}", "error:".red().bold(), key.bold());
+        process::exit(1);
     }
 }
 
@@ -634,12 +641,12 @@ fn cmd_describe(key: &str, description: &str, example: Option<&str>, vault: &str
 
     if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
         entry.description = description.into();
-        entry.example = example.map(|s| s.into());
+        entry.example = example.map(Into::into);
     } else {
         header.schema.push(types::SchemaEntry {
             key: key.into(),
             description: description.into(),
-            example: example.map(|s| s.into()),
+            example: example.map(Into::into),
         });
     }
 
@@ -711,11 +718,13 @@ fn cmd_revoke(recipient: &str, vault: &str) {
         murk.recipients
             .iter()
             .find(|(_, name)| name.as_str() == recipient)
-            .map(|(pk, _)| pk.clone())
-            .unwrap_or_else(|| {
-                eprintln!("{} recipient not found: {recipient}", "error:".red().bold());
-                process::exit(1);
-            })
+            .map_or_else(
+                || {
+                    eprintln!("{} recipient not found: {recipient}", "error:".red().bold());
+                    process::exit(1);
+                },
+                |(pk, _)| pk.clone(),
+            )
     };
 
     // Last-recipient protection.
@@ -790,7 +799,7 @@ fn cmd_recipients(vault: &str) {
 
     for pk in &header.recipients {
         if let Some((ref murk, ref my_pubkey)) = murk_data {
-            let name = murk.recipients.get(pk).map(|s| s.as_str()).unwrap_or("");
+            let name = murk.recipients.get(pk).map_or("", String::as_str);
             let marker = if pk == my_pubkey {
                 "  (you)".green().to_string()
             } else {
@@ -804,15 +813,14 @@ fn cmd_recipients(vault: &str) {
 }
 
 fn cmd_restore(phrase: Option<&str>) {
-    let phrase = match phrase {
-        Some(p) => p.to_string(),
-        None => {
-            eprint!("Enter 24-word recovery phrase: ");
-            io::stdout().flush().ok();
-            let mut line = String::new();
-            io::stdin().lock().read_line(&mut line).unwrap_or(0);
-            line.trim().to_string()
-        }
+    let phrase = if let Some(p) = phrase {
+        p.to_string()
+    } else {
+        eprint!("Enter 24-word recovery phrase: ");
+        io::stdout().flush().ok();
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line).unwrap_or(0);
+        line.trim().to_string()
     };
 
     if phrase.is_empty() {
@@ -882,8 +890,7 @@ fn cmd_info(vault: &str) {
         .map(|e| {
             e.example
                 .as_ref()
-                .map(|ex| format!("(e.g. {ex})").len())
-                .unwrap_or(0)
+                .map_or(0, |ex| format!("(e.g. {ex})").len())
         })
         .max()
         .unwrap();
@@ -896,22 +903,21 @@ fn cmd_info(vault: &str) {
             .unwrap_or_default();
 
         // Pad plain strings for alignment, then apply colors.
-        let key_padded = format!("{:<key_w$}", entry.key, key_w = key_width);
-        let desc_padded = format!("{:<desc_w$}", entry.description, desc_w = desc_width);
-        let ex_padded = format!("{:<ex_w$}", example_str, ex_w = example_width);
+        let key_padded = format!("{:<key_width$}", entry.key);
+        let desc_padded = format!("{:<desc_width$}", entry.description);
+        let ex_padded = format!("{example_str:<example_width$}");
 
         if let Some(ref murk) = murk_data {
-            let recipients = murk
-                .per_key_access
-                .get(&entry.key)
-                .map(|pubkeys| {
+            let recipients = murk.per_key_access.get(&entry.key).map_or_else(
+                || "[]".into(),
+                |pubkeys| {
                     let names: Vec<&str> = pubkeys
                         .iter()
-                        .map(|pk| murk.recipients.get(pk).map(|s| s.as_str()).unwrap_or(pk))
+                        .map(|pk| murk.recipients.get(pk).map_or(pk.as_str(), String::as_str))
                         .collect();
                     format!("[{}]", names.join(", "))
-                })
-                .unwrap_or_else(|| "[]".into());
+                },
+            );
             println!(
                 "{}  {}  {}  {}",
                 key_padded.bold(),
