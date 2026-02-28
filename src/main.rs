@@ -626,8 +626,18 @@ fn cmd_revoke(recipient: &str, vault: &str) {
 
     let display = display_name.as_deref().unwrap_or(&pubkey);
     eprintln!("Removed {display} ({pubkey}) from recipients. Vault re-encrypted.");
-    eprintln!("warning: this recipient can still decrypt previous versions from git history.");
-    eprintln!("         Rotate any sensitive credentials to complete revocation.");
+
+    // List secrets they had access to so the revoker knows what to rotate.
+    let exposed: Vec<&str> = header.schema.iter().map(|e| e.key.as_str()).collect();
+    if !exposed.is_empty() {
+        eprintln!();
+        eprintln!("warning: {display} had access to these secrets (rotate them):");
+        for key in &exposed {
+            eprintln!("  - {key}");
+        }
+    }
+    eprintln!();
+    eprintln!("This recipient can still decrypt previous versions from git history.");
 }
 
 fn cmd_recipients(vault: &str) {
