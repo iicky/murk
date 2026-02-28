@@ -20,7 +20,7 @@ checksum = "bf640be7658959746f1f0f2faab798f6098a9436a8e18e148d18bc9875e13c4b"
 dependencies = [
  "age-core",
  "base64 0.21.7",
- "bech32",
+ "bech32 0.9.1",
  "chacha20poly1305",
  "cookie-factory",
  "hmac",
@@ -197,6 +197,12 @@ name = "bech32"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d86b93f97252c47b41663388e6d155714a9d0c398b99f1005cbc5f978b29f445"
+
+[[package]]
+name = "bech32"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 
 [[package]]
 name = "bip39"
@@ -969,7 +975,7 @@ dependencies = [
  "assert_cmd",
  "assert_fs",
  "base64 0.22.1",
- "bech32",
+ "bech32 0.11.1",
  "bip39",
  "clap",
  "colored",
