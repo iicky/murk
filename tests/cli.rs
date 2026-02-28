@@ -55,7 +55,10 @@ fn init_creates_vault_and_env() {
         .write_stdin("alice\n")
         .assert()
         .success()
-        .stderr(predicate::str::contains("Recovery phrase").or(predicate::str::contains("RECOVERY WORDS")));
+        .stderr(
+            predicate::str::contains("Recovery phrase")
+                .or(predicate::str::contains("RECOVERY WORDS")),
+        );
 
     assert!(dir.path().join("test.murk").exists());
     assert!(dir.path().join(".env").exists());
@@ -88,7 +91,13 @@ fn add_and_get_secret() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "DB_URL", "postgres://localhost/mydb", "--vault", "test.murk"])
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/mydb",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -148,7 +157,14 @@ fn private_secret_overrides_shared() {
 
     // Add private override.
     murk(&dir, &key)
-        .args(["add", "API_KEY", "my_personal_key", "--private", "--vault", "test.murk"])
+        .args([
+            "add",
+            "API_KEY",
+            "my_personal_key",
+            "--private",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -237,7 +253,13 @@ fn describe_adds_description() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "DB_URL", "postgres://localhost/db", "--vault", "test.murk"])
+        .args([
+            "add",
+            "DB_URL",
+            "postgres://localhost/db",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -326,7 +348,14 @@ fn export_merges_private_overrides() {
         .success();
 
     murk(&dir, &key)
-        .args(["add", "KEY", "private_val", "--private", "--vault", "test.murk"])
+        .args([
+            "add",
+            "KEY",
+            "private_val",
+            "--private",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -361,15 +390,15 @@ fn recover_shows_phrase() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
 
-    let output = murk(&dir, &key)
-        .args(["recover"])
-        .assert()
-        .success();
+    let output = murk(&dir, &key).args(["recover"]).assert().success();
 
     // Recovery phrase is 24 words on stdout.
     let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
     let word_count = stdout.trim().split_whitespace().count();
-    assert_eq!(word_count, 24, "recovery phrase should be 24 words, got {word_count}");
+    assert_eq!(
+        word_count, 24,
+        "recovery phrase should be 24 words, got {word_count}"
+    );
 }
 
 #[test]
@@ -627,7 +656,13 @@ fn authorized_recipient_can_decrypt() {
 
     // Add a secret.
     murk(&dir, &key_a)
-        .args(["add", "SHARED_SECRET", "hello_world", "--vault", "test.murk"])
+        .args([
+            "add",
+            "SHARED_SECRET",
+            "hello_world",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -672,7 +707,13 @@ fn full_lifecycle() {
 
     // Describe.
     murk(&dir, &key)
-        .args(["describe", "DB_HOST", "Database hostname", "--vault", "test.murk"])
+        .args([
+            "describe",
+            "DB_HOST",
+            "Database hostname",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
