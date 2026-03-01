@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::types;
 
-/// Build export key-value pairs: merge scoped overrides over shared values,
-/// filter by tag, and shell-escape values (single-quote wrapping).
-pub fn export_secrets(
+/// Merge scoped overrides over shared values and filter by tag.
+/// Returns raw (unescaped) values suitable for env var injection.
+pub fn resolve_secrets(
     vault: &types::Vault,
     murk: &types::Murk,
     pubkey: &str,
@@ -42,11 +42,23 @@ pub fn export_secrets(
                 continue;
             }
         }
-        // Shell-escape: wrap in single quotes, escape embedded single quotes.
-        let escaped = v.replace('\'', "'\\''");
-        result.insert(k.clone(), escaped);
+        result.insert(k.clone(), v.clone());
     }
     result
+}
+
+/// Build shell-escaped export key-value pairs for `eval $(murk export)`.
+/// Wraps values in single quotes with embedded quote escaping.
+pub fn export_secrets(
+    vault: &types::Vault,
+    murk: &types::Murk,
+    pubkey: &str,
+    tags: &[String],
+) -> BTreeMap<String, String> {
+    resolve_secrets(vault, murk, pubkey, tags)
+        .into_iter()
+        .map(|(k, v)| (k, v.replace('\'', "'\\''")))
+        .collect()
 }
 
 /// The kind of change in a diff entry.
@@ -274,6 +286,98 @@ mod tests {
         let entries = diff_secrets(&old, &new);
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, vec!["A", "M", "Z"]);
+    }
+
+    // ── resolve_secrets tests ──
+
+    #[test]
+    fn resolve_secrets_basic() {
+        let mut vault = empty_vault();
+        vault.schema.insert(
+            "FOO".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec![],
+            },
+        );
+
+        let mut murk = empty_murk();
+        murk.values.insert("FOO".into(), "bar".into());
+
+        let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved["FOO"], "bar");
+    }
+
+    #[test]
+    fn resolve_secrets_no_escaping() {
+        let mut vault = empty_vault();
+        vault.schema.insert(
+            "KEY".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec![],
+            },
+        );
+
+        let mut murk = empty_murk();
+        murk.values.insert("KEY".into(), "it's a test".into());
+
+        let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
+        assert_eq!(resolved["KEY"], "it's a test");
+    }
+
+    #[test]
+    fn resolve_secrets_scoped_override() {
+        let mut vault = empty_vault();
+        vault.schema.insert(
+            "KEY".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec![],
+            },
+        );
+
+        let mut murk = empty_murk();
+        murk.values.insert("KEY".into(), "shared".into());
+        let mut scoped = HashMap::new();
+        scoped.insert("age1pk".into(), "override".into());
+        murk.scoped.insert("KEY".into(), scoped);
+
+        let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
+        assert_eq!(resolved["KEY"], "override");
+    }
+
+    #[test]
+    fn resolve_secrets_tag_filter() {
+        let mut vault = empty_vault();
+        vault.schema.insert(
+            "A".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec!["db".into()],
+            },
+        );
+        vault.schema.insert(
+            "B".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec!["api".into()],
+            },
+        );
+
+        let mut murk = empty_murk();
+        murk.values.insert("A".into(), "val_a".into());
+        murk.values.insert("B".into(), "val_b".into());
+
+        let resolved = resolve_secrets(&vault, &murk, "age1pk", &["db".into()]);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved["A"], "val_a");
     }
 
     // ── New edge-case tests ──

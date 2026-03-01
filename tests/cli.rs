@@ -458,6 +458,92 @@ fn export_escapes_single_quotes() {
         .stdout(predicate::str::contains("export QUOTED='it'\\''s a test'"));
 }
 
+// ── exec ──
+
+#[test]
+fn exec_injects_secrets() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "MY_SECRET", "hunter2", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["exec", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MY_SECRET=hunter2"));
+}
+
+#[test]
+fn exec_filters_by_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_PASS",
+            "secret",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_KEY",
+            "abc123",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args(["exec", "--tag", "db", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("DB_PASS=secret"));
+    assert!(!stdout.contains("API_KEY=abc123"));
+}
+
+#[test]
+fn exec_propagates_exit_code() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "KEY", "val", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["exec", "--vault", "test.murk", "--", "false"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn exec_without_vault_fails() {
+    let dir = TempDir::new().unwrap();
+
+    murk(&dir, "AGE-SECRET-KEY-1DUMMY")
+        .args(["exec", "--vault", "nonexistent.murk", "--", "env"])
+        .assert()
+        .failure();
+}
+
 // ── recover ──
 
 #[test]

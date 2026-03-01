@@ -35,7 +35,7 @@ pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{parse_env, resolve_key, warn_env_permissions};
-pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets};
+pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets, resolve_secrets};
 pub use recipients::{RevokeResult, authorize_recipient, revoke_recipient};
 pub use secrets::{add_secret, describe_key, get_secret, list_keys, remove_secret};
 
