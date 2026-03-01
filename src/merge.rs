@@ -34,6 +34,7 @@ pub fn merge_vaults(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
     let version = ours.version.clone();
     let created = ours.created.clone();
     let vault_name = ours.vault_name.clone();
+    let repo = ours.repo.clone();
 
     // -- Recipients: set union/removal --
     let recipients = merge_recipients(base, ours, theirs);
@@ -71,6 +72,7 @@ pub fn merge_vaults(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
         version,
         created,
         vault_name,
+        repo,
         recipients,
         schema,
         secrets,
@@ -583,6 +585,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-01-01T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec!["age1alice".into(), "age1bob".into()],
             schema,
             secrets,

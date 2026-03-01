@@ -72,6 +72,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-27T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec!["age1test".into()],
             schema,
             secrets: BTreeMap::new(),

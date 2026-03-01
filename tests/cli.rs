@@ -1563,3 +1563,109 @@ fn setup_merge_driver_idempotent() {
         "should not duplicate the gitattributes entry"
     );
 }
+
+// ── codename + repo ──
+
+#[test]
+fn info_displays_codename() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "secret", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codename"));
+}
+
+#[test]
+fn codename_changes_when_vault_changes() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Get info output after adding first secret.
+    murk(&dir, &key)
+        .args(["add", "A", "val1", "--vault", "test.murk"])
+        .assert()
+        .success();
+    let out1 = murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    let info1 = String::from_utf8(out1.stdout).unwrap();
+
+    // Get info output after adding second secret.
+    murk(&dir, &key)
+        .args(["add", "B", "val2", "--vault", "test.murk"])
+        .assert()
+        .success();
+    let out2 = murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    let info2 = String::from_utf8(out2.stdout).unwrap();
+
+    // Extract codename lines.
+    let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
+    let cn2 = info2.lines().find(|l| l.contains("codename")).unwrap();
+    assert_ne!(
+        cn1, cn2,
+        "codename should change when vault content changes"
+    );
+}
+
+#[test]
+fn codename_is_deterministic() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "X", "val", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    let out1 = murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    let out2 = murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+
+    let info1 = String::from_utf8(out1.stdout).unwrap();
+    let info2 = String::from_utf8(out2.stdout).unwrap();
+
+    let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
+    let cn2 = info2.lines().find(|l| l.contains("codename")).unwrap();
+    assert_eq!(cn1, cn2, "same file should produce same codename");
+}
+
+#[test]
+fn old_vault_without_repo_parses() {
+    let dir = TempDir::new().unwrap();
+    let vault_json = r#"{
+        "version": "2.0",
+        "created": "2026-01-01T00:00:00Z",
+        "vault_name": ".murk",
+        "recipients": [],
+        "schema": {},
+        "secrets": {},
+        "meta": ""
+    }"#;
+    fs::write(dir.path().join("test.murk"), vault_json).unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["info", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codename"));
+}

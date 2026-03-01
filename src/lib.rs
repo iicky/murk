@@ -8,6 +8,7 @@
     clippy::doc_markdown,
     clippy::cast_possible_wrap,
     clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
     clippy::must_use_candidate,
     clippy::similar_names,
     clippy::unreadable_literal,
@@ -15,6 +16,7 @@
     clippy::implicit_hasher
 )]
 
+pub mod codename;
 pub mod crypto;
 pub mod integrity;
 pub mod merge;
@@ -662,6 +664,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -680,6 +683,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -706,6 +710,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -734,6 +739,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -790,6 +796,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -836,6 +843,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -894,6 +902,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![pubkey1.clone(), pubkey2.clone()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -954,6 +963,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -1085,6 +1095,7 @@ mod tests {
             version: "2.0".into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
+            repo: String::new(),
             recipients: vec![],
             schema: BTreeMap::new(),
             secrets: BTreeMap::new(),

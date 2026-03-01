@@ -400,11 +400,22 @@ fn cmd_init(vault_name: &str) {
         }
     };
 
+    // Detect git repo URL.
+    let repo = process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
     // Build vault.
     let v = types::Vault {
         version: "2.0".into(),
         created: now_utc(),
         vault_name: vault_name.into(),
+        repo,
         recipients: vec![pubkey],
         schema: BTreeMap::new(),
         secrets: BTreeMap::new(),
@@ -1039,13 +1050,38 @@ fn cmd_recover() {
 
 fn cmd_info(tags: &[String], vault_path: &str) {
     let path = Path::new(vault_path);
-    let vault = match vault::read(path) {
+
+    // Read raw bytes for codename computation.
+    let raw_bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{} {e}", "error:".red().bold());
+            process::exit(1);
+        }
+    };
+    let vault: types::Vault = match serde_json::from_slice(&raw_bytes) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
+
+    // Display vault header.
+    let codename = murk_cli::codename::from_bytes(&raw_bytes);
+    println!("{}: {}", "vault".dimmed(), vault.vault_name.bold());
+    println!("{}: {}", "codename".dimmed(), codename.bold());
+    if !vault.repo.is_empty() {
+        println!("{}: {}", "repo".dimmed(), vault.repo);
+    }
+    println!("{}: {}", "created".dimmed(), vault.created);
+    println!(
+        "{}: {} recipient{}",
+        "recipients".dimmed(),
+        vault.recipients.len(),
+        if vault.recipients.len() == 1 { "" } else { "s" }
+    );
+    println!();
 
     // Filter by tag if specified.
     let entries: Vec<(&String, &types::SchemaEntry)> = if tags.is_empty() {

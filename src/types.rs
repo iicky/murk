@@ -11,6 +11,9 @@ pub struct Vault {
     pub version: String,
     pub created: String,
     pub vault_name: String,
+    /// Repository URL, auto-detected from git remote during init.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo: String,
     /// Public keys only — no names. Name mappings live in the encrypted meta blob.
     pub recipients: Vec<String>,
     /// Key metadata — public, readable without decryption.
