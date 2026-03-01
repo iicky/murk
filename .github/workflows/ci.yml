@@ -76,6 +76,21 @@ jobs:
           files: cobertura.xml
           fail_ci_if_error: false
 
+  vhs:
+    name: VHS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        if: github.ref == 'refs/heads/main'
+        with:
+          commit_message: "update hero.gif [skip ci]"
+          file_pattern: demo/hero.gif
+
   deny:
     name: Deny
     runs-on: ubuntu-latest

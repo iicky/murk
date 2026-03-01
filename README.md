@@ -9,6 +9,10 @@ Encrypted secrets manager for developers. One key unlocks everything.
 
 murk stores encrypted secrets in a single `.murk` file that's safe to commit to git. It uses [age](https://age-encryption.org/) encryption, works with [direnv](https://direnv.net/), and supports teams — all in one binary with no runtime dependencies.
 
+<p align="center">
+  <img src="demo/hero.gif" alt="murk demo" width="900">
+</p>
+
 ## Why
 
 Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault exist but they're complex, require cloud setup, or pull in runtimes you don't want.
