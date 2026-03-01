@@ -141,4 +141,24 @@ mod tests {
         assert!(parse_recipient("sine-loco").is_err());
         assert!(parse_identity("nihil-et-nemo").is_err());
     }
+
+    // ── New edge-case tests ──
+
+    #[test]
+    fn encrypt_empty_plaintext() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = parse_recipient(&pubkey).unwrap();
+        let identity = parse_identity(&secret).unwrap();
+
+        let ciphertext = encrypt(b"", &[recipient]).unwrap();
+        let decrypted = decrypt(&ciphertext, &identity).unwrap();
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn decrypt_corrupted_ciphertext() {
+        let (secret, _) = generate_keypair();
+        let identity = parse_identity(&secret).unwrap();
+        assert!(decrypt(b"this is not valid ciphertext", &identity).is_err());
+    }
 }

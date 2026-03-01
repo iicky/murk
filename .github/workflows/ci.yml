@@ -87,7 +87,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
       - run: |
-          for tape in demo/*.tape; do
+          for tape in demo/hero.tape demo/eve.tape demo/teams.tape demo/offboarding.tape demo/recovery.tape; do
             docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs "$tape"
           done
       - uses: stefanzweifel/git-auto-commit-action@v5
