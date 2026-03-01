@@ -124,4 +124,19 @@ mod tests {
     fn invalid_phrase_fails() {
         assert!(recover("amet sed ut sit dolor et magna vita ipsum quasi nemo enim ad ex in id est non vel rem sint cum").is_err());
     }
+
+    // ── New edge-case tests ──
+
+    #[test]
+    fn recover_wrong_word_count() {
+        // 12 valid BIP39 words instead of 24 — should fail.
+        assert!(recover("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").is_err());
+    }
+
+    #[test]
+    fn recover_gibberish_words() {
+        // 24 nonsense words — should fail.
+        let words = "zzz yyy xxx www vvv uuu ttt sss rrr qqq ppp ooo nnn mmm lll kkk jjj iii hhh ggg fff eee ddd ccc";
+        assert!(recover(words).is_err());
+    }
 }

@@ -11,6 +11,9 @@ pub struct Vault {
     pub version: String,
     pub created: String,
     pub vault_name: String,
+    /// Repository URL, auto-detected from git remote during init.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo: String,
     /// Public keys only — no names. Name mappings live in the encrypted meta blob.
     pub recipients: Vec<String>,
     /// Key metadata — public, readable without decryption.
@@ -21,7 +24,7 @@ pub struct Vault {
     pub meta: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaEntry {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +33,7 @@ pub struct SchemaEntry {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretEntry {
     /// Shared value encrypted to all recipients.
     pub shared: String,

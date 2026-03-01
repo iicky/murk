@@ -79,6 +79,8 @@ jobs:
   vhs:
     name: VHS
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -88,8 +90,8 @@ jobs:
       - uses: stefanzweifel/git-auto-commit-action@v5
         if: github.ref == 'refs/heads/main'
         with:
-          commit_message: "update hero.gif [skip ci]"
-          file_pattern: demo/hero.gif
+          commit_message: "update demo gifs [skip ci]"
+          file_pattern: "demo/*.gif"
 
   deny:
     name: Deny

@@ -178,6 +178,21 @@ enum Command {
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
+
+    /// Git merge driver for .murk vault files (called by git)
+    #[command(name = "merge-driver")]
+    MergeDriver {
+        /// Path to base version (%O)
+        base: String,
+        /// Path to ours version (%A) — result is written here
+        ours: String,
+        /// Path to theirs version (%B)
+        theirs: String,
+    },
+
+    /// Configure git to use murk's merge driver for .murk files
+    #[command(name = "setup-merge-driver")]
+    SetupMergeDriver,
 }
 
 /// Prompt the user for a line of input, with an optional default value.
@@ -385,11 +400,22 @@ fn cmd_init(vault_name: &str) {
         }
     };
 
+    // Detect git repo URL.
+    let repo = process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
     // Build vault.
     let v = types::Vault {
         version: "2.0".into(),
         created: now_utc(),
         vault_name: vault_name.into(),
+        repo,
         recipients: vec![pubkey],
         schema: BTreeMap::new(),
         secrets: BTreeMap::new(),
@@ -668,6 +694,143 @@ fn cmd_env(vault: &str) {
     }
 }
 
+fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
+    use murk_cli::{merge, vault};
+
+    let base_contents = fs::read_to_string(base_path).unwrap_or_else(|e| {
+        eprintln!("{} reading base {base_path}: {e}", "error:".red().bold());
+        process::exit(2);
+    });
+    let ours_contents = fs::read_to_string(ours_path).unwrap_or_else(|e| {
+        eprintln!("{} reading ours {ours_path}: {e}", "error:".red().bold());
+        process::exit(2);
+    });
+    let theirs_contents = fs::read_to_string(theirs_path).unwrap_or_else(|e| {
+        eprintln!(
+            "{} reading theirs {theirs_path}: {e}",
+            "error:".red().bold()
+        );
+        process::exit(2);
+    });
+
+    let base_vault = match vault::parse(&base_contents) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{} parsing base: {e}", "error:".red().bold());
+            process::exit(2);
+        }
+    };
+    let ours_vault = match vault::parse(&ours_contents) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{} parsing ours: {e}", "error:".red().bold());
+            process::exit(2);
+        }
+    };
+    let theirs_vault = match vault::parse(&theirs_contents) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{} parsing theirs: {e}", "error:".red().bold());
+            process::exit(2);
+        }
+    };
+
+    let mut result = merge::merge_vaults(&base_vault, &ours_vault, &theirs_vault);
+
+    // Attempt to regenerate meta (needs MURK_KEY).
+    if merge::regenerate_meta(&mut result.vault, &ours_vault, &theirs_vault).is_none() {
+        eprintln!(
+            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix.",
+            "warning:".yellow().bold()
+        );
+    }
+
+    // Write merged result to ours path (%A).
+    if let Err(e) = vault::write(Path::new(ours_path), &result.vault) {
+        eprintln!("{} writing merged vault: {e}", "error:".red().bold());
+        process::exit(2);
+    }
+
+    if result.conflicts.is_empty() {
+        eprintln!("{} vault merged cleanly", "ok:".green().bold());
+        process::exit(0);
+    } else {
+        eprintln!(
+            "{} {} conflict{}:",
+            "conflict:".red().bold(),
+            result.conflicts.len(),
+            if result.conflicts.len() == 1 { "" } else { "s" }
+        );
+        for c in &result.conflicts {
+            eprintln!("  {} {} — {}", "-".red(), c.field.bold(), c.reason);
+        }
+        process::exit(1);
+    }
+}
+
+fn cmd_setup_merge_driver() {
+    // 1. Write .gitattributes entry.
+    let gitattributes = Path::new(".gitattributes");
+    let merge_line = "*.murk merge=murk";
+
+    if gitattributes.exists() {
+        let contents = fs::read_to_string(gitattributes).unwrap_or_else(|e| {
+            eprintln!("{} reading .gitattributes: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+        if contents.contains(merge_line) {
+            eprintln!(
+                "{} .gitattributes already contains merge driver entry",
+                "ok:".green().bold()
+            );
+        } else {
+            let mut file = fs::OpenOptions::new()
+                .append(true)
+                .open(gitattributes)
+                .unwrap_or_else(|e| {
+                    eprintln!("{} writing .gitattributes: {e}", "error:".red().bold());
+                    process::exit(1);
+                });
+            writeln!(file, "{merge_line}").unwrap();
+            eprintln!("{} appended to .gitattributes", "ok:".green().bold());
+        }
+    } else {
+        fs::write(gitattributes, format!("{merge_line}\n")).unwrap_or_else(|e| {
+            eprintln!("{} writing .gitattributes: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+        eprintln!("{} created .gitattributes", "ok:".green().bold());
+    }
+
+    // 2. Configure git merge driver.
+    let configs = [
+        ("merge.murk.name", "murk vault merge"),
+        ("merge.murk.driver", "murk merge-driver %O %A %B"),
+    ];
+    for (key, value) in &configs {
+        let status = process::Command::new("git")
+            .args(["config", key, value])
+            .status()
+            .unwrap_or_else(|e| {
+                eprintln!("{} running git config: {e}", "error:".red().bold());
+                process::exit(1);
+            });
+        if !status.success() {
+            eprintln!(
+                "{} git config {key} failed (are you in a git repo?)",
+                "error:".red().bold()
+            );
+            process::exit(1);
+        }
+    }
+
+    eprintln!("{} git merge driver configured", "ok:".green().bold());
+    eprintln!(
+        "{}",
+        "Commit .gitattributes so all collaborators use the merge driver.".dimmed()
+    );
+}
+
 fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
     let (_vault, current_murk, identity) = load_vault(vault_path);
 
@@ -887,13 +1050,38 @@ fn cmd_recover() {
 
 fn cmd_info(tags: &[String], vault_path: &str) {
     let path = Path::new(vault_path);
-    let vault = match vault::read(path) {
+
+    // Read raw bytes for codename computation.
+    let raw_bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{} {e}", "error:".red().bold());
+            process::exit(1);
+        }
+    };
+    let vault: types::Vault = match serde_json::from_slice(&raw_bytes) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
+
+    // Display vault header.
+    let codename = murk_cli::codename::from_bytes(&raw_bytes);
+    println!("{}: {}", "vault".dimmed(), vault.vault_name.bold());
+    println!("{}: {}", "codename".dimmed(), codename.bold());
+    if !vault.repo.is_empty() {
+        println!("{}: {}", "repo".dimmed(), vault.repo);
+    }
+    println!("{}: {}", "created".dimmed(), vault.created);
+    println!(
+        "{}: {} recipient{}",
+        "recipients".dimmed(),
+        vault.recipients.len(),
+        if vault.recipients.len() == 1 { "" } else { "s" }
+    );
+    println!();
 
     // Filter by tag if specified.
     let entries: Vec<(&String, &types::SchemaEntry)> = if tags.is_empty() {
@@ -1054,5 +1242,7 @@ fn main() {
             show_values,
             vault,
         } => cmd_diff(&git_ref, show_values, &vault),
+        Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
+        Command::SetupMergeDriver => cmd_setup_merge_driver(),
     }
 }
