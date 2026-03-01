@@ -237,4 +237,24 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("MURK_KEY not set"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn warn_env_permissions_no_warning_on_secure_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("murk_test_perms");
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_path = dir.join(".env");
+        std::fs::write(&env_path, "KEY=val\n").unwrap();
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        // Just verify it doesn't panic — output goes to stderr.
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        warn_env_permissions();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

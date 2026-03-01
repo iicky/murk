@@ -1733,6 +1733,40 @@ fn codename_is_deterministic() {
 }
 
 #[test]
+fn restore_recovers_key_from_phrase() {
+    let dir = TempDir::new().unwrap();
+    let (murk_key, _pubkey) = init_vault(&dir);
+
+    // Get the recovery phrase.
+    let output = murk(&dir, &murk_key).arg("recover").output().unwrap();
+    let phrase = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    assert_eq!(phrase.split_whitespace().count(), 24);
+
+    // Restore from phrase — should print the same key.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["restore", &phrase])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&murk_key));
+}
+
+#[test]
+fn restore_invalid_phrase_fails() {
+    let dir = TempDir::new().unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["restore", "not a valid recovery phrase at all"])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .assert()
+        .failure();
+}
+
+#[test]
 fn old_vault_without_repo_parses() {
     let dir = TempDir::new().unwrap();
     let vault_json = r#"{
