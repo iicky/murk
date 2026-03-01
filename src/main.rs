@@ -203,23 +203,24 @@ fn prompt(label: &str, default: Option<&str>) -> String {
     }
 }
 
-fn cmd_init(vault_name: &str) {
-    let vault_path = Path::new(vault_name);
-
-    // Don't overwrite an existing vault.
-    if vault_path.exists() {
-        eprintln!("{} {vault_name} already exists", "error:".red().bold());
-        process::exit(1);
+/// Read MURK_KEY from .env file if present but not in the environment.
+fn read_key_from_dotenv() -> Option<String> {
+    let contents = fs::read_to_string(".env").ok()?;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
+            return Some(key.to_string());
+        }
+        if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
+            return Some(key.to_string());
+        }
     }
+    None
+}
 
-    // Prompt for display name.
-    let name = prompt("Enter your name or email", None);
-    if name.is_empty() {
-        eprintln!("{} name is required", "error:".red().bold());
-        process::exit(1);
-    }
-
-    // Generate keypair via BIP39.
+/// Generate a BIP39 keypair, write to .env, print recovery phrase.
+/// Returns (secret_key, pubkey).
+fn generate_and_write_key() -> (String, String) {
     eprintln!("{}", "Generating keypair...".dimmed());
     let (phrase, secret_key, pubkey) = match recovery::generate() {
         Ok(result) => result,
@@ -271,6 +272,101 @@ fn cmd_init(vault_name: &str) {
         fs::set_permissions(env_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
+    // Print recovery phrase.
+    eprintln!();
+    eprintln!(
+        "{}",
+        "RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:"
+            .yellow()
+            .bold()
+    );
+    eprintln!("{}", phrase.bold());
+
+    (secret_key, pubkey)
+}
+
+fn cmd_init(vault_name: &str) {
+    let vault_path = Path::new(vault_name);
+
+    // If vault already exists, handle onboarding flow.
+    if vault_path.exists() {
+        let vault = match vault::read(vault_path) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("{} {e}", "error:".red().bold());
+                process::exit(1);
+            }
+        };
+
+        eprintln!("{vault_name} already exists");
+
+        // Try to find an existing key: env var first, then .env file.
+        let secret_key = env::var("MURK_KEY").ok().or_else(read_key_from_dotenv);
+
+        let pubkey = match secret_key {
+            Some(key) => {
+                let identity = match crypto::parse_identity(&key) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        eprintln!("{} {e}", "error:".red().bold());
+                        process::exit(1);
+                    }
+                };
+                identity.to_public().to_string()
+            }
+            None => {
+                // No key — generate one.
+                let (_secret_key, pubkey) = generate_and_write_key();
+                eprintln!();
+                pubkey
+            }
+        };
+
+        if vault.recipients.contains(&pubkey) {
+            // Authorized — try to decrypt meta for display name.
+            let name = env::var("MURK_KEY")
+                .ok()
+                .or_else(read_key_from_dotenv)
+                .and_then(|key| {
+                    let identity = crypto::parse_identity(&key).ok()?;
+                    let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
+                    let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+                    meta.recipients.get(&pubkey).cloned()
+                })
+                .unwrap_or_default();
+            let name_display = if name.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", name.bold())
+            };
+            eprintln!(
+                "{}  {}{}",
+                "authorized".green(),
+                pubkey.dimmed(),
+                name_display
+            );
+        } else {
+            // Not authorized — show pubkey to share.
+            eprintln!(
+                "{}",
+                "not authorized \u{2014} share your public key to get added:".yellow()
+            );
+            eprintln!("{}", pubkey.bold());
+        }
+        return;
+    }
+
+    // --- New vault flow ---
+
+    // Prompt for display name.
+    let name = prompt("Enter your name or email", None);
+    if name.is_empty() {
+        eprintln!("{} name is required", "error:".red().bold());
+        process::exit(1);
+    }
+
+    let (_secret_key, pubkey) = generate_and_write_key();
+
     // Build meta with the recipient name mapping.
     let mut recipient_names = HashMap::new();
     recipient_names.insert(pubkey.clone(), name.clone());
@@ -306,15 +402,6 @@ fn cmd_init(vault_name: &str) {
         process::exit(1);
     }
 
-    // Print recovery phrase.
-    eprintln!();
-    eprintln!(
-        "{}",
-        "RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:"
-            .yellow()
-            .bold()
-    );
-    eprintln!("{}", phrase.bold());
     eprintln!();
     eprintln!("{}", "Vault initialized. Added as recipient.".green());
     eprintln!("Next: {}", "murk add KEY VALUE".bold());

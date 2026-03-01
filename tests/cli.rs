@@ -68,19 +68,94 @@ fn init_creates_vault_and_env() {
 }
 
 #[test]
-fn init_refuses_existing_vault() {
+fn init_existing_vault_authorized() {
     let dir = TempDir::new().unwrap();
-    init_vault(&dir);
+    let (key, _) = init_vault(&dir);
 
-    // Second init should fail because vault already exists.
+    // Second init with authorized key shows "authorized".
     Command::cargo_bin("murk")
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .write_stdin("bob\n")
+        .env("MURK_KEY", &key)
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("already exists"));
+        .success()
+        .stderr(
+            predicate::str::contains("already exists").and(predicate::str::contains("authorized")),
+        );
+}
+
+#[test]
+fn init_existing_vault_unauthorized() {
+    let dir = TempDir::new().unwrap();
+    init_vault(&dir);
+
+    // Generate a different key that isn't authorized on this vault.
+    let other_dir = TempDir::new().unwrap();
+    let (other_key, _) = init_vault(&other_dir);
+
+    // Init with unauthorized key shows pubkey to share.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["init", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env("MURK_KEY", &other_key)
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("already exists")
+                .and(predicate::str::contains("not authorized"))
+                .and(predicate::str::contains("age1")),
+        );
+}
+
+#[test]
+fn init_existing_vault_no_key() {
+    let dir = TempDir::new().unwrap();
+    init_vault(&dir);
+
+    // Remove .env so there's no key to find.
+    fs::remove_file(dir.path().join(".env")).unwrap();
+
+    // Init without a key generates one and shows unauthorized + pubkey.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["init", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("already exists")
+                .and(predicate::str::contains("Generating keypair"))
+                .and(predicate::str::contains("RECOVERY WORDS"))
+                .and(predicate::str::contains("not authorized"))
+                .and(predicate::str::contains("age1")),
+        );
+
+    // .env should now contain a new MURK_KEY.
+    let env = fs::read_to_string(dir.path().join(".env")).unwrap();
+    assert!(env.contains("export MURK_KEY=AGE-SECRET-KEY-"));
+}
+
+#[test]
+fn init_existing_vault_reads_dotenv() {
+    let dir = TempDir::new().unwrap();
+    let (_key, _) = init_vault(&dir);
+
+    // Key is in .env file but not in environment — should still detect it.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["init", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("already exists").and(predicate::str::contains("authorized")),
+        );
 }
 
 // ── add / get ──
