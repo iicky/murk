@@ -147,4 +147,89 @@ mod tests {
         let result = read(Path::new("/tmp/null.murk"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn parse_invalid_json() {
+        let result = parse("not json at all");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("vault parse error"));
+        assert!(msg.contains("Vault may be corrupted"));
+    }
+
+    #[test]
+    fn parse_empty_string() {
+        let result = parse("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_valid_json() {
+        let json = serde_json::to_string(&test_vault()).unwrap();
+        let result = parse(&json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().version, "2.0");
+    }
+
+    #[test]
+    fn error_display_not_found() {
+        let err = VaultError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("vault file not found"));
+        assert!(msg.contains("murk init"));
+    }
+
+    #[test]
+    fn error_display_io() {
+        let err = VaultError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("vault I/O error"));
+    }
+
+    #[test]
+    fn error_display_parse() {
+        let err = VaultError::Parse("bad data".into());
+        assert!(err.to_string().contains("vault parse error: bad data"));
+    }
+
+    #[test]
+    fn error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let vault_err: VaultError = io_err.into();
+        assert!(matches!(vault_err, VaultError::Io(_)));
+    }
+
+    #[test]
+    fn scoped_entries_roundtrip() {
+        let dir = std::env::temp_dir().join("murk_test_scoped_rt");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = test_vault();
+        let mut scoped = BTreeMap::new();
+        scoped.insert("age1bob".into(), "encrypted-for-bob".into());
+
+        vault.secrets.insert(
+            "DATABASE_URL".into(),
+            SecretEntry {
+                shared: "encrypted-value".into(),
+                scoped,
+            },
+        );
+
+        write(&path, &vault).unwrap();
+        let read_vault = read(&path).unwrap();
+
+        let entry = &read_vault.secrets["DATABASE_URL"];
+        assert_eq!(entry.scoped["age1bob"], "encrypted-for-bob");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }
