@@ -1,6 +1,6 @@
-use murk_cli::{crypto, decrypt_mote, integrity, now_utc, recovery, types, vault};
+use murk_cli::{crypto, decrypt_value, encrypt_value, now_utc, recovery, types, vault};
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -212,7 +212,7 @@ fn cmd_init(vault_name: &str) {
         process::exit(1);
     }
 
-    // Prompt for display name and vault name.
+    // Prompt for display name.
     let name = prompt("Enter your name or email", None);
     if name.is_empty() {
         eprintln!("{} name is required", "error:".red().bold());
@@ -271,42 +271,37 @@ fn cmd_init(vault_name: &str) {
         fs::set_permissions(env_path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 
-    // Build empty shared blob with the recipient name mapping.
+    // Build meta with the recipient name mapping.
     let mut recipient_names = HashMap::new();
     recipient_names.insert(pubkey.clone(), name.clone());
 
-    let murk = types::Murk {
-        values: HashMap::new(),
-        recipients: recipient_names,
-        per_key_access: HashMap::new(),
-        motes: HashMap::new(),
-    };
-
-    let murk_json = serde_json::to_vec(&murk).unwrap();
-
-    // Encrypt shared blob to this recipient.
     let recipient = crypto::parse_recipient(&pubkey).unwrap();
-    let encrypted = match crypto::encrypt(&murk_json, &[recipient]) {
-        Ok(blob) => blob,
+    let meta = types::Meta {
+        recipients: recipient_names,
+        mac: String::new(), // Will be computed by vault write.
+    };
+    let meta_json = serde_json::to_vec(&meta).unwrap();
+    let meta_enc = match encrypt_value(&meta_json, &[recipient]) {
+        Ok(enc) => enc,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
 
-    // Build header.
-    let murk_hash = integrity::hash(&encrypted);
-    let header = types::Header {
-        version: "1.0".into(),
+    // Build vault.
+    let v = types::Vault {
+        version: "2.0".into(),
         created: now_utc(),
         vault_name: vault_name.into(),
-        murk_hash,
         recipients: vec![pubkey],
-        schema: vec![],
+        schema: BTreeMap::new(),
+        secrets: BTreeMap::new(),
+        meta: meta_enc,
     };
 
     // Write vault.
-    if let Err(e) = vault::write(vault_path, &header, &encrypted) {
+    if let Err(e) = vault::write(vault_path, &v) {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     }
@@ -332,7 +327,7 @@ fn resolve_key() -> age::secrecy::SecretString {
     })
 }
 
-fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity) {
+fn load_vault(vault: &str) -> (types::Vault, types::Murk, age::x25519::Identity) {
     murk_cli::warn_env_permissions();
     murk_cli::load_vault(vault).unwrap_or_else(|e| {
         eprintln!("{} {e}", "error:".red().bold());
@@ -340,8 +335,13 @@ fn load_vault(vault: &str) -> (types::Header, types::Murk, age::x25519::Identity
     })
 }
 
-fn save_vault(vault: &str, header: &mut types::Header, murk: &types::Murk) {
-    murk_cli::save_vault(vault, header, murk).unwrap_or_else(|e| {
+fn save_vault(
+    vault_path: &str,
+    vault: &mut types::Vault,
+    original: &types::Murk,
+    current: &types::Murk,
+) {
+    murk_cli::save_vault(vault_path, vault, original, current).unwrap_or_else(|e| {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
     });
@@ -393,42 +393,27 @@ fn cmd_add(
     desc: Option<&str>,
     private: bool,
     tags: &[String],
-    vault: &str,
+    vault_path: &str,
 ) {
-    let (mut header, mut murk, identity) = load_vault(vault);
+    let (mut vault, murk, identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
 
     if private {
-        // Add to personal blob (mote).
+        // Add to scoped (mote) — encrypted to self only.
         let pubkey = identity.to_public().to_string();
-
-        // Decrypt existing mote or create a new one.
-        let mut mote = decrypt_mote(&murk, &pubkey, &identity).unwrap_or(types::Mote {
-            values: HashMap::new(),
-        });
-
-        mote.values.insert(key.into(), value.into());
-
-        // Re-encrypt mote to self only.
-        let mote_json = serde_json::to_vec(&mote).unwrap();
-        let recipient = crypto::parse_recipient(&pubkey).unwrap();
-        let encrypted_mote = match crypto::encrypt(&mote_json, &[recipient]) {
-            Ok(blob) => blob,
-            Err(e) => {
-                eprintln!("{} {e}", "error:".red().bold());
-                process::exit(1);
-            }
-        };
-
-        let mote_b64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &encrypted_mote);
-        murk.motes.insert(pubkey, mote_b64);
+        current
+            .scoped
+            .entry(key.into())
+            .or_default()
+            .insert(pubkey, value.into());
     } else {
-        // Add to shared blob.
-        murk.values.insert(key.into(), value.into());
+        // Add to shared (murk).
+        current.values.insert(key.into(), value.into());
     }
 
     // Add schema entry if key is new, or update description/tags if provided.
-    if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
+    if let Some(entry) = vault.schema.get_mut(key) {
         if let Some(d) = desc {
             entry.description = d.into();
         }
@@ -440,12 +425,14 @@ fn cmd_add(
             }
         }
     } else {
-        header.schema.push(types::SchemaEntry {
-            key: key.into(),
-            description: desc.unwrap_or("").into(),
-            example: None,
-            tags: tags.to_vec(),
-        });
+        vault.schema.insert(
+            key.into(),
+            types::SchemaEntry {
+                description: desc.unwrap_or("").into(),
+                example: None,
+                tags: tags.to_vec(),
+            },
+        );
         if desc.is_none() {
             eprintln!(
                 "{} no description set. Run: {}",
@@ -455,13 +442,13 @@ fn cmd_add(
         }
     }
 
-    save_vault(vault, &mut header, &murk);
+    save_vault(vault_path, &mut vault, &original, &current);
 }
 
 /// Keys to skip when importing from a .env file.
 const IMPORT_SKIP: &[&str] = &["MURK_KEY", "MURK_KEY_FILE", "MURK_VAULT"];
 
-fn cmd_import(file: &str, vault: &str) {
+fn cmd_import(file: &str, vault_path: &str) {
     let contents = match fs::read_to_string(file) {
         Ok(c) => c,
         Err(e) => {
@@ -470,7 +457,9 @@ fn cmd_import(file: &str, vault: &str) {
         }
     };
 
-    let (mut header, mut murk, _identity) = load_vault(vault);
+    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
     let mut count = 0;
 
     for line in contents.lines() {
@@ -503,15 +492,17 @@ fn cmd_import(file: &str, vault: &str) {
             continue;
         }
 
-        murk.values.insert(key.into(), value.into());
+        current.values.insert(key.into(), value.into());
 
-        if !header.schema.iter().any(|e| e.key == key) {
-            header.schema.push(types::SchemaEntry {
-                key: key.into(),
-                description: String::new(),
-                example: None,
-                tags: vec![],
-            });
+        if !vault.schema.contains_key(key) {
+            vault.schema.insert(
+                key.into(),
+                types::SchemaEntry {
+                    description: String::new(),
+                    example: None,
+                    tags: vec![],
+                },
+            );
         }
 
         count += 1;
@@ -523,7 +514,7 @@ fn cmd_import(file: &str, vault: &str) {
         return;
     }
 
-    save_vault(vault, &mut header, &murk);
+    save_vault(vault_path, &mut vault, &original, &current);
     eprintln!(
         "{} {count} secret{}",
         "imported".green(),
@@ -531,26 +522,26 @@ fn cmd_import(file: &str, vault: &str) {
     );
 }
 
-fn cmd_rm(key: &str, vault: &str) {
-    let (mut header, mut murk, _identity) = load_vault(vault);
+fn cmd_rm(key: &str, vault_path: &str) {
+    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
 
-    murk.values.remove(key);
-    murk.per_key_access.remove(key);
-    header.schema.retain(|e| e.key != key);
+    current.values.remove(key);
+    current.scoped.remove(key);
+    vault.schema.remove(key);
 
-    save_vault(vault, &mut header, &murk);
+    save_vault(vault_path, &mut vault, &original, &current);
     eprintln!("{} {}", "removed".green(), key.bold());
 }
 
-fn cmd_get(key: &str, vault: &str) {
-    let (_header, murk, identity) = load_vault(vault);
+fn cmd_get(key: &str, vault_path: &str) {
+    let (_vault, murk, identity) = load_vault(vault_path);
 
     let pubkey = identity.to_public().to_string();
 
-    // Check personal blob first (overrides shared).
-    if let Some(mote) = decrypt_mote(&murk, &pubkey, &identity)
-        && let Some(value) = mote.values.get(key)
-    {
+    // Check scoped (mote) first — overrides shared.
+    if let Some(value) = murk.scoped.get(key).and_then(|m| m.get(&pubkey)) {
         println!("{value}");
         return;
     }
@@ -569,56 +560,67 @@ fn cmd_get(key: &str, vault: &str) {
     }
 }
 
-fn cmd_ls(tags: &[String], vault: &str) {
-    let path = Path::new(vault);
-    let header = match vault::read_header(path) {
-        Ok(h) => h,
+fn cmd_ls(tags: &[String], vault_path: &str) {
+    let path = Path::new(vault_path);
+    let vault = match vault::read(path) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
 
-    for entry in &header.schema {
+    for (key, entry) in &vault.schema {
         if !tags.is_empty() && !entry.tags.iter().any(|t| tags.contains(t)) {
             continue;
         }
-        println!("{}", entry.key);
+        println!("{key}");
     }
 }
 
-fn cmd_describe(key: &str, description: &str, example: Option<&str>, tags: &[String], vault: &str) {
-    let (mut header, murk, _identity) = load_vault(vault);
+fn cmd_describe(
+    key: &str,
+    description: &str,
+    example: Option<&str>,
+    tags: &[String],
+    vault_path: &str,
+) {
+    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let original = murk.clone();
 
-    if let Some(entry) = header.schema.iter_mut().find(|e| e.key == key) {
+    if let Some(entry) = vault.schema.get_mut(key) {
         entry.description = description.into();
         entry.example = example.map(Into::into);
         if !tags.is_empty() {
             entry.tags = tags.to_vec();
         }
     } else {
-        header.schema.push(types::SchemaEntry {
-            key: key.into(),
-            description: description.into(),
-            example: example.map(Into::into),
-            tags: tags.to_vec(),
-        });
+        vault.schema.insert(
+            key.into(),
+            types::SchemaEntry {
+                description: description.into(),
+                example: example.map(Into::into),
+                tags: tags.to_vec(),
+            },
+        );
     }
 
-    save_vault(vault, &mut header, &murk);
+    // Describe only changes schema (plaintext) — but we still need to write the vault.
+    // Re-save with no value changes so ciphertext is preserved.
+    save_vault(vault_path, &mut vault, &original, &murk);
 }
 
-fn cmd_export(tags: &[String], vault: &str) {
-    let (header, murk, identity) = load_vault(vault);
+fn cmd_export(tags: &[String], vault_path: &str) {
+    let (vault, murk, identity) = load_vault(vault_path);
 
     // Start with shared values.
     let mut values = murk.values.clone();
 
-    // Apply personal overrides.
+    // Apply scoped (mote) overrides.
     let pubkey = identity.to_public().to_string();
-    if let Some(mote) = decrypt_mote(&murk, &pubkey, &identity) {
-        for (k, v) in mote.values {
-            values.insert(k, v);
+    for (key, scoped_map) in &murk.scoped {
+        if let Some(value) = scoped_map.get(&pubkey) {
+            values.insert(key.clone(), value.clone());
         }
     }
 
@@ -627,11 +629,11 @@ fn cmd_export(tags: &[String], vault: &str) {
         None
     } else {
         Some(
-            header
+            vault
                 .schema
                 .iter()
-                .filter(|e| e.tags.iter().any(|t| tags.contains(t)))
-                .map(|e| e.key.as_str())
+                .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
+                .map(|(k, _)| k.as_str())
                 .collect(),
         )
     };
@@ -695,10 +697,10 @@ fn cmd_env(vault: &str) {
 }
 
 fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
-    let (_header, current_murk, identity) = load_vault(vault_path);
+    let (_vault, current_murk, identity) = load_vault(vault_path);
 
     // Get the old vault contents from git.
-    let output = std::process::Command::new("git")
+    let output = process::Command::new("git")
         .args(["show", &format!("{git_ref}:{vault_path}")])
         .output()
         .unwrap_or_else(|e| {
@@ -709,23 +711,24 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
     let old_values: HashMap<String, String> = if output.status.success() {
         let old_contents = String::from_utf8_lossy(&output.stdout);
         match vault::parse(&old_contents) {
-            Ok((_old_header, old_encrypted)) => match crypto::decrypt(&old_encrypted, &identity) {
-                Ok(plaintext) => {
-                    let old_murk: types::Murk =
-                        serde_json::from_slice(&plaintext).unwrap_or_else(|e| {
-                            eprintln!("{} parsing old vault data: {e}", "error:".red().bold());
-                            process::exit(1);
-                        });
-                    old_murk.values
+            Ok(old_vault) => {
+                // Decrypt each shared value from the old vault.
+                let mut values = HashMap::new();
+                for (key, entry) in &old_vault.secrets {
+                    if let Ok(plaintext) = decrypt_value(&entry.shared, &identity) {
+                        if let Ok(value) = String::from_utf8(plaintext) {
+                            values.insert(key.clone(), value);
+                        }
+                    }
                 }
-                Err(_) => {
+                if values.is_empty() && !old_vault.secrets.is_empty() {
                     eprintln!(
                         "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
                         "warning:".yellow().bold()
                     );
-                    HashMap::new()
                 }
-            },
+                values
+            }
             Err(e) => {
                 eprintln!("{} parsing vault at {git_ref}: {e}", "error:".red().bold());
                 process::exit(1);
@@ -786,44 +789,49 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
     }
 }
 
-fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
+fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
     // Validate the pubkey.
     if crypto::parse_recipient(pubkey).is_err() {
         eprintln!("{} invalid public key: {pubkey}", "error:".red().bold());
         process::exit(1);
     }
 
-    let (mut header, mut murk, _identity) = load_vault(vault);
+    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
 
     // Check if already a recipient.
-    if header.recipients.contains(&pubkey.to_string()) {
+    if vault.recipients.contains(&pubkey.to_string()) {
         eprintln!("{} {pubkey} is already a recipient", "error:".red().bold());
         process::exit(1);
     }
 
-    // Add to header recipients list.
-    header.recipients.push(pubkey.into());
+    // Add to vault recipients list — this triggers full re-encryption in save_vault.
+    vault.recipients.push(pubkey.into());
 
-    // Add name mapping in shared blob (if provided).
+    // Add name mapping (stored in encrypted meta only).
     if let Some(n) = name {
-        murk.recipients.insert(pubkey.into(), n.into());
+        current.recipients.insert(pubkey.into(), n.into());
     }
 
-    save_vault(vault, &mut header, &murk);
+    save_vault(vault_path, &mut vault, &original, &current);
 
     let display = name.unwrap_or(pubkey);
     eprintln!("{} {}", "authorized".green(), display.bold());
 }
 
-fn cmd_revoke(recipient: &str, vault: &str) {
-    let (mut header, mut murk, _identity) = load_vault(vault);
+fn cmd_revoke(recipient: &str, vault_path: &str) {
+    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
 
     // Resolve recipient to pubkey — could be a name or a pubkey.
-    let pubkey = if header.recipients.contains(&recipient.to_string()) {
+    let pubkey = if vault.recipients.contains(&recipient.to_string()) {
         recipient.to_string()
     } else {
         // Try to find by name in the encrypted recipients map.
-        murk.recipients
+        current
+            .recipients
             .iter()
             .find(|(_, name)| name.as_str() == recipient)
             .map_or_else(
@@ -836,7 +844,7 @@ fn cmd_revoke(recipient: &str, vault: &str) {
     };
 
     // Last-recipient protection.
-    if header.recipients.len() == 1 {
+    if vault.recipients.len() == 1 {
         eprintln!(
             "{} cannot revoke last recipient — vault would become permanently inaccessible",
             "error:".red().bold()
@@ -844,19 +852,22 @@ fn cmd_revoke(recipient: &str, vault: &str) {
         process::exit(1);
     }
 
-    // Remove from header.
-    header.recipients.retain(|pk| pk != &pubkey);
+    // Remove from vault recipients — triggers full re-encryption in save_vault.
+    vault.recipients.retain(|pk| pk != &pubkey);
 
-    // Remove from shared blob.
-    let display_name = murk.recipients.remove(&pubkey);
-    murk.motes.remove(&pubkey);
+    // Remove from meta names.
+    let display_name = current.recipients.remove(&pubkey);
 
-    // Remove from per_key_access values.
-    for access_list in murk.per_key_access.values_mut() {
-        access_list.retain(|pk| pk != &pubkey);
+    // Remove their scoped (mote) entries from all secrets.
+    for scoped_map in current.scoped.values_mut() {
+        scoped_map.remove(&pubkey);
+    }
+    // Also remove from vault.secrets scoped entries.
+    for entry in vault.secrets.values_mut() {
+        entry.scoped.remove(&pubkey);
     }
 
-    save_vault(vault, &mut header, &murk);
+    save_vault(vault_path, &mut vault, &original, &current);
 
     let display = display_name.as_deref().unwrap_or(&pubkey);
     eprintln!(
@@ -867,7 +878,7 @@ fn cmd_revoke(recipient: &str, vault: &str) {
     );
 
     // List secrets they had access to so the revoker knows what to rotate.
-    let exposed: Vec<&str> = header.schema.iter().map(|e| e.key.as_str()).collect();
+    let exposed: Vec<&str> = vault.schema.keys().map(String::as_str).collect();
     if !exposed.is_empty() {
         eprintln!();
         eprintln!(
@@ -885,29 +896,28 @@ fn cmd_revoke(recipient: &str, vault: &str) {
     );
 }
 
-fn cmd_recipients(vault: &str) {
-    let path = Path::new(vault);
-    let header = match vault::read_header(path) {
-        Ok(h) => h,
+fn cmd_recipients(vault_path: &str) {
+    let path = Path::new(vault_path);
+    let vault = match vault::read(path) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
 
-    // Try to decrypt for names and to identify "you".
-    let murk_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
+    // Try to decrypt meta for names and to identify "you".
+    let meta_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
         let identity = crypto::parse_identity(&secret_key).ok()?;
         let my_pubkey = identity.to_public().to_string();
-        let (_, encrypted) = vault::read(path).ok()?;
-        let plaintext = crypto::decrypt(&encrypted, &identity).ok()?;
-        let murk: types::Murk = serde_json::from_slice(&plaintext).ok()?;
-        Some((murk, my_pubkey))
+        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
+        let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+        Some((meta, my_pubkey))
     });
 
-    for pk in &header.recipients {
-        if let Some((ref murk, ref my_pubkey)) = murk_data {
-            let name = murk.recipients.get(pk).map_or("", String::as_str);
+    for pk in &vault.recipients {
+        if let Some((ref meta, ref my_pubkey)) = meta_data {
+            let name = meta.recipients.get(pk).map_or("", String::as_str);
             let marker = if pk == my_pubkey {
                 "  (you)".green().to_string()
             } else {
@@ -957,10 +967,10 @@ fn cmd_recover() {
     }
 }
 
-fn cmd_info(tags: &[String], vault: &str) {
-    let path = Path::new(vault);
-    let header = match vault::read_header(path) {
-        Ok(h) => h,
+fn cmd_info(tags: &[String], vault_path: &str) {
+    let path = Path::new(vault_path);
+    let vault = match vault::read(path) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
@@ -968,13 +978,13 @@ fn cmd_info(tags: &[String], vault: &str) {
     };
 
     // Filter by tag if specified.
-    let entries: Vec<&types::SchemaEntry> = if tags.is_empty() {
-        header.schema.iter().collect()
+    let entries: Vec<(&String, &types::SchemaEntry)> = if tags.is_empty() {
+        vault.schema.iter().collect()
     } else {
-        header
+        vault
             .schema
             .iter()
-            .filter(|e| e.tags.iter().any(|t| tags.contains(t)))
+            .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
             .collect()
     };
 
@@ -983,24 +993,25 @@ fn cmd_info(tags: &[String], vault: &str) {
         return;
     }
 
-    // Try to decrypt the shared blob for per_key_access and recipient names.
-    // This is optional — info works without MURK_KEY.
-    let murk_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
+    // Try to decrypt meta for recipient names.
+    let meta_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
         let identity = crypto::parse_identity(&secret_key).ok()?;
-        let (_, murk_bytes) = vault::read(path).ok()?;
-        let plaintext = crypto::decrypt(&murk_bytes, &identity).ok()?;
-        let murk: types::Murk = serde_json::from_slice(&plaintext).ok()?;
-        Some(murk)
+        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
+        let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+        Some(meta)
     });
 
     // Compute column widths for aligned output.
-    let key_width = entries.iter().map(|e| e.key.len()).max().unwrap();
-
-    let desc_width = entries.iter().map(|e| e.description.len()).max().unwrap();
+    let key_width = entries.iter().map(|(k, _)| k.len()).max().unwrap();
+    let desc_width = entries
+        .iter()
+        .map(|(_, e)| e.description.len())
+        .max()
+        .unwrap();
 
     let example_width = entries
         .iter()
-        .map(|e| {
+        .map(|(_, e)| {
             e.example
                 .as_ref()
                 .map_or(0, |ex| format!("(e.g. {ex})").len())
@@ -1010,7 +1021,7 @@ fn cmd_info(tags: &[String], vault: &str) {
 
     let tag_width = entries
         .iter()
-        .map(|e| {
+        .map(|(_, e)| {
             if e.tags.is_empty() {
                 0
             } else {
@@ -1020,7 +1031,7 @@ fn cmd_info(tags: &[String], vault: &str) {
         .max()
         .unwrap();
 
-    for entry in &entries {
+    for (key, entry) in &entries {
         let example_str = entry
             .example
             .as_ref()
@@ -1034,29 +1045,40 @@ fn cmd_info(tags: &[String], vault: &str) {
         };
 
         // Pad plain strings for alignment, then apply colors.
-        let key_padded = format!("{:<key_width$}", entry.key);
+        let key_padded = format!("{:<key_width$}", key);
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
         let tag_padded = format!("{tag_str:<tag_width$}");
 
-        if let Some(ref murk) = murk_data {
-            let recipients = murk.per_key_access.get(&entry.key).map_or_else(
-                || "[]".into(),
-                |pubkeys| {
-                    let names: Vec<&str> = pubkeys
-                        .iter()
-                        .map(|pk| murk.recipients.get(pk).map_or(pk.as_str(), String::as_str))
-                        .collect();
-                    format!("[{}]", names.join(", "))
-                },
-            );
+        if let Some(ref meta) = meta_data {
+            // Show which recipients have scoped overrides for this key.
+            let scoped_pks: Vec<String> = vault
+                .secrets
+                .get(key.as_str())
+                .map(|s| {
+                    s.scoped
+                        .keys()
+                        .map(|pk| {
+                            meta.recipients
+                                .get(pk)
+                                .cloned()
+                                .unwrap_or_else(|| pk.chars().take(12).collect::<String>() + "…")
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let scoped_str = if scoped_pks.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", scoped_pks.join(", "))
+            };
             println!(
                 "{}  {}  {}  {}  {}",
                 key_padded.bold(),
                 desc_padded,
                 ex_padded.dimmed(),
                 tag_padded.cyan(),
-                recipients.dimmed()
+                scoped_str.dimmed()
             );
         } else {
             println!(

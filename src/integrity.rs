@@ -102,4 +102,27 @@ mod tests {
     fn different_data_different_hash() {
         assert_ne!(hash(b"foo"), hash(b"bar"));
     }
+
+    #[test]
+    fn integrity_error_display() {
+        let err = IntegrityError::Mismatch {
+            expected: "sha256:aaa".into(),
+            actual: "sha256:bbb".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("integrity check failed"));
+        assert!(msg.contains("sha256:aaa"));
+        assert!(msg.contains("sha256:bbb"));
+    }
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(super::hex::encode(b""), "");
+    }
+
+    #[test]
+    fn hex_encode_known_values() {
+        assert_eq!(super::hex::encode(b"\x00\xff"), "00ff");
+        assert_eq!(super::hex::encode(b"\xde\xad\xbe\xef"), "deadbeef");
+    }
 }
