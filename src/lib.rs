@@ -105,7 +105,7 @@ pub fn load_vault(
         }
     }
 
-    // Decrypt meta for recipient names.
+    // Decrypt meta for recipient names and validate integrity MAC.
     let recipients = if vault.meta.is_empty() {
         HashMap::new()
     } else if let Ok(plaintext) = decrypt_value(&vault.meta, &identity) {
@@ -114,6 +114,18 @@ pub fn load_vault(
                 recipients: HashMap::new(),
                 mac: String::new(),
             });
+
+        // Validate MAC if present.
+        if !meta.mac.is_empty() {
+            let expected = compute_mac(&vault);
+            if meta.mac != expected {
+                return Err(format!(
+                    "integrity check failed: vault may have been tampered with (expected {}, got {})",
+                    meta.mac, expected
+                ));
+            }
+        }
+
         meta.recipients
     } else {
         HashMap::new()
