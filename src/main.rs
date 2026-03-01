@@ -158,6 +158,26 @@ enum Command {
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
+
+    /// Write a .envrc for direnv integration
+    Env {
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Show secret changes vs a git ref
+    Diff {
+        /// Git ref to compare against
+        #[arg(default_value = "HEAD")]
+        git_ref: String,
+        /// Show actual values (not just key names)
+        #[arg(long)]
+        show_values: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 }
 
 /// Prompt the user for a line of input, with an optional default value.
@@ -632,6 +652,140 @@ fn cmd_export(tags: &[String], vault: &str) {
     }
 }
 
+fn cmd_env(vault: &str) {
+    let envrc = Path::new(".envrc");
+    let murk_line = format!("eval \"$(murk export --vault {vault})\"");
+
+    if envrc.exists() {
+        let contents = fs::read_to_string(envrc).unwrap_or_else(|e| {
+            eprintln!("{} reading .envrc: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+        if contents.contains("murk export") {
+            eprintln!(
+                "{} .envrc already contains murk export",
+                "ok:".green().bold()
+            );
+            return;
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(envrc)
+            .unwrap_or_else(|e| {
+                eprintln!("{} writing .envrc: {e}", "error:".red().bold());
+                process::exit(1);
+            });
+        writeln!(file, "\n{murk_line}").unwrap();
+        eprintln!(
+            "{} appended to .envrc. Run: {}",
+            "ok:".green().bold(),
+            "direnv allow".bold()
+        );
+    } else {
+        fs::write(envrc, format!("{murk_line}\n")).unwrap_or_else(|e| {
+            eprintln!("{} writing .envrc: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+        eprintln!(
+            "{} created .envrc. Run: {}",
+            "ok:".green().bold(),
+            "direnv allow".bold()
+        );
+    }
+}
+
+fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
+    let (_header, current_murk, identity) = load_vault(vault_path);
+
+    // Get the old vault contents from git.
+    let output = std::process::Command::new("git")
+        .args(["show", &format!("{git_ref}:{vault_path}")])
+        .output()
+        .unwrap_or_else(|e| {
+            eprintln!("{} running git: {e}", "error:".red().bold());
+            process::exit(1);
+        });
+
+    let old_values: HashMap<String, String> = if output.status.success() {
+        let old_contents = String::from_utf8_lossy(&output.stdout);
+        match vault::parse(&old_contents) {
+            Ok((_old_header, old_encrypted)) => match crypto::decrypt(&old_encrypted, &identity) {
+                Ok(plaintext) => {
+                    let old_murk: types::Murk =
+                        serde_json::from_slice(&plaintext).unwrap_or_else(|e| {
+                            eprintln!("{} parsing old vault data: {e}", "error:".red().bold());
+                            process::exit(1);
+                        });
+                    old_murk.values
+                }
+                Err(_) => {
+                    eprintln!(
+                        "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
+                        "warning:".yellow().bold()
+                    );
+                    HashMap::new()
+                }
+            },
+            Err(e) => {
+                eprintln!("{} parsing vault at {git_ref}: {e}", "error:".red().bold());
+                process::exit(1);
+            }
+        }
+    } else {
+        // Vault didn't exist at that ref — treat as empty.
+        HashMap::new()
+    };
+
+    // Collect all keys from both.
+    let mut all_keys: Vec<&str> = current_murk
+        .values
+        .keys()
+        .chain(old_values.keys())
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    all_keys.sort();
+
+    let mut changes = 0;
+    for key in &all_keys {
+        let old = old_values.get(*key);
+        let new = current_murk.values.get(*key);
+
+        match (old, new) {
+            (None, Some(v)) => {
+                changes += 1;
+                if show_values {
+                    println!("{} {key} = {v}", "+".green().bold());
+                } else {
+                    println!("{} {key}", "+".green().bold());
+                }
+            }
+            (Some(v), None) => {
+                changes += 1;
+                if show_values {
+                    println!("{} {key} = {v}", "-".red().bold());
+                } else {
+                    println!("{} {key}", "-".red().bold());
+                }
+            }
+            (Some(old_v), Some(new_v)) if old_v != new_v => {
+                changes += 1;
+                if show_values {
+                    println!("{} {key}: {old_v} → {new_v}", "~".yellow().bold());
+                } else {
+                    println!("{} {key}", "~".yellow().bold());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if changes == 0 {
+        eprintln!("{}", "no changes".dimmed());
+    }
+}
+
 fn cmd_authorize(pubkey: &str, name: Option<&str>, vault: &str) {
     // Validate the pubkey.
     if crypto::parse_recipient(pubkey).is_err() {
@@ -954,5 +1108,11 @@ fn main() {
         } => cmd_authorize(&pubkey, name.as_deref(), &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
         Command::Recipients { vault } => cmd_recipients(&vault),
+        Command::Env { vault } => cmd_env(&vault),
+        Command::Diff {
+            git_ref,
+            show_values,
+            vault,
+        } => cmd_diff(&git_ref, show_values, &vault),
     }
 }

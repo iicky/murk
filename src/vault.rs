@@ -33,11 +33,8 @@ impl From<std::io::Error> for VaultError {
     }
 }
 
-/// Read a .murk vault file, returning the parsed header and raw encrypted bytes.
-/// The encrypted section is base64-decoded back to raw bytes.
-pub fn read(path: &Path) -> Result<(Header, Vec<u8>), VaultError> {
-    let contents = fs::read_to_string(path)?;
-
+/// Parse vault contents from a string, returning the header and raw encrypted bytes.
+pub fn parse(contents: &str) -> Result<(Header, Vec<u8>), VaultError> {
     let (header_str, murk_b64) = contents.split_once(SECTION_SEP).ok_or_else(|| {
         VaultError::Parse(
             "missing section separator. Vault may be corrupted — restore from git".into(),
@@ -57,6 +54,12 @@ pub fn read(path: &Path) -> Result<(Header, Vec<u8>), VaultError> {
     })?;
 
     Ok((header, murk_bytes))
+}
+
+/// Read a .murk vault file, returning the parsed header and raw encrypted bytes.
+pub fn read(path: &Path) -> Result<(Header, Vec<u8>), VaultError> {
+    let contents = fs::read_to_string(path)?;
+    parse(&contents)
 }
 
 /// Write a header and raw encrypted bytes to a .murk vault file.

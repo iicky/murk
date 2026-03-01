@@ -1145,3 +1145,158 @@ fn add_explicit_value_still_works() {
         .success()
         .stdout(predicate::str::contains("direct-value"));
 }
+
+// ── env (direnv) ──
+
+#[test]
+fn env_creates_envrc() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["env", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("created .envrc"));
+
+    let envrc = fs::read_to_string(dir.path().join(".envrc")).unwrap();
+    assert!(envrc.contains("murk export"));
+}
+
+#[test]
+fn env_appends_to_existing() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    fs::write(dir.path().join(".envrc"), "# existing config\n").unwrap();
+
+    murk(&dir, &key)
+        .args(["env", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("appended"));
+
+    let envrc = fs::read_to_string(dir.path().join(".envrc")).unwrap();
+    assert!(envrc.contains("# existing config"));
+    assert!(envrc.contains("murk export"));
+}
+
+#[test]
+fn env_skips_if_present() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    fs::write(
+        dir.path().join(".envrc"),
+        "eval \"$(murk export --vault test.murk)\"\n",
+    )
+    .unwrap();
+
+    murk(&dir, &key)
+        .args(["env", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("already contains"));
+}
+
+// ── diff ──
+
+#[test]
+fn diff_shows_no_changes() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Initialize git repo and commit the vault.
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["add", "test.murk"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(dir.path())
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@test.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@test.com")
+        .output()
+        .unwrap();
+
+    // No changes since commit — should say "no changes".
+    murk(&dir, &key)
+        .args(["diff", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no changes"));
+}
+
+#[test]
+fn diff_shows_added_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Initialize git repo and commit the vault.
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["add", "test.murk"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(dir.path())
+        .env("GIT_AUTHOR_NAME", "test")
+        .env("GIT_AUTHOR_EMAIL", "test@test.com")
+        .env("GIT_COMMITTER_NAME", "test")
+        .env("GIT_COMMITTER_EMAIL", "test@test.com")
+        .output()
+        .unwrap();
+
+    // Add a secret after the commit.
+    murk(&dir, &key)
+        .args(["add", "NEW_KEY", "new-value", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Diff should show NEW_KEY as added.
+    murk(&dir, &key)
+        .args(["diff", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("NEW_KEY"));
+}
+
+#[test]
+fn diff_no_git_vault_shows_all_added() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Initialize git repo but don't commit the vault.
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    // Add a secret.
+    murk(&dir, &key)
+        .args(["add", "FRESH", "value", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Diff against HEAD should show FRESH as added (vault didn't exist at HEAD).
+    murk(&dir, &key)
+        .args(["diff", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FRESH"));
+}
