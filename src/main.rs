@@ -410,6 +410,8 @@ fn cmd_add(
         &identity,
     );
 
+    eprintln!("{} {}", "added".green(), key.bold());
+
     if needs_desc_hint {
         eprintln!(
             "{} no description set. Run: {}",
