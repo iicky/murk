@@ -17,6 +17,7 @@
 
 pub mod crypto;
 pub mod integrity;
+pub mod merge;
 pub mod recovery;
 pub mod types;
 pub mod vault;
@@ -546,7 +547,7 @@ pub fn revoke_recipient(
 
 /// Compute an integrity MAC over the vault's secrets and schema.
 /// Covers: sorted key names, encrypted shared values, recipient pubkeys.
-fn compute_mac(vault: &types::Vault) -> String {
+pub fn compute_mac(vault: &types::Vault) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();

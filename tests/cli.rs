@@ -1375,3 +1375,191 @@ fn diff_no_git_vault_shows_all_added() {
         .success()
         .stdout(predicate::str::contains("FRESH"));
 }
+
+// ── merge-driver ──
+
+/// Helper: write a vault JSON file for merge driver tests.
+fn write_vault_json(dir: &std::path::Path, filename: &str, json: &str) -> std::path::PathBuf {
+    let path = dir.join(filename);
+    fs::write(&path, json).unwrap();
+    path
+}
+
+#[test]
+fn merge_driver_clean_merge() {
+    let dir = TempDir::new().unwrap();
+
+    // Base vault: one secret.
+    let base_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "DB_URL": { "description": "database", "tags": [] }
+  },
+  "secrets": {
+    "DB_URL": { "shared": "base-cipher-db" }
+  },
+  "meta": "base-meta"
+}"#;
+
+    // Ours: adds API_KEY.
+    let ours_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "API_KEY": { "description": "api key", "tags": [] },
+    "DB_URL": { "description": "database", "tags": [] }
+  },
+  "secrets": {
+    "API_KEY": { "shared": "ours-cipher-api" },
+    "DB_URL": { "shared": "base-cipher-db" }
+  },
+  "meta": "ours-meta"
+}"#;
+
+    // Theirs: adds STRIPE_KEY.
+    let theirs_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "DB_URL": { "description": "database", "tags": [] },
+    "STRIPE_KEY": { "description": "stripe", "tags": [] }
+  },
+  "secrets": {
+    "DB_URL": { "shared": "base-cipher-db" },
+    "STRIPE_KEY": { "shared": "theirs-cipher-stripe" }
+  },
+  "meta": "theirs-meta"
+}"#;
+
+    let base_path = write_vault_json(dir.path(), "base.murk", base_json);
+    let ours_path = write_vault_json(dir.path(), "ours.murk", ours_json);
+    let theirs_path = write_vault_json(dir.path(), "theirs.murk", theirs_json);
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args([
+            "merge-driver",
+            base_path.to_str().unwrap(),
+            ours_path.to_str().unwrap(),
+            theirs_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("merged cleanly"));
+
+    // Verify the merged result contains all three keys.
+    let merged = fs::read_to_string(&ours_path).unwrap();
+    assert!(merged.contains("API_KEY"));
+    assert!(merged.contains("STRIPE_KEY"));
+    assert!(merged.contains("DB_URL"));
+}
+
+#[test]
+fn merge_driver_conflict_exit_code() {
+    let dir = TempDir::new().unwrap();
+
+    let base_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "DB_URL": { "description": "database", "tags": [] }
+  },
+  "secrets": {
+    "DB_URL": { "shared": "base-cipher" }
+  },
+  "meta": "base-meta"
+}"#;
+
+    // Both sides modify DB_URL.
+    let ours_json = base_json.replace("base-cipher", "ours-cipher");
+    let theirs_json = base_json.replace("base-cipher", "theirs-cipher");
+
+    let base_path = write_vault_json(dir.path(), "base.murk", base_json);
+    let ours_path = write_vault_json(dir.path(), "ours.murk", &ours_json);
+    let theirs_path = write_vault_json(dir.path(), "theirs.murk", &theirs_json);
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args([
+            "merge-driver",
+            base_path.to_str().unwrap(),
+            ours_path.to_str().unwrap(),
+            theirs_path.to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("conflict").and(predicate::str::contains("DB_URL")));
+}
+
+// ── setup-merge-driver ──
+
+#[test]
+fn setup_merge_driver_creates_gitattributes() {
+    let dir = TempDir::new().unwrap();
+
+    // Initialize a git repo in the temp dir.
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["setup-merge-driver"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("merge driver configured"));
+
+    // Check .gitattributes.
+    let gitattributes = fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
+    assert!(gitattributes.contains("*.murk merge=murk"));
+
+    // Check git config.
+    let output = std::process::Command::new("git")
+        .args(["config", "merge.murk.driver"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let driver = String::from_utf8_lossy(&output.stdout);
+    assert!(driver.contains("murk merge-driver %O %A %B"));
+}
+
+#[test]
+fn setup_merge_driver_idempotent() {
+    let dir = TempDir::new().unwrap();
+
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    // Run twice.
+    for _ in 0..2 {
+        Command::cargo_bin("murk")
+            .unwrap()
+            .args(["setup-merge-driver"])
+            .current_dir(dir.path())
+            .assert()
+            .success();
+    }
+
+    // Should have the line only once.
+    let gitattributes = fs::read_to_string(dir.path().join(".gitattributes")).unwrap();
+    assert_eq!(
+        gitattributes.matches("*.murk merge=murk").count(),
+        1,
+        "should not duplicate the gitattributes entry"
+    );
+}

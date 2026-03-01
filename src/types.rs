@@ -21,7 +21,7 @@ pub struct Vault {
     pub meta: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchemaEntry {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +30,7 @@ pub struct SchemaEntry {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretEntry {
     /// Shared value encrypted to all recipients.
     pub shared: String,
