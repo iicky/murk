@@ -79,17 +79,22 @@ jobs:
   vhs:
     name: VHS
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
+      - run: |
+          for tape in demo/*.tape; do
+            docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs "$tape"
+          done
       - uses: stefanzweifel/git-auto-commit-action@v5
         if: github.ref == 'refs/heads/main'
         with:
-          commit_message: "update hero.gif [skip ci]"
-          file_pattern: demo/hero.gif
+          commit_message: "update demo gifs [skip ci]"
+          file_pattern: "demo/*.gif"
 
   deny:
     name: Deny
