@@ -86,10 +86,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
-      - run: |
-          for tape in demo/hero.tape demo/eve.tape demo/teams.tape demo/offboarding.tape demo/recovery.tape; do
-            docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs "$tape"
-          done
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
       - uses: stefanzweifel/git-auto-commit-action@v5
         if: github.ref == 'refs/heads/main'
         with:
