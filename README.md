@@ -19,11 +19,21 @@ Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault 
 
 murk is simple: one key in your `.env`, one encrypted file in your repo, done.
 
-## Quick start
+## Install
+
+```bash
+brew tap iicky/murk && brew install murk
+```
+
+Or via Cargo:
 
 ```bash
 cargo install murk-cli
+```
 
+## Quick start
+
+```bash
 # Initialize — generates your key and recovery phrase
 murk init
 
