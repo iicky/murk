@@ -132,6 +132,20 @@ enum Command {
         vault: String,
     },
 
+    /// Run a command with secrets injected as environment variables
+    #[command(trailing_var_arg = true)]
+    Exec {
+        /// Filter by tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+        /// Command and arguments to execute
+        #[arg(required = true)]
+        command: Vec<String>,
+    },
+
     /// Add a recipient to the vault
     Authorize {
         /// Recipient's age public key
@@ -649,6 +663,39 @@ fn cmd_export(tags: &[String], vault_path: &str) {
     let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
     for (k, escaped) in &exports {
         println!("export {k}='{escaped}'");
+    }
+}
+
+fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
+    let (vault, murk, identity) = load_vault(vault_path);
+    let pubkey = identity.to_public().to_string();
+    let secrets = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+
+    let program = &command[0];
+    let args = &command[1..];
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = process::Command::new(program)
+            .args(args)
+            .envs(&secrets)
+            .exec();
+        eprintln!("{} {err}", "error:".red().bold());
+        process::exit(1);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = process::Command::new(program)
+            .args(args)
+            .envs(&secrets)
+            .status()
+            .unwrap_or_else(|e| {
+                eprintln!("{} {e}", "error:".red().bold());
+                process::exit(1);
+            });
+        process::exit(status.code().unwrap_or(1));
     }
 }
 
@@ -1229,6 +1276,11 @@ fn main() {
         } => cmd_describe(&key, &description, example.as_deref(), &tag, &vault),
         Command::Info { tag, vault } => cmd_info(&tag, &vault),
         Command::Export { tag, vault } => cmd_export(&tag, &vault),
+        Command::Exec {
+            tag,
+            vault,
+            command,
+        } => cmd_exec(&command, &tag, &vault),
         Command::Authorize {
             pubkey,
             name,

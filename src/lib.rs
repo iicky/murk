@@ -35,7 +35,7 @@ pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{parse_env, resolve_key, warn_env_permissions};
-pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets};
+pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets, resolve_secrets};
 pub use recipients::{RevokeResult, authorize_recipient, revoke_recipient};
 pub use secrets::{add_secret, describe_key, get_secret, list_keys, remove_secret};
 
@@ -105,7 +105,7 @@ pub fn load_vault(
         }
     }
 
-    // Decrypt meta for recipient names.
+    // Decrypt meta for recipient names and validate integrity MAC.
     let recipients = if vault.meta.is_empty() {
         HashMap::new()
     } else if let Ok(plaintext) = decrypt_value(&vault.meta, &identity) {
@@ -114,6 +114,18 @@ pub fn load_vault(
                 recipients: HashMap::new(),
                 mac: String::new(),
             });
+
+        // Validate MAC if present.
+        if !meta.mac.is_empty() {
+            let expected = compute_mac(&vault);
+            if meta.mac != expected {
+                return Err(format!(
+                    "integrity check failed: vault may have been tampered with (expected {}, got {})",
+                    meta.mac, expected
+                ));
+            }
+        }
+
         meta.recipients
     } else {
         HashMap::new()
@@ -654,6 +666,117 @@ mod tests {
         .unwrap();
 
         assert!(vault.secrets["KEY1"].scoped.is_empty());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_validates_mac() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let dir = std::env::temp_dir().join("murk_test_load_mac");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault with one secret, save it (computes valid MAC).
+        let mut vault = types::Vault {
+            version: "2.0".into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Now tamper: change the ciphertext in the saved vault file.
+        let mut tampered: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        tampered.secrets.get_mut("KEY1").unwrap().shared =
+            encrypt_value(b"tampered", &[recipient]).unwrap();
+        fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+
+        // Load should fail MAC validation.
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = result.err().expect("expected MAC validation to fail");
+        assert!(
+            err.contains("integrity check failed"),
+            "expected integrity check failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_succeeds_with_valid_mac() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_load_valid_mac");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = types::Vault {
+            version: "2.0".into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[recipient]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Load should succeed.
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        assert!(result.is_ok());
+        let (_, murk, _) = result.unwrap();
+        assert_eq!(murk.values["KEY1"], "val1");
 
         fs::remove_dir_all(&dir).unwrap();
     }

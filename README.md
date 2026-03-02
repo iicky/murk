@@ -10,7 +10,7 @@ Encrypted secrets manager for developers. One key unlocks everything.
 murk stores encrypted secrets in a single `.murk` file that's safe to commit to git. It uses [age](https://age-encryption.org/) encryption, works with [direnv](https://direnv.net/), and supports teams — all in one binary with no runtime dependencies.
 
 <p align="center">
-  <img src="demo/hero.gif" alt="murk demo" width="900">
+  <img src="https://raw.githubusercontent.com/iicky/murk/demo/hero.gif" alt="murk demo" width="900">
 </p>
 
 ## Why

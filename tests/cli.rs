@@ -458,6 +458,92 @@ fn export_escapes_single_quotes() {
         .stdout(predicate::str::contains("export QUOTED='it'\\''s a test'"));
 }
 
+// ── exec ──
+
+#[test]
+fn exec_injects_secrets() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "MY_SECRET", "hunter2", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["exec", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("MY_SECRET=hunter2"));
+}
+
+#[test]
+fn exec_filters_by_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_PASS",
+            "secret",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_KEY",
+            "abc123",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args(["exec", "--tag", "db", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("DB_PASS=secret"));
+    assert!(!stdout.contains("API_KEY=abc123"));
+}
+
+#[test]
+fn exec_propagates_exit_code() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "KEY", "val", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["exec", "--vault", "test.murk", "--", "false"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn exec_without_vault_fails() {
+    let dir = TempDir::new().unwrap();
+
+    murk(&dir, "AGE-SECRET-KEY-1DUMMY")
+        .args(["exec", "--vault", "nonexistent.murk", "--", "env"])
+        .assert()
+        .failure();
+}
+
 // ── recover ──
 
 #[test]
@@ -1644,6 +1730,40 @@ fn codename_is_deterministic() {
     let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
     let cn2 = info2.lines().find(|l| l.contains("codename")).unwrap();
     assert_eq!(cn1, cn2, "same file should produce same codename");
+}
+
+#[test]
+fn restore_recovers_key_from_phrase() {
+    let dir = TempDir::new().unwrap();
+    let (murk_key, _pubkey) = init_vault(&dir);
+
+    // Get the recovery phrase.
+    let output = murk(&dir, &murk_key).arg("recover").output().unwrap();
+    let phrase = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    assert_eq!(phrase.split_whitespace().count(), 24);
+
+    // Restore from phrase — should print the same key.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["restore", &phrase])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&murk_key));
+}
+
+#[test]
+fn restore_invalid_phrase_fails() {
+    let dir = TempDir::new().unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["restore", "not a valid recovery phrase at all"])
+        .current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .assert()
+        .failure();
 }
 
 #[test]
