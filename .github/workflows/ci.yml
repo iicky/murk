@@ -101,7 +101,7 @@ jobs:
       - name: Build VHS image with git
         run: |
           echo 'FROM ghcr.io/charmbracelet/vhs
-          RUN apk add --no-cache git' | docker build -t vhs-git -
+          RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*' | docker build -t vhs-git -
       - name: Smoke test binary in VHS container
         run: docker run --rm -v $PWD:/vhs --entrypoint /vhs/target/x86_64-unknown-linux-musl/release/murk vhs-git --version
       - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/hero.tape
