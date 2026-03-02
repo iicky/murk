@@ -308,6 +308,12 @@ fn generate_and_write_key() -> (String, String) {
             .bold()
     );
     eprintln!("{}", phrase.bold());
+    eprintln!();
+    eprintln!(
+        "{} {}",
+        "MURK_KEY saved to .env —".yellow().bold(),
+        "do not commit this file.".yellow().bold()
+    );
 
     (secret_key, pubkey)
 }
@@ -441,7 +447,11 @@ fn cmd_init(vault_name: &str) {
     }
 
     eprintln!();
-    eprintln!("{}", "Vault initialized. Added as recipient.".green());
+    eprintln!(
+        "{} Added {} as recipient.",
+        "Vault initialized.".green(),
+        name.bold()
+    );
     eprintln!("Next: {}", "murk add KEY".bold());
 }
 
