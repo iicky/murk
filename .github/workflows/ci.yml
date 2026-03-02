@@ -79,32 +79,21 @@ jobs:
   vhs:
     name: VHS
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.head_ref }}
-      - name: Check if triggered by demo auto-commit
-        id: check
-        run: |
-          msg=$(git log -1 --pretty=%s)
-          if [[ "$msg" == "update demo gifs" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.check.outputs.skip != 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.check.outputs.skip != 'true'
       - run: cargo build --release
-        if: steps.check.outputs.skip != 'true'
       - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
-        if: steps.check.outputs.skip != 'true'
-      - uses: stefanzweifel/git-auto-commit-action@v5
-        if: github.event_name == 'pull_request' && steps.check.outputs.skip != 'true'
+      - uses: peaceiris/actions-gh-pages@v4
         with:
-          commit_message: "update demo gifs"
-          file_pattern: "demo/*.gif"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./demo
+          publish_branch: demo
+          keep_files: true
 
   deny:
     name: Deny
