@@ -1,4 +1,4 @@
-# Teams demo — Alice adds Bob, Bob adds Carol, private overrides
+# Teams demo — Alice adds Bob, Bob adds Carol, scoped overrides
 
 Output demo/teams.gif
 
@@ -66,7 +66,7 @@ Type "# Override a secret for local dev"
 Enter
 Sleep 500ms
 
-Type `echo "postgres://localhost/dev" | murk add DATABASE_URL --private`
+Type `echo "postgres://localhost/dev" | murk add DATABASE_URL --scoped`
 Enter
 Sleep 2s
 
