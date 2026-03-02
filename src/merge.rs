@@ -494,6 +494,34 @@ fn merge_secrets_both_reencrypted(
     result
 }
 
+/// Output of the merge driver: the merge result and whether meta was regenerated.
+#[derive(Debug)]
+pub struct MergeDriverOutput {
+    pub result: MergeResult,
+    pub meta_regenerated: bool,
+}
+
+/// Run the three-way merge driver on vault contents (as strings).
+///
+/// Parses all three versions, merges, and attempts meta regeneration.
+/// Returns the merged vault and conflict list. The caller is responsible for
+/// writing the result to disk.
+pub fn run_merge_driver(base: &str, ours: &str, theirs: &str) -> Result<MergeDriverOutput, String> {
+    use crate::vault;
+
+    let base_vault = vault::parse(base).map_err(|e| format!("parsing base: {e}"))?;
+    let ours_vault = vault::parse(ours).map_err(|e| format!("parsing ours: {e}"))?;
+    let theirs_vault = vault::parse(theirs).map_err(|e| format!("parsing theirs: {e}"))?;
+
+    let mut result = merge_vaults(&base_vault, &ours_vault, &theirs_vault);
+    let meta_regenerated = regenerate_meta(&mut result.vault, &ours_vault, &theirs_vault).is_some();
+
+    Ok(MergeDriverOutput {
+        result,
+        meta_regenerated,
+    })
+}
+
 /// Attempt to regenerate the meta blob for a merged vault.
 ///
 /// Decrypts meta from `ours` and `theirs` to merge recipient name maps,

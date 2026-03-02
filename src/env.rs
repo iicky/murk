@@ -2,6 +2,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use age::secrecy::SecretString;
@@ -81,6 +82,108 @@ pub fn warn_env_permissions() {
                 );
             }
         }
+    }
+}
+
+/// Read MURK_KEY from `.env` file if present.
+///
+/// Checks for both `export MURK_KEY=...` and `MURK_KEY=...` forms.
+/// Returns the key value or `None` if not found.
+pub fn read_key_from_dotenv() -> Option<String> {
+    let contents = fs::read_to_string(".env").ok()?;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
+            return Some(key.to_string());
+        }
+        if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
+            return Some(key.to_string());
+        }
+    }
+    None
+}
+
+/// Check whether `.env` already contains a `MURK_KEY` line.
+pub fn dotenv_has_murk_key() -> bool {
+    let env_path = Path::new(".env");
+    if !env_path.exists() {
+        return false;
+    }
+    let contents = fs::read_to_string(env_path).unwrap_or_default();
+    contents
+        .lines()
+        .any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY="))
+}
+
+/// Write a MURK_KEY to `.env`, removing any existing MURK_KEY lines.
+/// Sets file permissions to 600 on Unix.
+pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
+    let env_path = Path::new(".env");
+
+    // Remove existing MURK_KEY line(s) if file exists.
+    if env_path.exists() {
+        let contents = fs::read_to_string(env_path).map_err(|e| format!("reading .env: {e}"))?;
+        let filtered: Vec<&str> = contents
+            .lines()
+            .filter(|l| !l.starts_with("MURK_KEY=") && !l.starts_with("export MURK_KEY="))
+            .collect();
+        fs::write(env_path, filtered.join("\n") + "\n")
+            .map_err(|e| format!("writing .env: {e}"))?;
+    }
+
+    // Append MURK_KEY.
+    let mut env_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(env_path)
+        .map_err(|e| format!("opening .env: {e}"))?;
+    writeln!(env_file, "export MURK_KEY={secret_key}").map_err(|e| format!("writing .env: {e}"))?;
+    drop(env_file);
+
+    // Restrict to owner-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(env_path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod .env: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Status of `.envrc` after writing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EnvrcStatus {
+    /// `.envrc` already contained `murk export`.
+    AlreadyPresent,
+    /// Appended murk export line to existing `.envrc`.
+    Appended,
+    /// Created a new `.envrc` file.
+    Created,
+}
+
+/// Write a `.envrc` file for direnv integration.
+///
+/// If `.envrc` exists and already contains `murk export`, returns `AlreadyPresent`.
+/// If it exists but doesn't, appends the line. Otherwise creates the file.
+pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
+    let envrc = Path::new(".envrc");
+    let murk_line = format!("eval \"$(murk export --vault {vault_name})\"");
+
+    if envrc.exists() {
+        let contents = fs::read_to_string(envrc).map_err(|e| format!("reading .envrc: {e}"))?;
+        if contents.contains("murk export") {
+            return Ok(EnvrcStatus::AlreadyPresent);
+        }
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(envrc)
+            .map_err(|e| format!("writing .envrc: {e}"))?;
+        writeln!(file, "\n{murk_line}").map_err(|e| format!("writing .envrc: {e}"))?;
+        Ok(EnvrcStatus::Appended)
+    } else {
+        fs::write(envrc, format!("{murk_line}\n")).map_err(|e| format!("writing .envrc: {e}"))?;
+        Ok(EnvrcStatus::Created)
     }
 }
 
@@ -278,6 +381,188 @@ mod tests {
         warn_env_permissions();
         std::env::set_current_dir(original_dir).unwrap();
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_key_from_dotenv_export_form() {
+        let dir = std::env::temp_dir().join("murk_test_read_dotenv_export");
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_path = dir.join(".env");
+        std::fs::write(&env_path, "export MURK_KEY=AGE-SECRET-KEY-1ABC\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = read_key_from_dotenv();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(result, Some("AGE-SECRET-KEY-1ABC".into()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_key_from_dotenv_bare_form() {
+        let dir = std::env::temp_dir().join("murk_test_read_dotenv_bare");
+        std::fs::create_dir_all(&dir).unwrap();
+        let env_path = dir.join(".env");
+        std::fs::write(&env_path, "MURK_KEY=AGE-SECRET-KEY-1XYZ\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = read_key_from_dotenv();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(result, Some("AGE-SECRET-KEY-1XYZ".into()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_key_from_dotenv_missing_file() {
+        let dir = std::env::temp_dir().join("murk_test_read_dotenv_missing");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = read_key_from_dotenv();
+        std::env::set_current_dir(original_dir).unwrap();
+
+        assert_eq!(result, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dotenv_has_murk_key_true() {
+        let dir = std::env::temp_dir().join("murk_test_has_key_true");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "MURK_KEY=test\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        assert!(dotenv_has_murk_key());
+        std::env::set_current_dir(original_dir).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dotenv_has_murk_key_false() {
+        let dir = std::env::temp_dir().join("murk_test_has_key_false");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".env"), "OTHER=val\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        assert!(!dotenv_has_murk_key());
+        std::env::set_current_dir(original_dir).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dotenv_has_murk_key_no_file() {
+        let dir = std::env::temp_dir().join("murk_test_has_key_nofile");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        assert!(!dotenv_has_murk_key());
+        std::env::set_current_dir(original_dir).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_key_to_dotenv_creates_new() {
+        let dir = std::env::temp_dir().join("murk_test_write_key_new");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_key_to_dotenv("AGE-SECRET-KEY-1NEW").unwrap();
+
+        let contents = std::fs::read_to_string(dir.join(".env")).unwrap();
+        assert!(contents.contains("export MURK_KEY=AGE-SECRET-KEY-1NEW"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_key_to_dotenv_replaces_existing() {
+        let dir = std::env::temp_dir().join("murk_test_write_key_replace");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "OTHER=keep\nMURK_KEY=old\nexport MURK_KEY=also_old\n",
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_key_to_dotenv("AGE-SECRET-KEY-1REPLACED").unwrap();
+
+        let contents = std::fs::read_to_string(dir.join(".env")).unwrap();
+        assert!(contents.contains("OTHER=keep"));
+        assert!(contents.contains("export MURK_KEY=AGE-SECRET-KEY-1REPLACED"));
+        assert!(!contents.contains("MURK_KEY=old"));
+        assert!(!contents.contains("also_old"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_envrc_creates_new() {
+        let dir = std::env::temp_dir().join("murk_test_envrc_new");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let status = write_envrc(".murk").unwrap();
+        assert_eq!(status, EnvrcStatus::Created);
+
+        let contents = std::fs::read_to_string(dir.join(".envrc")).unwrap();
+        assert!(contents.contains("murk export --vault .murk"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_envrc_appends() {
+        let dir = std::env::temp_dir().join("murk_test_envrc_append");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".envrc"), "existing content\n").unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let status = write_envrc(".murk").unwrap();
+        assert_eq!(status, EnvrcStatus::Appended);
+
+        let contents = std::fs::read_to_string(dir.join(".envrc")).unwrap();
+        assert!(contents.contains("existing content"));
+        assert!(contents.contains("murk export"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_envrc_already_present() {
+        let dir = std::env::temp_dir().join("murk_test_envrc_present");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".envrc"),
+            "eval \"$(murk export --vault .murk)\"\n",
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let status = write_envrc(".murk").unwrap();
+        assert_eq!(status, EnvrcStatus::AlreadyPresent);
+
+        std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

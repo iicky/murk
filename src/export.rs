@@ -61,6 +61,25 @@ pub fn export_secrets(
         .collect()
 }
 
+/// Decrypt all shared secret values from a vault.
+///
+/// Silently skips entries that fail to decrypt (the caller may not have been
+/// a recipient at the time the vault was written). Returns a map of key → plaintext value.
+pub fn decrypt_vault_values(
+    vault: &types::Vault,
+    identity: &age::x25519::Identity,
+) -> HashMap<String, String> {
+    let mut values = HashMap::new();
+    for (key, entry) in &vault.secrets {
+        if let Ok(plaintext) = crate::decrypt_value(&entry.shared, identity) {
+            if let Ok(value) = String::from_utf8(plaintext) {
+                values.insert(key.clone(), value);
+            }
+        }
+    }
+    values
+}
+
 /// The kind of change in a diff entry.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DiffKind {
@@ -388,6 +407,66 @@ mod tests {
         let murk = empty_murk();
         let exports = export_secrets(&vault, &murk, "age1pk", &[]);
         assert!(exports.is_empty());
+    }
+
+    #[test]
+    fn decrypt_vault_values_basic() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey];
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+        vault.secrets.insert(
+            "KEY2".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+
+        let values = crate::export::decrypt_vault_values(&vault, &identity);
+        assert_eq!(values.len(), 2);
+        assert_eq!(values["KEY1"], "val1");
+        assert_eq!(values["KEY2"], "val2");
+    }
+
+    #[test]
+    fn decrypt_vault_values_wrong_key_skips() {
+        let (_, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let (wrong_secret, _) = generate_keypair();
+        let wrong_identity = make_identity(&wrong_secret);
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey];
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+
+        let values = crate::export::decrypt_vault_values(&vault, &wrong_identity);
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn decrypt_vault_values_empty_vault() {
+        let (secret, _) = generate_keypair();
+        let identity = make_identity(&secret);
+        let vault = empty_vault();
+
+        let values = crate::export::decrypt_vault_values(&vault, &identity);
+        assert!(values.is_empty());
     }
 
     #[test]

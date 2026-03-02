@@ -77,6 +77,35 @@ pub fn list_keys<'a>(vault: &'a types::Vault, tags: &[String]) -> Vec<&'a str> {
         .collect()
 }
 
+/// Import multiple secrets at once.
+///
+/// For each `(key, value)` pair, inserts the value into murk and ensures a
+/// schema entry exists. Returns the list of imported key names.
+pub fn import_secrets(
+    vault: &mut types::Vault,
+    murk: &mut types::Murk,
+    pairs: &[(String, String)],
+) -> Vec<String> {
+    let mut imported = Vec::new();
+    for (key, value) in pairs {
+        murk.values.insert(key.clone(), value.clone());
+
+        if !vault.schema.contains_key(key.as_str()) {
+            vault.schema.insert(
+                key.clone(),
+                types::SchemaEntry {
+                    description: String::new(),
+                    example: None,
+                    tags: vec![],
+                },
+            );
+        }
+
+        imported.push(key.clone());
+    }
+    imported
+}
+
 /// Update or create a schema entry for a key.
 pub fn describe_key(
     vault: &mut types::Vault,
@@ -461,6 +490,52 @@ mod tests {
             &identity,
         );
         assert_eq!(murk.values["KEY"], "");
+    }
+
+    #[test]
+    fn import_secrets_basic() {
+        let mut vault = empty_vault();
+        let mut murk = empty_murk();
+
+        let pairs = vec![
+            ("KEY1".into(), "val1".into()),
+            ("KEY2".into(), "val2".into()),
+        ];
+        let imported = import_secrets(&mut vault, &mut murk, &pairs);
+
+        assert_eq!(imported, vec!["KEY1", "KEY2"]);
+        assert_eq!(murk.values["KEY1"], "val1");
+        assert_eq!(murk.values["KEY2"], "val2");
+        assert!(vault.schema.contains_key("KEY1"));
+        assert!(vault.schema.contains_key("KEY2"));
+    }
+
+    #[test]
+    fn import_secrets_existing_schema_preserved() {
+        let mut vault = empty_vault();
+        vault.schema.insert(
+            "KEY1".into(),
+            types::SchemaEntry {
+                description: "existing desc".into(),
+                example: Some("ex".into()),
+                tags: vec!["tag".into()],
+            },
+        );
+        let mut murk = empty_murk();
+
+        let pairs = vec![("KEY1".into(), "new_val".into())];
+        import_secrets(&mut vault, &mut murk, &pairs);
+
+        assert_eq!(murk.values["KEY1"], "new_val");
+        assert_eq!(vault.schema["KEY1"].description, "existing desc");
+    }
+
+    #[test]
+    fn import_secrets_empty() {
+        let mut vault = empty_vault();
+        let mut murk = empty_murk();
+        let imported = import_secrets(&mut vault, &mut murk, &[]);
+        assert!(imported.is_empty());
     }
 
     #[test]

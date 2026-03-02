@@ -1,6 +1,8 @@
-use murk_cli::{DiffKind, crypto, decrypt_value, encrypt_value, now_utc, recovery, types, vault};
+use murk_cli::{
+    DiffKind, EnvrcStatus, MergeDriverSetupStep, crypto, decrypt_value, recovery, types, vault,
+};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -230,21 +232,6 @@ fn prompt(label: &str, default: Option<&str>) -> String {
     }
 }
 
-/// Read MURK_KEY from .env file if present but not in the environment.
-fn read_key_from_dotenv() -> Option<String> {
-    let contents = fs::read_to_string(".env").ok()?;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
-            return Some(key.to_string());
-        }
-        if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
-            return Some(key.to_string());
-        }
-    }
-    None
-}
-
 /// Generate a BIP39 keypair, write to .env, print recovery phrase.
 /// Returns (secret_key, pubkey).
 fn generate_and_write_key() -> (String, String) {
@@ -258,45 +245,22 @@ fn generate_and_write_key() -> (String, String) {
     };
 
     // Check .env for existing MURK_KEY.
-    let env_path = Path::new(".env");
-    if env_path.exists() {
-        let contents = fs::read_to_string(env_path).unwrap_or_default();
-        if contents
-            .lines()
-            .any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY="))
-        {
-            let answer = prompt(
-                "MURK_KEY already exists in .env. Overwrite? [y/N]",
-                Some("N"),
-            );
-            if !answer.eq_ignore_ascii_case("y") {
-                eprintln!("Aborted.");
-                process::exit(1);
-            }
-            // Remove existing MURK_KEY line(s).
-            let filtered: Vec<&str> = contents
-                .lines()
-                .filter(|l| !l.starts_with("MURK_KEY=") && !l.starts_with("export MURK_KEY="))
-                .collect();
-            fs::write(env_path, filtered.join("\n") + "\n").unwrap();
+    if murk_cli::dotenv_has_murk_key() {
+        let answer = prompt(
+            "MURK_KEY already exists in .env. Overwrite? [y/N]",
+            Some("N"),
+        );
+        if !answer.eq_ignore_ascii_case("y") {
+            eprintln!("Aborted.");
+            process::exit(1);
         }
     }
 
-    // Append MURK_KEY to .env.
+    // Write MURK_KEY to .env (replaces existing, sets chmod 600).
     eprintln!("{}", "Writing MURK_KEY to .env...".dimmed());
-    let mut env_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(env_path)
-        .unwrap();
-    writeln!(env_file, "export MURK_KEY={secret_key}").unwrap();
-    drop(env_file);
-
-    // Restrict .env to owner-only (chmod 600).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(env_path, fs::Permissions::from_mode(0o600)).unwrap();
+    if let Err(e) = murk_cli::write_key_to_dotenv(&secret_key) {
+        eprintln!("{} {e}", "error:".red().bold());
+        process::exit(1);
     }
 
     // Print recovery phrase.
@@ -337,9 +301,9 @@ fn cmd_init(vault_name: &str) {
         let secret_key = env::var("MURK_KEY")
             .ok()
             .filter(|k| !k.is_empty())
-            .or_else(read_key_from_dotenv);
+            .or_else(murk_cli::read_key_from_dotenv);
 
-        let pubkey = match secret_key {
+        let (secret_key, pubkey) = match secret_key {
             Some(key) => {
                 let identity = match crypto::parse_identity(&key) {
                     Ok(id) => id,
@@ -348,47 +312,52 @@ fn cmd_init(vault_name: &str) {
                         process::exit(1);
                     }
                 };
-                identity.to_public().to_string()
+                (Some(key), identity.to_public().to_string())
             }
             None => {
                 // No key — generate one.
                 let (_secret_key, pubkey) = generate_and_write_key();
                 eprintln!();
-                pubkey
+                (None, pubkey)
             }
         };
 
-        if vault.recipients.contains(&pubkey) {
-            // Authorized — try to decrypt meta for display name.
-            let name = env::var("MURK_KEY")
-                .ok()
-                .filter(|k| !k.is_empty())
-                .or_else(read_key_from_dotenv)
-                .and_then(|key| {
-                    let identity = crypto::parse_identity(&key).ok()?;
-                    let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-                    let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
-                    meta.recipients.get(&pubkey).cloned()
-                })
-                .unwrap_or_default();
-            let name_display = if name.is_empty() {
-                String::new()
-            } else {
-                format!("  {}", name.bold())
+        let status = match murk_cli::check_init_status(&vault, secret_key.as_deref().unwrap_or(""))
+        {
+            Ok(s) => s,
+            Err(_) => {
+                // If we just generated a key, check_init_status won't work with empty string.
+                // Fall back to simple recipient check.
+                if vault.recipients.contains(&pubkey) {
+                    eprintln!("{}  {}", "authorized".green(), pubkey.dimmed(),);
+                } else {
+                    eprintln!(
+                        "{}",
+                        "not authorized \u{2014} share your public key to get added:".yellow()
+                    );
+                    eprintln!("{}", pubkey.bold());
+                }
+                return;
+            }
+        };
+
+        if status.authorized {
+            let name_display = match status.display_name {
+                Some(ref name) if !name.is_empty() => format!("  {}", name.bold()),
+                _ => String::new(),
             };
             eprintln!(
                 "{}  {}{}",
                 "authorized".green(),
-                pubkey.dimmed(),
+                status.pubkey.dimmed(),
                 name_display
             );
         } else {
-            // Not authorized — show pubkey to share.
             eprintln!(
                 "{}",
                 "not authorized \u{2014} share your public key to get added:".yellow()
             );
-            eprintln!("{}", pubkey.bold());
+            eprintln!("{}", status.pubkey.bold());
         }
         return;
     }
@@ -404,47 +373,14 @@ fn cmd_init(vault_name: &str) {
 
     let (_secret_key, pubkey) = generate_and_write_key();
 
-    // Build meta with the recipient name mapping.
-    let mut recipient_names = HashMap::new();
-    recipient_names.insert(pubkey.clone(), name.clone());
-
-    let recipient = crypto::parse_recipient(&pubkey).unwrap();
-    let meta = types::Meta {
-        recipients: recipient_names,
-        mac: String::new(), // Will be computed by vault write.
-    };
-    let meta_json = serde_json::to_vec(&meta).unwrap();
-    let meta_enc = match encrypt_value(&meta_json, &[recipient]) {
-        Ok(enc) => enc,
+    let v = match murk_cli::create_vault(vault_name, &pubkey, &name) {
+        Ok(v) => v,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
 
-    // Detect git repo URL.
-    let repo = process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-
-    // Build vault.
-    let v = types::Vault {
-        version: "2.0".into(),
-        created: now_utc(),
-        vault_name: vault_name.into(),
-        repo,
-        recipients: vec![pubkey],
-        schema: BTreeMap::new(),
-        secrets: BTreeMap::new(),
-        meta: meta_enc,
-    };
-
-    // Write vault.
     if let Err(e) = vault::write(vault_path, &v) {
         eprintln!("{} {e}", "error:".red().bold());
         process::exit(1);
@@ -575,25 +511,14 @@ fn cmd_import(file: &str, vault_path: &str) {
     let original = murk.clone();
     let mut current = murk;
 
-    for (key, value) in &pairs {
-        current.values.insert(key.clone(), value.clone());
+    let imported = murk_cli::import_secrets(&mut vault, &mut current, &pairs);
 
-        if !vault.schema.contains_key(key.as_str()) {
-            vault.schema.insert(
-                key.clone(),
-                types::SchemaEntry {
-                    description: String::new(),
-                    example: None,
-                    tags: vec![],
-                },
-            );
-        }
-
+    for key in &imported {
         eprintln!("  {} {}", "+".green(), key.bold());
     }
 
     save_vault(vault_path, &mut vault, &original, &current);
-    let count = pairs.len();
+    let count = imported.len();
     eprintln!(
         "{} {count} secret{}",
         "imported".green(),
@@ -705,50 +630,35 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
 }
 
 fn cmd_env(vault: &str) {
-    let envrc = Path::new(".envrc");
-    let murk_line = format!("eval \"$(murk export --vault {vault})\"");
-
-    if envrc.exists() {
-        let contents = fs::read_to_string(envrc).unwrap_or_else(|e| {
-            eprintln!("{} reading .envrc: {e}", "error:".red().bold());
-            process::exit(1);
-        });
-        if contents.contains("murk export") {
+    match murk_cli::write_envrc(vault) {
+        Ok(EnvrcStatus::AlreadyPresent) => {
             eprintln!(
                 "{} .envrc already contains murk export",
                 "ok:".green().bold()
             );
-            return;
         }
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(envrc)
-            .unwrap_or_else(|e| {
-                eprintln!("{} writing .envrc: {e}", "error:".red().bold());
-                process::exit(1);
-            });
-        writeln!(file, "\n{murk_line}").unwrap();
-        eprintln!(
-            "{} appended to .envrc. Run: {}",
-            "ok:".green().bold(),
-            "direnv allow".bold()
-        );
-    } else {
-        fs::write(envrc, format!("{murk_line}\n")).unwrap_or_else(|e| {
-            eprintln!("{} writing .envrc: {e}", "error:".red().bold());
+        Ok(EnvrcStatus::Appended) => {
+            eprintln!(
+                "{} appended to .envrc. Run: {}",
+                "ok:".green().bold(),
+                "direnv allow".bold()
+            );
+        }
+        Ok(EnvrcStatus::Created) => {
+            eprintln!(
+                "{} created .envrc. Run: {}",
+                "ok:".green().bold(),
+                "direnv allow".bold()
+            );
+        }
+        Err(e) => {
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
-        });
-        eprintln!(
-            "{} created .envrc. Run: {}",
-            "ok:".green().bold(),
-            "direnv allow".bold()
-        );
+        }
     }
 }
 
 fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
-    use murk_cli::{merge, vault};
-
     let base_contents = fs::read_to_string(base_path).unwrap_or_else(|e| {
         eprintln!("{} reading base {base_path}: {e}", "error:".red().bold());
         process::exit(2);
@@ -765,32 +675,16 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
         process::exit(2);
     });
 
-    let base_vault = match vault::parse(&base_contents) {
-        Ok(v) => v,
+    let output = match murk_cli::run_merge_driver(&base_contents, &ours_contents, &theirs_contents)
+    {
+        Ok(o) => o,
         Err(e) => {
-            eprintln!("{} parsing base: {e}", "error:".red().bold());
-            process::exit(2);
-        }
-    };
-    let ours_vault = match vault::parse(&ours_contents) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} parsing ours: {e}", "error:".red().bold());
-            process::exit(2);
-        }
-    };
-    let theirs_vault = match vault::parse(&theirs_contents) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} parsing theirs: {e}", "error:".red().bold());
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(2);
         }
     };
 
-    let mut result = merge::merge_vaults(&base_vault, &ours_vault, &theirs_vault);
-
-    // Attempt to regenerate meta (needs MURK_KEY).
-    if merge::regenerate_meta(&mut result.vault, &ours_vault, &theirs_vault).is_none() {
+    if !output.meta_regenerated {
         eprintln!(
             "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix.",
             "warning:".yellow().bold()
@@ -798,22 +692,26 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
     }
 
     // Write merged result to ours path (%A).
-    if let Err(e) = vault::write(Path::new(ours_path), &result.vault) {
+    if let Err(e) = vault::write(Path::new(ours_path), &output.result.vault) {
         eprintln!("{} writing merged vault: {e}", "error:".red().bold());
         process::exit(2);
     }
 
-    if result.conflicts.is_empty() {
+    if output.result.conflicts.is_empty() {
         eprintln!("{} vault merged cleanly", "ok:".green().bold());
         process::exit(0);
     } else {
         eprintln!(
             "{} {} conflict{}:",
             "conflict:".red().bold(),
-            result.conflicts.len(),
-            if result.conflicts.len() == 1 { "" } else { "s" }
+            output.result.conflicts.len(),
+            if output.result.conflicts.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         );
-        for c in &result.conflicts {
+        for c in &output.result.conflicts {
             eprintln!("  {} {} — {}", "-".red(), c.field.bold(), c.reason);
         }
         process::exit(1);
@@ -821,62 +719,34 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
 }
 
 fn cmd_setup_merge_driver() {
-    // 1. Write .gitattributes entry.
-    let gitattributes = Path::new(".gitattributes");
-    let merge_line = "*.murk merge=murk";
-
-    if gitattributes.exists() {
-        let contents = fs::read_to_string(gitattributes).unwrap_or_else(|e| {
-            eprintln!("{} reading .gitattributes: {e}", "error:".red().bold());
+    let steps = match murk_cli::setup_merge_driver() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
-        });
-        if contents.contains(merge_line) {
-            eprintln!(
-                "{} .gitattributes already contains merge driver entry",
-                "ok:".green().bold()
-            );
-        } else {
-            let mut file = fs::OpenOptions::new()
-                .append(true)
-                .open(gitattributes)
-                .unwrap_or_else(|e| {
-                    eprintln!("{} writing .gitattributes: {e}", "error:".red().bold());
-                    process::exit(1);
-                });
-            writeln!(file, "{merge_line}").unwrap();
-            eprintln!("{} appended to .gitattributes", "ok:".green().bold());
         }
-    } else {
-        fs::write(gitattributes, format!("{merge_line}\n")).unwrap_or_else(|e| {
-            eprintln!("{} writing .gitattributes: {e}", "error:".red().bold());
-            process::exit(1);
-        });
-        eprintln!("{} created .gitattributes", "ok:".green().bold());
-    }
+    };
 
-    // 2. Configure git merge driver.
-    let configs = [
-        ("merge.murk.name", "murk vault merge"),
-        ("merge.murk.driver", "murk merge-driver %O %A %B"),
-    ];
-    for (key, value) in &configs {
-        let status = process::Command::new("git")
-            .args(["config", key, value])
-            .status()
-            .unwrap_or_else(|e| {
-                eprintln!("{} running git config: {e}", "error:".red().bold());
-                process::exit(1);
-            });
-        if !status.success() {
-            eprintln!(
-                "{} git config {key} failed (are you in a git repo?)",
-                "error:".red().bold()
-            );
-            process::exit(1);
+    for step in &steps {
+        match step {
+            MergeDriverSetupStep::GitattributesAlreadyExists => {
+                eprintln!(
+                    "{} .gitattributes already contains merge driver entry",
+                    "ok:".green().bold()
+                );
+            }
+            MergeDriverSetupStep::GitattributesAppended => {
+                eprintln!("{} appended to .gitattributes", "ok:".green().bold());
+            }
+            MergeDriverSetupStep::GitattributesCreated => {
+                eprintln!("{} created .gitattributes", "ok:".green().bold());
+            }
+            MergeDriverSetupStep::GitConfigured => {
+                eprintln!("{} git merge driver configured", "ok:".green().bold());
+            }
         }
     }
 
-    eprintln!("{} git merge driver configured", "ok:".green().bold());
     eprintln!(
         "{}",
         "Commit .gitattributes so all collaborators use the merge driver.".dimmed()
@@ -899,14 +769,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
         let old_contents = String::from_utf8_lossy(&output.stdout);
         match vault::parse(&old_contents) {
             Ok(old_vault) => {
-                let mut values = HashMap::new();
-                for (key, entry) in &old_vault.secrets {
-                    if let Ok(plaintext) = decrypt_value(&entry.shared, &identity) {
-                        if let Ok(value) = String::from_utf8(plaintext) {
-                            values.insert(key.clone(), value);
-                        }
-                    }
-                }
+                let values = murk_cli::decrypt_vault_values(&old_vault, &identity);
                 if values.is_empty() && !old_vault.secrets.is_empty() {
                     eprintln!(
                         "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
@@ -1104,18 +967,18 @@ fn cmd_recover() {
 }
 
 fn cmd_info(tags: &[String], vault_path: &str) {
-    let path = Path::new(vault_path);
-
-    // Read raw bytes for codename computation.
-    let raw_bytes = match fs::read(path) {
+    let raw_bytes = match fs::read(vault_path) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
         }
     };
-    let vault: types::Vault = match serde_json::from_slice(&raw_bytes) {
-        Ok(v) => v,
+
+    let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
+
+    let info = match murk_cli::vault_info(&raw_bytes, tags, secret_key.as_deref()) {
+        Ok(i) => i,
         Err(e) => {
             eprintln!("{} {e}", "error:".red().bold());
             process::exit(1);
@@ -1123,59 +986,38 @@ fn cmd_info(tags: &[String], vault_path: &str) {
     };
 
     // Display vault header.
-    let codename = murk_cli::codename::from_bytes(&raw_bytes);
-    println!("{}: {}", "vault".dimmed(), vault.vault_name.bold());
-    println!("{}: {}", "codename".dimmed(), codename.bold());
-    if !vault.repo.is_empty() {
-        println!("{}: {}", "repo".dimmed(), vault.repo);
+    println!("{}: {}", "vault".dimmed(), info.vault_name.bold());
+    println!("{}: {}", "codename".dimmed(), info.codename.bold());
+    if !info.repo.is_empty() {
+        println!("{}: {}", "repo".dimmed(), info.repo);
     }
-    println!("{}: {}", "created".dimmed(), vault.created);
+    println!("{}: {}", "created".dimmed(), info.created);
     println!(
         "{}: {} recipient{}",
         "recipients".dimmed(),
-        vault.recipients.len(),
-        if vault.recipients.len() == 1 { "" } else { "s" }
+        info.recipient_count,
+        if info.recipient_count == 1 { "" } else { "s" }
     );
     println!();
 
-    // Filter by tag if specified.
-    let entries: Vec<(&String, &types::SchemaEntry)> = if tags.is_empty() {
-        vault.schema.iter().collect()
-    } else {
-        vault
-            .schema
-            .iter()
-            .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
-            .collect()
-    };
-
-    if entries.is_empty() {
+    if info.entries.is_empty() {
         println!("{}", "no keys in vault".dimmed());
         return;
     }
 
-    // Try to decrypt meta for recipient names.
-    let meta_data = env::var("MURK_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .and_then(|secret_key| {
-            let identity = crypto::parse_identity(&secret_key).ok()?;
-            let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-            let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
-            Some(meta)
-        });
-
     // Compute column widths for aligned output.
-    let key_width = entries.iter().map(|(k, _)| k.len()).max().unwrap();
-    let desc_width = entries
+    let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap();
+    let desc_width = info
+        .entries
         .iter()
-        .map(|(_, e)| e.description.len())
+        .map(|e| e.description.len())
         .max()
         .unwrap();
 
-    let example_width = entries
+    let example_width = info
+        .entries
         .iter()
-        .map(|(_, e)| {
+        .map(|e| {
             e.example
                 .as_ref()
                 .map_or(0, |ex| format!("(e.g. {ex})").len())
@@ -1183,9 +1025,10 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         .max()
         .unwrap();
 
-    let tag_width = entries
+    let tag_width = info
+        .entries
         .iter()
-        .map(|(_, e)| {
+        .map(|e| {
             if e.tags.is_empty() {
                 0
             } else {
@@ -1195,7 +1038,9 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         .max()
         .unwrap();
 
-    for (key, entry) in &entries {
+    let has_meta = secret_key.is_some();
+
+    for entry in &info.entries {
         let example_str = entry
             .example
             .as_ref()
@@ -1209,32 +1054,16 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         };
 
         // Pad plain strings for alignment, then apply colors.
-        let key_padded = format!("{:<key_width$}", key);
+        let key_padded = format!("{:<key_width$}", entry.key);
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
         let tag_padded = format!("{tag_str:<tag_width$}");
 
-        if let Some(ref meta) = meta_data {
-            // Show which recipients have scoped overrides for this key.
-            let scoped_pks: Vec<String> = vault
-                .secrets
-                .get(key.as_str())
-                .map(|s| {
-                    s.scoped
-                        .keys()
-                        .map(|pk| {
-                            meta.recipients
-                                .get(pk)
-                                .cloned()
-                                .unwrap_or_else(|| pk.chars().take(12).collect::<String>() + "…")
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let scoped_str = if scoped_pks.is_empty() {
+        if has_meta {
+            let scoped_str = if entry.scoped_recipients.is_empty() {
                 String::new()
             } else {
-                format!("[{}]", scoped_pks.join(", "))
+                format!("[{}]", entry.scoped_recipients.join(", "))
             };
             println!(
                 "{}  {}  {}  {}  {}",

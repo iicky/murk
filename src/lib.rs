@@ -21,6 +21,9 @@ pub mod codename;
 pub mod crypto;
 pub mod env;
 pub mod export;
+pub mod git;
+pub mod info;
+pub mod init;
 pub mod integrity;
 pub mod merge;
 pub mod recipients;
@@ -34,10 +37,19 @@ pub mod vault;
 pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
-pub use env::{parse_env, resolve_key, warn_env_permissions};
-pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets, resolve_secrets};
+pub use env::{
+    EnvrcStatus, dotenv_has_murk_key, parse_env, read_key_from_dotenv, resolve_key,
+    warn_env_permissions, write_envrc, write_key_to_dotenv,
+};
+pub use export::{
+    DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, resolve_secrets,
+};
+pub use git::{MergeDriverSetupStep, setup_merge_driver};
+pub use info::{InfoEntry, VaultInfo, vault_info};
+pub use init::{InitStatus, check_init_status, create_vault};
+pub use merge::{MergeDriverOutput, run_merge_driver};
 pub use recipients::{RevokeResult, authorize_recipient, revoke_recipient};
-pub use secrets::{add_secret, describe_key, get_secret, list_keys, remove_secret};
+pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_keys, remove_secret};
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
