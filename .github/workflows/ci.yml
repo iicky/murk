@@ -89,6 +89,8 @@ jobs:
       - run: rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get install -y musl-tools
       - run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Smoke test binary in VHS container
+        run: docker run --rm -v $PWD:/vhs --entrypoint /vhs/target/x86_64-unknown-linux-musl/release/murk ghcr.io/charmbracelet/vhs --version
       - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
       - uses: peaceiris/actions-gh-pages@v4
         with:
