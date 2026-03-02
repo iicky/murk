@@ -51,8 +51,6 @@ enum Command {
     Add {
         /// Secret key name
         key: String,
-        /// Secret value (use "-" or omit to read from stdin)
-        value: Option<String>,
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
@@ -474,16 +472,9 @@ fn save_vault(
     });
 }
 
-/// Resolve the secret value from a CLI argument, stdin pipe, or interactive prompt.
+/// Resolve the secret value from stdin pipe or interactive prompt.
 /// Returns the value or exits with an error.
-fn resolve_value(value: Option<String>, key: &str) -> String {
-    // Explicit value on the command line (or "-" means read stdin).
-    if let Some(v) = value {
-        if v != "-" {
-            return v;
-        }
-    }
-
+fn resolve_value(key: &str) -> String {
     let stdin = io::stdin();
     if !stdin.is_terminal() {
         // Piped input: `echo "secret" | murk add KEY`
@@ -1255,13 +1246,12 @@ fn main() {
         Command::Import { file, vault } => cmd_import(&file, &vault),
         Command::Add {
             key,
-            value,
             desc,
             private,
             tag,
             vault,
         } => {
-            let resolved = resolve_value(value, &key);
+            let resolved = resolve_value(&key);
             cmd_add(&key, &resolved, desc.as_deref(), private, &tag, &vault);
         }
         Command::Rm { key, vault } => cmd_rm(&key, &vault),

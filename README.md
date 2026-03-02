@@ -27,9 +27,9 @@ cargo install murk-cli
 # Initialize — generates your key and recovery phrase
 murk init
 
-# Add secrets
-murk add DATABASE_URL postgres://prod:pass@host/db
-murk add OPENAI_KEY sk-abc123
+# Add secrets (prompts for value, hidden input)
+murk add DATABASE_URL
+murk add OPENAI_KEY
 
 # Use with direnv
 echo 'eval $(murk export)' > .envrc
@@ -50,16 +50,19 @@ murk export         # Shell export statements
 
 murk has two layers of encryption inside the `.murk` file:
 
-**Shared secrets** (the murk) are encrypted to all recipients. When you run `murk add KEY VALUE`, every authorized team member can decrypt it. This is where production credentials, API keys, and other team-wide secrets live.
+**Shared secrets** (the murk) are encrypted to all recipients. When you run `murk add KEY`, every authorized team member can decrypt it. This is where production credentials, API keys, and other team-wide secrets live.
 
-**Private secrets** (motes) are encrypted to only your key. When you run `murk add KEY VALUE --private`, the value is stored in a personal blob that no one else can read. During `murk export`, private values override shared ones — so you can use a local database URL while the rest of the team uses production.
+**Private secrets** (motes) are encrypted to only your key. When you run `murk add KEY --private`, the value is stored in a personal blob that no one else can read. During `murk export`, private values override shared ones — so you can use a local database URL while the rest of the team uses production.
 
 ```bash
 # Shared — everyone sees this
-murk add DATABASE_URL postgres://prod:pass@host/db
+murk add DATABASE_URL
 
 # Private — only you see this, overrides the shared value during export
-murk add DATABASE_URL postgres://localhost/dev --private
+murk add DATABASE_URL --private
+
+# Or pipe for scripting
+echo "postgres://prod:pass@host/db" | murk add DATABASE_URL
 ```
 
 ## Teams
@@ -67,7 +70,7 @@ murk add DATABASE_URL postgres://localhost/dev --private
 ```bash
 # Alice sets up the vault
 murk init
-murk add DATABASE_URL postgres://prod/db
+echo "postgres://prod/db" | murk add DATABASE_URL
 
 # Bob generates his own key
 murk init
@@ -79,7 +82,7 @@ murk authorize age1bob... bob@example.com
 murk export
 
 # Bob overrides a value for local dev
-murk add DATABASE_URL postgres://localhost/dev --private
+echo "postgres://localhost/dev" | murk add DATABASE_URL --private
 ```
 
 ## Recovery
@@ -96,7 +99,7 @@ murk restore "witch collapse practice feed shame open despair creek ..."
 | Command | Description |
 |---------|-------------|
 | `murk init` | Generate keypair and create vault |
-| `murk add KEY VALUE [--private]` | Add or update a secret (shared or private) |
+| `murk add KEY [--private]` | Add or update a secret (prompts for value) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |

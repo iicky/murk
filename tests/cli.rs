@@ -166,13 +166,8 @@ fn add_and_get_secret() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/mydb",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/mydb\n")
         .assert()
         .success();
 
@@ -201,12 +196,14 @@ fn add_overwrites_existing_value() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "TOKEN", "old_value", "--vault", "test.murk"])
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_value\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "TOKEN", "new_value", "--vault", "test.murk"])
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("new_value\n")
         .assert()
         .success();
 
@@ -226,20 +223,15 @@ fn private_secret_overrides_shared() {
 
     // Add shared value.
     murk(&dir, &key)
-        .args(["add", "API_KEY", "shared_key", "--vault", "test.murk"])
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("shared_key\n")
         .assert()
         .success();
 
     // Add private override.
     murk(&dir, &key)
-        .args([
-            "add",
-            "API_KEY",
-            "my_personal_key",
-            "--private",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "API_KEY", "--private", "--vault", "test.murk"])
+        .write_stdin("my_personal_key\n")
         .assert()
         .success();
 
@@ -259,7 +251,8 @@ fn rm_removes_secret() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "TEMP", "deleteme", "--vault", "test.murk"])
+        .args(["add", "TEMP", "--vault", "test.murk"])
+        .write_stdin("deleteme\n")
         .assert()
         .success();
 
@@ -283,12 +276,14 @@ fn ls_lists_key_names() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "ALPHA", "a", "--vault", "test.murk"])
+        .args(["add", "ALPHA", "--vault", "test.murk"])
+        .write_stdin("a\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "BRAVO", "b", "--vault", "test.murk"])
+        .args(["add", "BRAVO", "--vault", "test.murk"])
+        .write_stdin("b\n")
         .assert()
         .success();
 
@@ -305,7 +300,8 @@ fn ls_works_without_murk_key() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "SECRET", "val", "--vault", "test.murk"])
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("val\n")
         .assert()
         .success();
 
@@ -328,13 +324,8 @@ fn describe_adds_description() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
@@ -370,7 +361,8 @@ fn info_works_without_murk_key() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "TOKEN", "secret", "--vault", "test.murk"])
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("secret\n")
         .assert()
         .success();
 
@@ -393,12 +385,14 @@ fn export_produces_shell_statements() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "FOO", "bar", "--vault", "test.murk"])
+        .args(["add", "FOO", "--vault", "test.murk"])
+        .write_stdin("bar\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "BAZ", "qux", "--vault", "test.murk"])
+        .args(["add", "BAZ", "--vault", "test.murk"])
+        .write_stdin("qux\n")
         .assert()
         .success();
 
@@ -418,19 +412,14 @@ fn export_merges_private_overrides() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "KEY", "shared_val", "--vault", "test.murk"])
+        .args(["add", "KEY", "--vault", "test.murk"])
+        .write_stdin("shared_val\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "KEY",
-            "private_val",
-            "--private",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "KEY", "--private", "--vault", "test.murk"])
+        .write_stdin("private_val\n")
         .assert()
         .success();
 
@@ -447,7 +436,8 @@ fn export_escapes_single_quotes() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "QUOTED", "it's a test", "--vault", "test.murk"])
+        .args(["add", "QUOTED", "--vault", "test.murk"])
+        .write_stdin("it's a test\n")
         .assert()
         .success();
 
@@ -466,7 +456,8 @@ fn exec_injects_secrets() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "MY_SECRET", "hunter2", "--vault", "test.murk"])
+        .args(["add", "MY_SECRET", "--vault", "test.murk"])
+        .write_stdin("hunter2\n")
         .assert()
         .success();
 
@@ -483,28 +474,14 @@ fn exec_filters_by_tag() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_PASS",
-            "secret",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_PASS", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("secret\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "API_KEY",
-            "abc123",
-            "--tag",
-            "api",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "API_KEY", "--tag", "api", "--vault", "test.murk"])
+        .write_stdin("abc123\n")
         .assert()
         .success();
 
@@ -524,7 +501,8 @@ fn exec_propagates_exit_code() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "KEY", "val", "--vault", "test.murk"])
+        .args(["add", "KEY", "--vault", "test.murk"])
+        .write_stdin("val\n")
         .assert()
         .success();
 
@@ -743,7 +721,8 @@ fn add_without_key_fails() {
 
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["add", "X", "Y", "--vault", "test.murk"])
+        .args(["add", "X", "--vault", "test.murk"])
+        .write_stdin("Y\n")
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
@@ -817,13 +796,8 @@ fn authorized_recipient_can_decrypt() {
 
     // Add a secret.
     murk(&dir, &key_a)
-        .args([
-            "add",
-            "SHARED_SECRET",
-            "hello_world",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "SHARED_SECRET", "--vault", "test.murk"])
+        .write_stdin("hello_world\n")
         .assert()
         .success();
 
@@ -856,15 +830,8 @@ fn add_with_tag() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
@@ -885,7 +852,6 @@ fn add_with_multiple_tags() {
         .args([
             "add",
             "DB_URL",
-            "postgres://localhost/db",
             "--tag",
             "db",
             "--tag",
@@ -893,6 +859,7 @@ fn add_with_multiple_tags() {
             "--vault",
             "test.murk",
         ])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
@@ -909,21 +876,15 @@ fn add_merges_tags_on_existing_key() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "DB_URL", "v1", "--tag", "db", "--vault", "test.murk"])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("v1\n")
         .assert()
         .success();
 
     // Update value and add another tag.
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "v2",
-            "--tag",
-            "backend",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "backend", "--vault", "test.murk"])
+        .write_stdin("v2\n")
         .assert()
         .success();
 
@@ -940,7 +901,8 @@ fn describe_sets_tags() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "TOKEN", "secret", "--vault", "test.murk"])
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("secret\n")
         .assert()
         .success();
 
@@ -970,15 +932,8 @@ fn describe_replaces_tags() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "TOKEN",
-            "secret",
-            "--tag",
-            "old",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "TOKEN", "--tag", "old", "--vault", "test.murk"])
+        .write_stdin("secret\n")
         .assert()
         .success();
 
@@ -1008,28 +963,14 @@ fn ls_filters_by_tag() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "API_KEY",
-            "sk-123",
-            "--tag",
-            "api",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "API_KEY", "--tag", "api", "--vault", "test.murk"])
+        .write_stdin("sk-123\n")
         .assert()
         .success();
 
@@ -1047,33 +988,20 @@ fn export_filters_by_tag() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "API_KEY",
-            "sk-123",
-            "--tag",
-            "api",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "API_KEY", "--tag", "api", "--vault", "test.murk"])
+        .write_stdin("sk-123\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "UNTAGGED", "val", "--vault", "test.murk"])
+        .args(["add", "UNTAGGED", "--vault", "test.murk"])
+        .write_stdin("val\n")
         .assert()
         .success();
 
@@ -1095,20 +1023,14 @@ fn export_without_tag_exports_all() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "UNTAGGED", "val", "--vault", "test.murk"])
+        .args(["add", "UNTAGGED", "--vault", "test.murk"])
+        .write_stdin("val\n")
         .assert()
         .success();
 
@@ -1129,28 +1051,14 @@ fn info_filters_by_tag() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "DB_URL",
-            "postgres://localhost/db",
-            "--tag",
-            "db",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "DB_URL", "--tag", "db", "--vault", "test.murk"])
+        .write_stdin("postgres://localhost/db\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args([
-            "add",
-            "API_KEY",
-            "sk-123",
-            "--tag",
-            "api",
-            "--vault",
-            "test.murk",
-        ])
+        .args(["add", "API_KEY", "--tag", "api", "--vault", "test.murk"])
+        .write_stdin("sk-123\n")
         .assert()
         .success();
 
@@ -1170,12 +1078,14 @@ fn full_lifecycle() {
 
     // Add secrets.
     murk(&dir, &key)
-        .args(["add", "DB_HOST", "localhost", "--vault", "test.murk"])
+        .args(["add", "DB_HOST", "--vault", "test.murk"])
+        .write_stdin("localhost\n")
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["add", "DB_PASS", "hunter2", "--vault", "test.murk"])
+        .args(["add", "DB_PASS", "--vault", "test.murk"])
+        .write_stdin("hunter2\n")
         .assert()
         .success();
 
@@ -1257,25 +1167,6 @@ fn add_via_stdin_pipe() {
 }
 
 #[test]
-fn add_via_stdin_dash() {
-    let dir = TempDir::new().unwrap();
-    let (key, _pubkey) = init_vault(&dir);
-
-    // Explicit "-" means read from stdin.
-    murk(&dir, &key)
-        .args(["add", "DASH_SECRET", "-", "--vault", "test.murk"])
-        .write_stdin("val-from-dash\n")
-        .assert()
-        .success();
-
-    murk(&dir, &key)
-        .args(["get", "DASH_SECRET", "--vault", "test.murk"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("val-from-dash"));
-}
-
-#[test]
 fn add_via_stdin_empty_fails() {
     let dir = TempDir::new().unwrap();
     let (key, _pubkey) = init_vault(&dir);
@@ -1287,24 +1178,6 @@ fn add_via_stdin_empty_fails() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("empty value"));
-}
-
-#[test]
-fn add_explicit_value_still_works() {
-    let dir = TempDir::new().unwrap();
-    let (key, _pubkey) = init_vault(&dir);
-
-    // Explicit value on CLI still works as before.
-    murk(&dir, &key)
-        .args(["add", "CLI_VAL", "direct-value", "--vault", "test.murk"])
-        .assert()
-        .success();
-
-    murk(&dir, &key)
-        .args(["get", "CLI_VAL", "--vault", "test.murk"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("direct-value"));
 }
 
 // ── env (direnv) ──
@@ -1424,7 +1297,8 @@ fn diff_shows_added_key() {
 
     // Add a secret after the commit.
     murk(&dir, &key)
-        .args(["add", "NEW_KEY", "new-value", "--vault", "test.murk"])
+        .args(["add", "NEW_KEY", "--vault", "test.murk"])
+        .write_stdin("new-value\n")
         .assert()
         .success();
 
@@ -1450,7 +1324,8 @@ fn diff_no_git_vault_shows_all_added() {
 
     // Add a secret.
     murk(&dir, &key)
-        .args(["add", "FRESH", "value", "--vault", "test.murk"])
+        .args(["add", "FRESH", "--vault", "test.murk"])
+        .write_stdin("value\n")
         .assert()
         .success();
 
@@ -1658,7 +1533,8 @@ fn info_displays_codename() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "TOKEN", "secret", "--vault", "test.murk"])
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("secret\n")
         .assert()
         .success();
 
@@ -1676,7 +1552,8 @@ fn codename_changes_when_vault_changes() {
 
     // Get info output after adding first secret.
     murk(&dir, &key)
-        .args(["add", "A", "val1", "--vault", "test.murk"])
+        .args(["add", "A", "--vault", "test.murk"])
+        .write_stdin("val1\n")
         .assert()
         .success();
     let out1 = murk(&dir, &key)
@@ -1687,7 +1564,8 @@ fn codename_changes_when_vault_changes() {
 
     // Get info output after adding second secret.
     murk(&dir, &key)
-        .args(["add", "B", "val2", "--vault", "test.murk"])
+        .args(["add", "B", "--vault", "test.murk"])
+        .write_stdin("val2\n")
         .assert()
         .success();
     let out2 = murk(&dir, &key)
@@ -1711,7 +1589,8 @@ fn codename_is_deterministic() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["add", "X", "val", "--vault", "test.murk"])
+        .args(["add", "X", "--vault", "test.murk"])
+        .write_stdin("val\n")
         .assert()
         .success();
 

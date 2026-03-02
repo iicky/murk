@@ -19,13 +19,13 @@ Enter
 Sleep 3s
 Type `export ALICE_KEY="$MURK_KEY"`
 Enter
-Type `murk add DATABASE_URL "postgres://prod:secret@db.example.com/app" --desc "Production database" 2>/dev/null`
+Type `echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" 2>/dev/null`
 Enter
 Sleep 1s
-Type `murk add API_KEY "sk-proj-abc123def456" --desc "OpenAI API key" 2>/dev/null`
+Type `echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key" 2>/dev/null`
 Enter
 Sleep 1s
-Type `murk add STRIPE_SECRET "sk_live_xyz789" --desc "Stripe secret key" 2>/dev/null`
+Type `echo "sk_live_xyz789" | murk add STRIPE_SECRET --desc "Stripe secret key" 2>/dev/null`
 Enter
 Sleep 1s
 
