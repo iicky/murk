@@ -214,10 +214,10 @@ fn add_overwrites_existing_value() {
         .stdout(predicate::str::contains("new_value"));
 }
 
-// ── private (mote) secrets ──
+// ── scoped (mote) secrets ──
 
 #[test]
-fn private_secret_overrides_shared() {
+fn scoped_secret_overrides_shared() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
 
@@ -228,14 +228,14 @@ fn private_secret_overrides_shared() {
         .assert()
         .success();
 
-    // Add private override.
+    // Add scoped override.
     murk(&dir, &key)
-        .args(["add", "API_KEY", "--private", "--vault", "test.murk"])
+        .args(["add", "API_KEY", "--scoped", "--vault", "test.murk"])
         .write_stdin("my_personal_key\n")
         .assert()
         .success();
 
-    // Get should return private override.
+    // Get should return scoped override.
     murk(&dir, &key)
         .args(["get", "API_KEY", "--vault", "test.murk"])
         .assert()
@@ -407,7 +407,7 @@ fn export_produces_shell_statements() {
 }
 
 #[test]
-fn export_merges_private_overrides() {
+fn export_merges_scoped_overrides() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
 
@@ -418,8 +418,8 @@ fn export_merges_private_overrides() {
         .success();
 
     murk(&dir, &key)
-        .args(["add", "KEY", "--private", "--vault", "test.murk"])
-        .write_stdin("private_val\n")
+        .args(["add", "KEY", "--scoped", "--vault", "test.murk"])
+        .write_stdin("scoped_val\n")
         .assert()
         .success();
 
@@ -427,7 +427,7 @@ fn export_merges_private_overrides() {
         .args(["export", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("export KEY='private_val'"));
+        .stdout(predicate::str::contains("export KEY='scoped_val'"));
 }
 
 #[test]

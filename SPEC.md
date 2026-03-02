@@ -185,9 +185,9 @@ Next: murk add KEY
 
 ---
 
-### `murk add KEY [--private] [--vault NAME]`
+### `murk add KEY [--scoped] [--vault NAME]`
 
-Adds or updates a secret. Prompts for the value interactively (hidden input) or reads from stdin when piped. Without `--private`, writes to the shared blob. With `--private`, writes to your personal blob only.
+Adds or updates a secret. Prompts for the value interactively (hidden input) or reads from stdin when piped. Without `--scoped`, writes to the shared blob. With `--scoped`, writes to your personal blob only.
 
 If no description exists for the key, prints a nudge:
 
@@ -336,7 +336,7 @@ murk authorize age1bob... bob@example.com
 murk export
 
 # Bob adds a personal override
-murk add DATABASE_URL postgres://localhost/dev --private
+murk add DATABASE_URL postgres://localhost/dev --scoped
 
 # Bob's export gives him his local DB, shared secrets for everything else
 eval $(murk export)

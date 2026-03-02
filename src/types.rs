@@ -43,7 +43,7 @@ pub struct SecretEntry {
 }
 
 // -- Meta (encrypted, stored in vault.meta) --
-// Contains private metadata only visible to recipients.
+// Contains metadata only visible to recipients.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Meta {

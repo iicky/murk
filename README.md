@@ -46,20 +46,20 @@ murk get KEY        # Print a single value
 murk export         # Shell export statements
 ```
 
-## Shared secrets vs private secrets
+## Shared secrets vs scoped secrets
 
 murk has two layers of encryption inside the `.murk` file:
 
 **Shared secrets** (the murk) are encrypted to all recipients. When you run `murk add KEY`, every authorized team member can decrypt it. This is where production credentials, API keys, and other team-wide secrets live.
 
-**Private secrets** (motes) are encrypted to only your key. When you run `murk add KEY --private`, the value is stored in a personal blob that no one else can read. During `murk export`, private values override shared ones — so you can use a local database URL while the rest of the team uses production.
+**Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --scoped`, the value is stored in a personal blob that no one else can read. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
 
 ```bash
 # Shared — everyone sees this
 murk add DATABASE_URL
 
-# Private — only you see this, overrides the shared value during export
-murk add DATABASE_URL --private
+# Scoped — only you see this, overrides the shared value during export
+murk add DATABASE_URL --scoped
 
 # Or pipe for scripting
 echo "postgres://prod:pass@host/db" | murk add DATABASE_URL
@@ -82,7 +82,7 @@ murk authorize age1bob... bob@example.com
 murk export
 
 # Bob overrides a value for local dev
-echo "postgres://localhost/dev" | murk add DATABASE_URL --private
+echo "postgres://localhost/dev" | murk add DATABASE_URL --scoped
 ```
 
 ## Recovery
@@ -99,7 +99,7 @@ murk restore "witch collapse practice feed shame open despair creek ..."
 | Command | Description |
 |---------|-------------|
 | `murk init` | Generate keypair and create vault |
-| `murk add KEY [--private]` | Add or update a secret (prompts for value) |
+| `murk add KEY [--scoped]` | Add or update a secret (prompts for value) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |

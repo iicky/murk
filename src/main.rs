@@ -54,9 +54,9 @@ enum Command {
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
-        /// Store in personal blob only
+        /// Store in personal blob only (scoped to your key)
         #[arg(long)]
-        private: bool,
+        scoped: bool,
         /// Tag for grouping (repeatable)
         #[arg(long)]
         tag: Vec<String>,
@@ -308,6 +308,12 @@ fn generate_and_write_key() -> (String, String) {
             .bold()
     );
     eprintln!("{}", phrase.bold());
+    eprintln!();
+    eprintln!(
+        "{} {}",
+        "MURK_KEY saved to .env —".yellow().bold(),
+        "do not commit this file.".yellow().bold()
+    );
 
     (secret_key, pubkey)
 }
@@ -441,8 +447,12 @@ fn cmd_init(vault_name: &str) {
     }
 
     eprintln!();
-    eprintln!("{}", "Vault initialized. Added as recipient.".green());
-    eprintln!("Next: {}", "murk add KEY VALUE".bold());
+    eprintln!(
+        "{} Added {} as recipient.",
+        "Vault initialized.".green(),
+        name.bold()
+    );
+    eprintln!("Next: {}", "murk add KEY".bold());
 }
 
 fn resolve_key() -> age::secrecy::SecretString {
@@ -509,7 +519,7 @@ fn cmd_add(
     key: &str,
     value: &str,
     desc: Option<&str>,
-    private: bool,
+    scoped: bool,
     tags: &[String],
     vault_path: &str,
 ) {
@@ -523,7 +533,7 @@ fn cmd_add(
         key,
         value,
         desc,
-        private,
+        scoped,
         tags,
         &identity,
     );
@@ -1247,12 +1257,12 @@ fn main() {
         Command::Add {
             key,
             desc,
-            private,
+            scoped,
             tag,
             vault,
         } => {
             let resolved = resolve_value(&key);
-            cmd_add(&key, &resolved, desc.as_deref(), private, &tag, &vault);
+            cmd_add(&key, &resolved, desc.as_deref(), scoped, &tag, &vault);
         }
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),

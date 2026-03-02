@@ -85,6 +85,11 @@ pub fn warn_env_permissions() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Tests that mutate MURK_KEY / MURK_KEY_FILE env vars must hold this lock
+    /// to avoid racing with each other (cargo test runs tests in parallel).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn parse_env_empty() {
@@ -190,6 +195,7 @@ mod tests {
 
     #[test]
     fn resolve_key_from_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let key = "AGE-SECRET-KEY-1TEST";
         unsafe { env::set_var("MURK_KEY", key) };
         let result = resolve_key();
@@ -202,6 +208,7 @@ mod tests {
 
     #[test]
     fn resolve_key_from_file() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { env::remove_var("MURK_KEY") };
 
         let path = std::env::temp_dir().join("murk_test_key_file");
@@ -219,6 +226,7 @@ mod tests {
 
     #[test]
     fn resolve_key_file_not_found() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { env::remove_var("MURK_KEY") };
         unsafe { env::set_var("MURK_KEY_FILE", "/nonexistent/path/murk_key") };
         let result = resolve_key();
@@ -230,6 +238,7 @@ mod tests {
 
     #[test]
     fn resolve_key_neither_set() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { env::remove_var("MURK_KEY") };
         unsafe { env::remove_var("MURK_KEY_FILE") };
         let result = resolve_key();

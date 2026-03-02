@@ -3,7 +3,7 @@
 use crate::types;
 
 /// Add or update a secret in the working state.
-/// If `private` is true, stores in scoped (encrypted to self only).
+/// If `scoped` is true, stores in scoped (encrypted to self only).
 /// Returns true if the key was new (no existing schema entry).
 pub fn add_secret(
     vault: &mut types::Vault,
@@ -11,11 +11,11 @@ pub fn add_secret(
     key: &str,
     value: &str,
     desc: Option<&str>,
-    private: bool,
+    scoped: bool,
     tags: &[String],
     identity: &age::x25519::Identity,
 ) -> bool {
-    if private {
+    if scoped {
         let pubkey = identity.to_public().to_string();
         murk.scoped
             .entry(key.into())
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn add_secret_private() {
+    fn add_secret_scoped() {
         let (secret, pubkey) = generate_keypair();
         let identity = make_identity(&secret);
         let mut vault = empty_vault();
@@ -166,7 +166,7 @@ mod tests {
             &mut vault,
             &mut murk,
             "KEY",
-            "private_val",
+            "scoped_val",
             None,
             true,
             &[],
@@ -174,7 +174,7 @@ mod tests {
         );
 
         assert!(!murk.values.contains_key("KEY"));
-        assert_eq!(murk.scoped["KEY"][&pubkey], "private_val");
+        assert_eq!(murk.scoped["KEY"][&pubkey], "scoped_val");
     }
 
     #[test]
@@ -410,7 +410,7 @@ mod tests {
     // ── New edge-case tests ──
 
     #[test]
-    fn add_secret_overwrite_shared_with_private() {
+    fn add_secret_overwrite_shared_with_scoped() {
         let (secret, pubkey) = generate_keypair();
         let identity = make_identity(&secret);
         let mut vault = empty_vault();
@@ -432,7 +432,7 @@ mod tests {
             &mut vault,
             &mut murk,
             "KEY",
-            "private_val",
+            "scoped_val",
             None,
             true,
             &[],
@@ -440,7 +440,7 @@ mod tests {
         );
         // Shared value still exists, scoped override added.
         assert_eq!(murk.values["KEY"], "shared_val");
-        assert_eq!(murk.scoped["KEY"][&pubkey], "private_val");
+        assert_eq!(murk.scoped["KEY"][&pubkey], "scoped_val");
     }
 
     #[test]
