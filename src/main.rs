@@ -334,7 +334,10 @@ fn cmd_init(vault_name: &str) {
         eprintln!("{vault_name} already exists");
 
         // Try to find an existing key: env var first, then .env file.
-        let secret_key = env::var("MURK_KEY").ok().or_else(read_key_from_dotenv);
+        let secret_key = env::var("MURK_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+            .or_else(read_key_from_dotenv);
 
         let pubkey = match secret_key {
             Some(key) => {
@@ -359,6 +362,7 @@ fn cmd_init(vault_name: &str) {
             // Authorized — try to decrypt meta for display name.
             let name = env::var("MURK_KEY")
                 .ok()
+                .filter(|k| !k.is_empty())
                 .or_else(read_key_from_dotenv)
                 .and_then(|key| {
                     let identity = crypto::parse_identity(&key).ok()?;
@@ -1036,13 +1040,16 @@ fn cmd_recipients(vault_path: &str) {
     };
 
     // Try to decrypt meta for names and to identify "you".
-    let meta_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
-        let identity = crypto::parse_identity(&secret_key).ok()?;
-        let my_pubkey = identity.to_public().to_string();
-        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-        let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
-        Some((meta, my_pubkey))
-    });
+    let meta_data = env::var("MURK_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .and_then(|secret_key| {
+            let identity = crypto::parse_identity(&secret_key).ok()?;
+            let my_pubkey = identity.to_public().to_string();
+            let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
+            let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+            Some((meta, my_pubkey))
+        });
 
     for pk in &vault.recipients {
         if let Some((ref meta, ref my_pubkey)) = meta_data {
@@ -1148,12 +1155,15 @@ fn cmd_info(tags: &[String], vault_path: &str) {
     }
 
     // Try to decrypt meta for recipient names.
-    let meta_data = env::var("MURK_KEY").ok().and_then(|secret_key| {
-        let identity = crypto::parse_identity(&secret_key).ok()?;
-        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-        let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
-        Some(meta)
-    });
+    let meta_data = env::var("MURK_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .and_then(|secret_key| {
+            let identity = crypto::parse_identity(&secret_key).ok()?;
+            let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
+            let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+            Some(meta)
+        });
 
     // Compute column widths for aligned output.
     let key_width = entries.iter().map(|(k, _)| k.len()).max().unwrap();
