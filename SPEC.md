@@ -180,14 +180,14 @@ road again ice least fiction coyote partial album
 fury mirror essay cigar approve taxi coral pelican
 
 Vault initialized. Added as recipient.
-Next: murk add KEY VALUE
+Next: murk add KEY
 ```
 
 ---
 
-### `murk add KEY VALUE [--private] [--vault NAME]`
+### `murk add KEY [--private] [--vault NAME]`
 
-Adds or updates a secret. Without `--private`, writes to the shared blob. With `--private`, writes to your personal blob only.
+Adds or updates a secret. Prompts for the value interactively (hidden input) or reads from stdin when piped. Without `--private`, writes to the shared blob. With `--private`, writes to your personal blob only.
 
 If no description exists for the key, prints a nudge:
 
