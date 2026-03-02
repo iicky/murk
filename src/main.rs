@@ -54,9 +54,9 @@ enum Command {
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
-        /// Store in personal blob only
+        /// Store in personal blob only (scoped to your key)
         #[arg(long)]
-        private: bool,
+        scoped: bool,
         /// Tag for grouping (repeatable)
         #[arg(long)]
         tag: Vec<String>,
@@ -509,7 +509,7 @@ fn cmd_add(
     key: &str,
     value: &str,
     desc: Option<&str>,
-    private: bool,
+    scoped: bool,
     tags: &[String],
     vault_path: &str,
 ) {
@@ -523,7 +523,7 @@ fn cmd_add(
         key,
         value,
         desc,
-        private,
+        scoped,
         tags,
         &identity,
     );
@@ -1247,12 +1247,12 @@ fn main() {
         Command::Add {
             key,
             desc,
-            private,
+            scoped,
             tag,
             vault,
         } => {
             let resolved = resolve_value(&key);
-            cmd_add(&key, &resolved, desc.as_deref(), private, &tag, &vault);
+            cmd_add(&key, &resolved, desc.as_deref(), scoped, &tag, &vault);
         }
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
