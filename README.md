@@ -85,6 +85,25 @@ murk export
 echo "postgres://localhost/dev" | murk add DATABASE_URL --scoped
 ```
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/iicky/murk/demo/team.gif" alt="murk team demo" width="900">
+</p>
+
+## Offboarding
+
+When someone leaves, revoke their access and rotate the secrets:
+
+```bash
+murk revoke carol
+murk add DATABASE_URL    # re-encrypt with new value
+murk add API_KEY
+git commit -am "revoke carol, rotate secrets" && git push
+```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/iicky/murk/demo/offboard.gif" alt="murk offboarding demo" width="900">
+</p>
+
 ## Recovery
 
 Your key is a BIP39 mnemonic. `murk init` prints 24 recovery words — write them down.

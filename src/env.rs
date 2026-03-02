@@ -14,7 +14,9 @@ const IMPORT_SKIP: &[&str] = &["MURK_KEY", "MURK_KEY_FILE", "MURK_VAULT"];
 /// Returns the key wrapped in `SecretString` so it is zeroized on drop.
 pub fn resolve_key() -> Result<SecretString, String> {
     if let Ok(k) = env::var("MURK_KEY") {
-        return Ok(SecretString::from(k));
+        if !k.is_empty() {
+            return Ok(SecretString::from(k));
+        }
     }
     if let Ok(path) = env::var("MURK_KEY_FILE") {
         return fs::read_to_string(&path)
@@ -242,6 +244,18 @@ mod tests {
         unsafe { env::remove_var("MURK_KEY") };
         unsafe { env::remove_var("MURK_KEY_FILE") };
         let result = resolve_key();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("MURK_KEY not set"));
+    }
+
+    #[test]
+    fn resolve_key_empty_string_treated_as_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { env::set_var("MURK_KEY", "") };
+        unsafe { env::remove_var("MURK_KEY_FILE") };
+        let result = resolve_key();
+        unsafe { env::remove_var("MURK_KEY") };
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("MURK_KEY not set"));
