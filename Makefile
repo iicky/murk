@@ -48,7 +48,7 @@ test-team: build
 	git add .murk && git commit -m "init" >/dev/null 2>&1 && \
 	git remote add origin $$remote && \
 	git push -u origin main >/dev/null 2>&1 && \
-	$(MURK) add DATABASE_URL --scoped >/dev/null 2>&1 <<< "localhost:5432/dev" && \
+	echo "localhost:5432/dev" | $(MURK) add DATABASE_URL --scoped >/dev/null 2>&1 && \
 	$(MURK) export 2>/dev/null | grep -q "localhost" && \
 	cd $$bob && unset MURK_KEY && \
 	git clone $$remote . >/dev/null 2>&1 && \
