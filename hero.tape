@@ -32,7 +32,7 @@ Sleep 3s
 Hide
 Type `eval $(cat .env)`
 Enter
-Sleep 500ms
+Sleep 200ms
 Show
 
 Type "# Add some secrets"
