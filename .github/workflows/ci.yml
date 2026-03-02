@@ -77,7 +77,7 @@ jobs:
           fail_ci_if_error: false
 
   demo-test:
-    name: VHS Demo Test
+    name: VHS Dress Rehearsal
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -98,13 +98,17 @@ jobs:
       - run: rustup target add x86_64-unknown-linux-musl
       - run: sudo apt-get install -y musl-tools
       - run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Build VHS image with git
+        run: |
+          echo 'FROM ghcr.io/charmbracelet/vhs
+          RUN apk add --no-cache git' | docker build -t vhs-git -
       - name: Smoke test binary in VHS container
-        run: docker run --rm -v $PWD:/vhs --entrypoint /vhs/target/x86_64-unknown-linux-musl/release/murk ghcr.io/charmbracelet/vhs --version
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/hero.tape
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/team.tape
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/offboard.tape
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/eve.tape
-      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" ghcr.io/charmbracelet/vhs demo/recovery.tape
+        run: docker run --rm -v $PWD:/vhs --entrypoint /vhs/target/x86_64-unknown-linux-musl/release/murk vhs-git --version
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/hero.tape
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/team.tape
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/offboard.tape
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/eve.tape
+      - run: docker run --rm -v $PWD:/vhs -e PATH="/vhs/target/x86_64-unknown-linux-musl/release:$PATH" vhs-git demo/recovery.tape
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
