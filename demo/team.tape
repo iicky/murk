@@ -15,66 +15,19 @@ Set Height 600
 # === HIDDEN SETUP ===
 Hide
 
-# Put murk on PATH
 Type `export PATH="$PWD/target/release:$PATH"`
 Enter
-
-# Create dirs
-Type `export ALICE_DIR="$(mktemp -d)"`
+Type `source demo/setup.sh`
 Enter
-Type `export BOB_DIR="$(mktemp -d)"`
-Enter
-Type `export REMOTE="$(mktemp -d)"`
-Enter
-
-# Git config for commits in temp dirs
-Type `export GIT_AUTHOR_NAME="demo" GIT_AUTHOR_EMAIL="demo@murk" GIT_COMMITTER_NAME="demo" GIT_COMMITTER_EMAIL="demo@murk"`
-Enter
-
-# Create bare git remote
-Type `git init --bare "$REMOTE"`
+Type `demo_init_dirs alice bob`
 Enter
 Sleep 200ms
-
-# Alice: init vault and add secrets
-Type `cd "$ALICE_DIR"`
+Type `demo_alice_vault`
 Enter
-Type `echo "alice" | murk init 2>/dev/null`
-Enter
-Sleep 2s
-Type `eval $(cat .env)`
-Enter
-Type `export ALICE_KEY="$MURK_KEY"`
-Enter
-Type `echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" 2>/dev/null`
-Enter
-Sleep 500ms
-Type `echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key" 2>/dev/null`
-Enter
-Sleep 500ms
-Type `echo "sk_live_xyz789" | murk add STRIPE_SECRET --desc "Stripe secret key" 2>/dev/null`
-Enter
-Sleep 500ms
-
-# Git init and push
-Type `git init`
-Enter
-Sleep 200ms
-Type `git checkout -b main`
-Enter
-Type `git add .murk`
-Enter
-Type `git commit -m "init vault"`
-Enter
-Sleep 300ms
-Type `git remote add origin "$REMOTE"`
-Enter
-Type `git push -u origin main`
-Enter
-Sleep 300ms
+Sleep 3s
 
 # Bob: clone the repo (before being authorized)
-Type `cd "$BOB_DIR"`
+Type `cd "$BOB_DIR" && unset MURK_KEY`
 Enter
 Type `git clone "$REMOTE" .`
 Enter
@@ -156,13 +109,9 @@ Sleep 3s
 
 # Capture Bob's key and pubkey, then clear screen for clean transition
 Hide
-Type `eval $(cat .env)`
+Type `demo_capture_key bob`
 Enter
-Type `export BOB_KEY="$MURK_KEY"`
-Enter
-Type `export BOB_PUBKEY=$(murk init 2>&1 | grep "^age1")`
-Enter
-Sleep 300ms
+Sleep 500ms
 Type `clear`
 Enter
 Sleep 200ms

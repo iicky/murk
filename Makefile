@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 MURK := $(CURDIR)/target/release/murk
-GIT_ENV := GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@murk GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@murk
+MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery
+.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-vhs
 
 build:
 	cargo build --release
@@ -30,96 +30,50 @@ test-hero: build
 
 test-team: build
 	@printf "  %-12s" "team" && \
-	export $(GIT_ENV) && \
 	set -e && \
-	base=$$(mktemp -d) && \
-	trap "rm -rf $$base" EXIT && \
-	alice=$$base/alice && bob=$$base/bob && remote=$$base/remote && \
-	mkdir -p $$alice $$bob && \
-	git init --bare $$remote >/dev/null 2>&1 && \
-	git -C $$remote symbolic-ref HEAD refs/heads/main && \
-	cd $$alice && \
-	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
-	ALICE_KEY=$$MURK_KEY && \
-	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
-	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
-	echo "secret3" | $(MURK) add STRIPE_SECRET >/dev/null 2>&1 && \
-	git init -b main >/dev/null 2>&1 && \
-	git add .murk && git commit -m "init" >/dev/null 2>&1 && \
-	git remote add origin $$remote && \
-	git push -u origin main >/dev/null 2>&1 && \
-	echo "localhost:5432/dev" | $(MURK) add DATABASE_URL --scoped >/dev/null 2>&1 && \
-	$(MURK) export 2>/dev/null | grep -q "localhost" && \
-	cd $$bob && unset MURK_KEY && \
-	git clone $$remote . >/dev/null 2>&1 && \
-	$(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
-	BOB_KEY=$$MURK_KEY && \
-	BOB_PUBKEY=$$($(MURK) init 2>&1 | grep "^age1") && \
-	cd $$alice && export MURK_KEY=$$ALICE_KEY && \
-	$(MURK) authorize $$BOB_PUBKEY bob >/dev/null 2>&1 && \
-	git add .murk && git commit -m "add bob" >/dev/null 2>&1 && \
-	git push >/dev/null 2>&1 && \
-	cd $$bob && export MURK_KEY=$$BOB_KEY && \
-	git pull >/dev/null 2>&1 && \
-	$(MURK) info 2>/dev/null | grep -q "2 recipients" && \
-	$(MURK) get DATABASE_URL 2>/dev/null | grep -q "secret1" && \
+	export PATH="$(CURDIR)/target/release:$$PATH" && \
+	source demo/setup.sh && \
+	demo_init_dirs alice bob && \
+	trap "demo_cleanup" EXIT && \
+	demo_alice_vault && \
+	echo "localhost:5432/dev" | murk add DATABASE_URL --scoped >/dev/null 2>&1 && \
+	murk export 2>/dev/null | grep -q "localhost" && \
+	demo_onboard bob && \
+	demo_alice_authorize bob && \
+	demo_alice_push "add bob" && \
+	demo_pull bob && \
+	murk info 2>/dev/null | grep -q "2 recipients" && \
+	murk get DATABASE_URL 2>/dev/null | grep -q "db.example.com" && \
 	echo "ok"
 
 test-offboard: build
 	@printf "  %-12s" "offboard" && \
-	export $(GIT_ENV) && \
 	set -e && \
-	base=$$(mktemp -d) && \
-	trap "rm -rf $$base" EXIT && \
-	alice=$$base/alice && bob=$$base/bob && carol=$$base/carol && remote=$$base/remote && \
-	mkdir -p $$alice $$bob $$carol && \
-	git init --bare $$remote >/dev/null 2>&1 && \
-	git -C $$remote symbolic-ref HEAD refs/heads/main && \
-	cd $$alice && \
-	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
-	ALICE_KEY=$$MURK_KEY && \
-	echo "secret1" | $(MURK) add DATABASE_URL >/dev/null 2>&1 && \
-	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
-	echo "secret3" | $(MURK) add STRIPE_SECRET >/dev/null 2>&1 && \
-	git init -b main >/dev/null 2>&1 && \
-	git add .murk && git commit -m "init" >/dev/null 2>&1 && \
-	git remote add origin $$remote && \
-	git push -u origin main >/dev/null 2>&1 && \
-	cd $$bob && unset MURK_KEY && \
-	git clone $$remote . >/dev/null 2>&1 && \
-	$(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
-	BOB_KEY=$$MURK_KEY && \
-	BOB_PUBKEY=$$($(MURK) init 2>&1 | grep "^age1") && \
-	cd $$carol && unset MURK_KEY && \
-	git clone $$remote . >/dev/null 2>&1 && \
-	$(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
-	CAROL_KEY=$$MURK_KEY && \
-	CAROL_PUBKEY=$$($(MURK) init 2>&1 | grep "^age1") && \
-	cd $$alice && export MURK_KEY=$$ALICE_KEY && \
-	$(MURK) authorize $$BOB_PUBKEY bob >/dev/null 2>&1 && \
-	$(MURK) authorize $$CAROL_PUBKEY carol >/dev/null 2>&1 && \
-	git add .murk && git commit -m "add team" >/dev/null 2>&1 && \
-	git push >/dev/null 2>&1 && \
-	cd $$bob && export MURK_KEY=$$BOB_KEY && git pull >/dev/null 2>&1 && \
-	cd $$carol && export MURK_KEY=$$CAROL_KEY && git pull >/dev/null 2>&1 && \
-	cd $$bob && export MURK_KEY=$$BOB_KEY && \
-	$(MURK) recipients 2>/dev/null | grep -q "carol" && \
-	$(MURK) revoke carol >/dev/null 2>&1 && \
-	echo "rotated1" | $(MURK) add DATABASE_URL >/dev/null 2>&1 && \
-	echo "rotated2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
-	echo "rotated3" | $(MURK) add STRIPE_SECRET >/dev/null 2>&1 && \
-	! $(MURK) recipients 2>/dev/null | grep -q "carol" && \
+	export PATH="$(CURDIR)/target/release:$$PATH" && \
+	source demo/setup.sh && \
+	demo_init_dirs alice bob carol && \
+	trap "demo_cleanup" EXIT && \
+	demo_alice_vault && \
+	demo_onboard bob && \
+	demo_onboard carol && \
+	demo_alice_authorize bob && \
+	demo_alice_authorize carol && \
+	demo_alice_push "add team" && \
+	demo_pull bob && \
+	demo_pull carol && \
+	cd $$BOB_DIR && export MURK_KEY=$$BOB_KEY && \
+	murk recipients 2>/dev/null | grep -q "carol" && \
+	murk revoke carol >/dev/null 2>&1 && \
+	echo "rotated1" | murk add DATABASE_URL >/dev/null 2>&1 && \
+	echo "rotated2" | murk add API_KEY >/dev/null 2>&1 && \
+	echo "rotated3" | murk add STRIPE_SECRET >/dev/null 2>&1 && \
+	! murk recipients 2>/dev/null | grep -q "carol" && \
 	git add .murk && git commit -m "revoke carol" >/dev/null 2>&1 && \
 	git push >/dev/null 2>&1 && \
-	cd $$carol && export MURK_KEY=$$CAROL_KEY && \
-	$(MURK) export >/dev/null 2>&1 && \
+	cd $$CAROL_DIR && export MURK_KEY=$$CAROL_KEY && \
+	murk export >/dev/null 2>&1 && \
 	git pull >/dev/null 2>&1 && \
-	! $(MURK) export >/dev/null 2>&1 && \
+	! murk export >/dev/null 2>&1 && \
 	echo "ok"
 
 test-eve: build
@@ -155,3 +109,14 @@ test-recovery: build
 	RESTORED=$$($(MURK) restore "$$PHRASE" 2>/dev/null) && \
 	test "$$ORIGINAL" = "$$RESTORED" && \
 	echo "ok"
+
+test-vhs:
+	@command -v cross >/dev/null 2>&1 || { echo "error: cross not found — install with: cargo install cross --locked"; exit 1; }
+	cross build --release --target $(MUSL_TARGET)
+	@printf 'FROM ghcr.io/charmbracelet/vhs\nRUN apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n' | docker build -t vhs-git -
+	@for tape in hero team offboard eve recovery; do \
+		printf "  %-12s" "$$tape" && \
+		docker run --rm -v $(CURDIR):/vhs -e PATH="/vhs/target/$(MUSL_TARGET)/release:$$PATH" vhs-git demo/$$tape.tape && \
+		echo "ok"; \
+	done
+	@echo "\nall VHS tapes rendered"

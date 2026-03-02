@@ -15,115 +15,41 @@ Set Height 600
 # === HIDDEN SETUP ===
 Hide
 
-# Put murk on PATH
 Type `export PATH="$PWD/target/release:$PATH"`
 Enter
-
-# Create dirs
-Type `export ALICE_DIR="$(mktemp -d)"`
+Type `source demo/setup.sh`
 Enter
-Type `export BOB_DIR="$(mktemp -d)"`
-Enter
-Type `export CAROL_DIR="$(mktemp -d)"`
-Enter
-Type `export REMOTE="$(mktemp -d)"`
-Enter
-
-# Git config for commits in temp dirs
-Type `export GIT_AUTHOR_NAME="demo" GIT_AUTHOR_EMAIL="demo@murk" GIT_COMMITTER_NAME="demo" GIT_COMMITTER_EMAIL="demo@murk"`
-Enter
-
-# Create bare git remote
-Type `git init --bare "$REMOTE"`
+Type `demo_init_dirs alice bob carol`
 Enter
 Sleep 200ms
+Type `demo_alice_vault`
+Enter
+Sleep 3s
 
-# Alice: init vault, add secrets, push
-Type `cd "$ALICE_DIR"`
+# Onboard Bob and Carol (clone, init, capture keys)
+Type `demo_onboard bob`
 Enter
-Type `echo "alice" | murk init 2>/dev/null`
+Sleep 3s
+Type `demo_onboard carol`
 Enter
-Sleep 2s
-Type `eval $(cat .env)`
-Enter
-Type `export ALICE_KEY="$MURK_KEY"`
-Enter
-Type `echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" 2>/dev/null`
-Enter
-Sleep 500ms
-Type `echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key" 2>/dev/null`
-Enter
-Sleep 500ms
-Type `echo "sk_live_xyz789" | murk add STRIPE_SECRET --desc "Stripe secret key" 2>/dev/null`
-Enter
-Sleep 500ms
-Type `git init && git checkout -b main`
-Enter
-Sleep 200ms
-Type `git add .murk && git commit -m "init vault"`
-Enter
-Sleep 300ms
-Type `git remote add origin "$REMOTE"`
-Enter
-Type `git push -u origin main`
-Enter
-Sleep 300ms
+Sleep 3s
 
-# Bob: clone Alice's vault, onboard (generates key, shows pubkey)
-Type `cd "$BOB_DIR" && unset MURK_KEY`
-Enter
-Type `git clone "$REMOTE" .`
-Enter
-Sleep 300ms
-Type `murk init 2>/dev/null`
-Enter
-Sleep 2s
-Type `eval $(cat .env)`
-Enter
-Type `export BOB_KEY="$MURK_KEY"`
-Enter
-Type `export BOB_PUBKEY=$(murk init 2>&1 | grep "^age1")`
-Enter
-Sleep 500ms
-
-# Carol: clone Alice's vault, onboard (generates key, shows pubkey)
-Type `cd "$CAROL_DIR" && unset MURK_KEY`
-Enter
-Type `git clone "$REMOTE" .`
-Enter
-Sleep 300ms
-Type `murk init 2>/dev/null`
-Enter
-Sleep 2s
-Type `eval $(cat .env)`
-Enter
-Type `export CAROL_KEY="$MURK_KEY"`
-Enter
-Type `export CAROL_PUBKEY=$(murk init 2>&1 | grep "^age1")`
-Enter
-Sleep 500ms
-
-# Alice: authorize Bob and Carol, push
-Type `cd "$ALICE_DIR" && export MURK_KEY="$ALICE_KEY"`
-Enter
-Type `murk authorize $BOB_PUBKEY bob 2>/dev/null`
+# Alice authorizes both, pushes
+Type `demo_alice_authorize bob`
 Enter
 Sleep 1s
-Type `murk authorize $CAROL_PUBKEY carol 2>/dev/null`
+Type `demo_alice_authorize carol`
 Enter
 Sleep 1s
-Type `git add .murk && git commit -m "add bob and carol"`
+Type `demo_alice_push "add bob and carol"`
 Enter
-Sleep 300ms
-Type `git push`
-Enter
-Sleep 300ms
+Sleep 500ms
 
-# Bob and Carol: pull authorized vault
-Type `cd "$BOB_DIR" && export MURK_KEY="$BOB_KEY" && git pull`
+# Bob and Carol pull authorized vault
+Type `demo_pull bob`
 Enter
 Sleep 300ms
-Type `cd "$CAROL_DIR" && export MURK_KEY="$CAROL_KEY" && git pull`
+Type `demo_pull carol`
 Enter
 Sleep 300ms
 

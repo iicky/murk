@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Shared setup functions for murk VHS demos and Makefile tests.
+# Source this file — do not execute it directly.
+
+# Remove ANSI color codes from stdin.
+strip_ansi() {
+    local esc=$'\x1b'
+    sed "s/${esc}\[[0-9;]*m//g"
+}
+
+# Print the public key from `murk init` output (strips ANSI codes).
+murk_pubkey() {
+    murk init 2>&1 | strip_ansi | grep "^age1"
+}
+
+# Create temp dirs for a multi-persona demo.
+# Usage: demo_init_dirs alice bob [carol ...]
+# Sets: DEMO_BASE, REMOTE, ALICE_DIR, BOB_DIR, etc.
+demo_init_dirs() {
+    export DEMO_BASE="$(mktemp -d)"
+    export REMOTE="$DEMO_BASE/remote"
+
+    git init --bare "$REMOTE" >/dev/null 2>&1
+    git -C "$REMOTE" symbolic-ref HEAD refs/heads/main
+
+    export GIT_AUTHOR_NAME="demo"
+    export GIT_AUTHOR_EMAIL="demo@murk"
+    export GIT_COMMITTER_NAME="demo"
+    export GIT_COMMITTER_EMAIL="demo@murk"
+
+    for name in "$@"; do
+        local upper
+        upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+        local dir="$DEMO_BASE/$name"
+        mkdir -p "$dir"
+        export "${upper}_DIR=$dir"
+    done
+}
+
+# Initialize Alice's vault with 3 secrets and push to remote.
+# Sets: ALICE_KEY
+demo_alice_vault() {
+    cd "$ALICE_DIR" || return 1
+    echo "alice" | murk init >/dev/null 2>&1
+    eval "$(cat .env)"
+    export ALICE_KEY="$MURK_KEY"
+
+    echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" >/dev/null 2>&1
+    echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key" >/dev/null 2>&1
+    echo "sk_live_xyz789" | murk add STRIPE_SECRET --desc "Stripe secret key" >/dev/null 2>&1
+
+    git init -b main >/dev/null 2>&1
+    git add .murk
+    git commit -m "init vault" >/dev/null 2>&1
+    git remote add origin "$REMOTE"
+    git push -u origin main >/dev/null 2>&1
+}
+
+# Clone repo, run murk init, capture key and pubkey.
+# Usage: demo_onboard <name>
+# Sets: <NAME>_KEY, <NAME>_PUBKEY
+demo_onboard() {
+    local name="$1"
+    local upper
+    upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local dir_var="${upper}_DIR"
+
+    cd "${!dir_var}" || return 1
+    unset MURK_KEY
+    git clone "$REMOTE" . >/dev/null 2>&1
+    murk init >/dev/null 2>&1
+    eval "$(cat .env)"
+    export "${upper}_KEY=$MURK_KEY"
+    export "${upper}_PUBKEY=$(murk_pubkey)"
+}
+
+# Capture key and pubkey from an existing .env (after visible murk init).
+# Usage: demo_capture_key <name>
+# Sets: <NAME>_KEY, <NAME>_PUBKEY
+demo_capture_key() {
+    local name="$1"
+    local upper
+    upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local dir_var="${upper}_DIR"
+
+    cd "${!dir_var}" || return 1
+    eval "$(cat .env)"
+    export "${upper}_KEY=$MURK_KEY"
+    export "${upper}_PUBKEY=$(murk_pubkey)"
+}
+
+# Authorize a persona as Alice.
+# Usage: demo_alice_authorize <name>
+demo_alice_authorize() {
+    local name="$1"
+    local upper
+    upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local pubkey_var="${upper}_PUBKEY"
+
+    cd "$ALICE_DIR" || return 1
+    export MURK_KEY="$ALICE_KEY"
+    murk authorize "${!pubkey_var}" "$name" >/dev/null 2>&1
+}
+
+# Git add .murk, commit, and push as Alice.
+# Usage: demo_alice_push [commit message]
+demo_alice_push() {
+    local msg="${1:-update vault}"
+    cd "$ALICE_DIR" || return 1
+    export MURK_KEY="$ALICE_KEY"
+    git add .murk
+    git commit -m "$msg" >/dev/null 2>&1
+    git push >/dev/null 2>&1
+}
+
+# Pull latest as a persona.
+# Usage: demo_pull <name>
+demo_pull() {
+    local name="$1"
+    local upper
+    upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local dir_var="${upper}_DIR"
+    local key_var="${upper}_KEY"
+
+    cd "${!dir_var}" || return 1
+    export MURK_KEY="${!key_var}"
+    git pull >/dev/null 2>&1
+}
+
+# Remove all temp dirs.
+demo_cleanup() {
+    [ -n "$DEMO_BASE" ] && rm -rf "$DEMO_BASE"
+}
