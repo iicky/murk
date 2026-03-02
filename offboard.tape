@@ -65,7 +65,7 @@ Show
 
 # === BOB: revoke Carol and rotate secrets ===
 
-Type "# Carol is leaving — check the team"
+Type "# Carol is leaving — who's on the team?"
 Enter
 Sleep 500ms
 
@@ -81,7 +81,7 @@ Type "murk revoke carol"
 Enter
 Sleep 3s
 
-Type "# Rotate the exposed secrets"
+Type "# Rotate the secrets she had access to"
 Enter
 Sleep 500ms
 
