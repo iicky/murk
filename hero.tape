@@ -39,27 +39,15 @@ Type "# Add some secrets"
 Enter
 Sleep 500ms
 
-Type `murk add DATABASE_URL \`
-Enter
-Type `  "postgres://prod:secret@db.example.com/app" \`
-Enter
-Type `  --desc "Production database"`
+Type `echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database"`
 Enter
 Sleep 2s
 
-Type `murk add API_KEY \`
-Enter
-Type `  "sk-proj-abc123def456" \`
-Enter
-Type `  --desc "OpenAI API key"`
+Type `echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key"`
 Enter
 Sleep 2s
 
-Type `murk add STRIPE_SECRET \`
-Enter
-Type `  "sk_live_xyz789" \`
-Enter
-Type `  --desc "Stripe secret key"`
+Type `echo "sk_live_xyz789" | murk add STRIPE_SECRET --desc "Stripe secret key"`
 Enter
 Sleep 2s
 
