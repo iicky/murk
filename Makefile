@@ -1,3 +1,4 @@
+SHELL := /bin/bash
 MURK := $(CURDIR)/target/release/murk
 GIT_ENV := GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@murk GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@murk
 
