@@ -442,7 +442,7 @@ fn cmd_init(vault_name: &str) {
 
     eprintln!();
     eprintln!("{}", "Vault initialized. Added as recipient.".green());
-    eprintln!("Next: {}", "murk add KEY VALUE".bold());
+    eprintln!("Next: {}", "murk add KEY".bold());
 }
 
 fn resolve_key() -> age::secrecy::SecretString {
