@@ -80,6 +80,18 @@ pub fn decrypt_vault_values(
     values
 }
 
+/// Parse a vault from its JSON string and decrypt all shared values.
+///
+/// Combines `vault::parse` with `decrypt_vault_values` for use cases
+/// where the vault contents come from a string (e.g., `git show`).
+pub fn parse_and_decrypt_values(
+    vault_contents: &str,
+    identity: &age::x25519::Identity,
+) -> Result<HashMap<String, String>, String> {
+    let vault = crate::vault::parse(vault_contents).map_err(|e| e.to_string())?;
+    Ok(decrypt_vault_values(&vault, identity))
+}
+
 /// The kind of change in a diff entry.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DiffKind {
@@ -474,5 +486,68 @@ mod tests {
         let old = HashMap::new();
         let new = HashMap::new();
         assert!(diff_secrets(&old, &new).is_empty());
+    }
+
+    // ── parse_and_decrypt_values tests ──
+
+    #[test]
+    fn parse_and_decrypt_values_roundtrip() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey];
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+        vault.secrets.insert(
+            "KEY2".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+
+        let json = serde_json::to_string(&vault).unwrap();
+        let values = parse_and_decrypt_values(&json, &identity).unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values["KEY1"], "val1");
+        assert_eq!(values["KEY2"], "val2");
+    }
+
+    #[test]
+    fn parse_and_decrypt_values_invalid_json() {
+        let (secret, _) = generate_keypair();
+        let identity = make_identity(&secret);
+
+        let result = parse_and_decrypt_values("not valid json", &identity);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_and_decrypt_values_wrong_key() {
+        let (_, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let (wrong_secret, _) = generate_keypair();
+        let wrong_identity = make_identity(&wrong_secret);
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey];
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
+                scoped: std::collections::BTreeMap::new(),
+            },
+        );
+
+        let json = serde_json::to_string(&vault).unwrap();
+        let values = parse_and_decrypt_values(&json, &wrong_identity).unwrap();
+        assert!(values.is_empty());
     }
 }

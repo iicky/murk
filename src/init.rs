@@ -1,9 +1,38 @@
 //! Vault initialization logic.
 
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::process::Command;
 
 use crate::{crypto, decrypt_value, encrypt_value, now_utc, types};
+
+/// A key discovered from the environment or .env file.
+#[derive(Debug)]
+pub struct DiscoveredKey {
+    pub secret_key: String,
+    pub pubkey: String,
+}
+
+/// Try to find an existing age key: checks `MURK_KEY` env var first,
+/// then falls back to `.env` file. Returns `None` if neither is set.
+pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
+    let raw = env::var("MURK_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .or_else(crate::read_key_from_dotenv);
+
+    match raw {
+        Some(key) => {
+            let identity = crypto::parse_identity(&key).map_err(|e| e.to_string())?;
+            let pubkey = identity.to_public().to_string();
+            Ok(Some(DiscoveredKey {
+                secret_key: key,
+                pubkey,
+            }))
+        }
+        None => Ok(None),
+    }
+}
 
 /// Status of an existing vault relative to a given key.
 #[derive(Debug)]
@@ -85,6 +114,76 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
 mod tests {
     use super::*;
     use crate::testutil::*;
+    use std::sync::Mutex;
+
+    /// Tests that mutate MURK_KEY env var must hold this lock.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // ── discover_existing_key tests ──
+
+    #[test]
+    fn discover_existing_key_from_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let (secret, pubkey) = generate_keypair();
+        unsafe { env::set_var("MURK_KEY", &secret) };
+        let result = discover_existing_key();
+        unsafe { env::remove_var("MURK_KEY") };
+
+        let dk = result.unwrap().unwrap();
+        assert_eq!(dk.secret_key, secret);
+        assert_eq!(dk.pubkey, pubkey);
+    }
+
+    #[test]
+    fn discover_existing_key_from_dotenv() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { env::remove_var("MURK_KEY") };
+
+        // Create a temp .env in a temp dir and chdir there.
+        let dir = std::env::temp_dir().join("murk_test_discover_dotenv");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (secret, pubkey) = generate_keypair();
+        std::fs::write(dir.join(".env"), format!("MURK_KEY={secret}\n")).unwrap();
+
+        let orig_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = discover_existing_key();
+        std::env::set_current_dir(&orig_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dk = result.unwrap().unwrap();
+        assert_eq!(dk.secret_key, secret);
+        assert_eq!(dk.pubkey, pubkey);
+    }
+
+    #[test]
+    fn discover_existing_key_neither_set() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { env::remove_var("MURK_KEY") };
+
+        // Use a dir with no .env.
+        let dir = std::env::temp_dir().join("murk_test_discover_none");
+        std::fs::create_dir_all(&dir).unwrap();
+        let orig_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let result = discover_existing_key();
+        std::env::set_current_dir(&orig_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn discover_existing_key_invalid_key() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { env::set_var("MURK_KEY", "not-a-valid-age-key") };
+        let result = discover_existing_key();
+        unsafe { env::remove_var("MURK_KEY") };
+
+        assert!(result.is_err());
+    }
+
+    // ── check_init_status tests ──
 
     #[test]
     fn check_init_status_authorized() {

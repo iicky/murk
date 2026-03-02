@@ -1,6 +1,4 @@
-use murk_cli::{
-    DiffKind, EnvrcStatus, MergeDriverSetupStep, crypto, decrypt_value, recovery, types, vault,
-};
+use murk_cli::{DiffKind, EnvrcStatus, MergeDriverSetupStep, recovery, types, vault};
 
 use std::collections::HashMap;
 use std::env;
@@ -298,27 +296,16 @@ fn cmd_init(vault_name: &str) {
         eprintln!("{vault_name} already exists");
 
         // Try to find an existing key: env var first, then .env file.
-        let secret_key = env::var("MURK_KEY")
-            .ok()
-            .filter(|k| !k.is_empty())
-            .or_else(murk_cli::read_key_from_dotenv);
-
-        let (secret_key, pubkey) = match secret_key {
-            Some(key) => {
-                let identity = match crypto::parse_identity(&key) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        eprintln!("{} {e}", "error:".red().bold());
-                        process::exit(1);
-                    }
-                };
-                (Some(key), identity.to_public().to_string())
-            }
-            None => {
-                // No key — generate one.
+        let (secret_key, pubkey) = match murk_cli::discover_existing_key() {
+            Ok(Some(dk)) => (Some(dk.secret_key), dk.pubkey),
+            Ok(None) => {
                 let (_secret_key, pubkey) = generate_and_write_key();
                 eprintln!();
                 (None, pubkey)
+            }
+            Err(e) => {
+                eprintln!("{} {e}", "error:".red().bold());
+                process::exit(1);
             }
         };
 
@@ -767,14 +754,18 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
 
     let old_values: HashMap<String, String> = if output.status.success() {
         let old_contents = String::from_utf8_lossy(&output.stdout);
-        match vault::parse(&old_contents) {
-            Ok(old_vault) => {
-                let values = murk_cli::decrypt_vault_values(&old_vault, &identity);
-                if values.is_empty() && !old_vault.secrets.is_empty() {
-                    eprintln!(
-                        "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
-                        "warning:".yellow().bold()
-                    );
+        match murk_cli::parse_and_decrypt_values(&old_contents, &identity) {
+            Ok(values) => {
+                if values.is_empty() {
+                    // Check if the old vault had secrets — if so, we couldn't decrypt.
+                    if let Ok(old_vault) = vault::parse(&old_contents) {
+                        if !old_vault.secrets.is_empty() {
+                            eprintln!(
+                                "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
+                                "warning:".yellow().bold()
+                            );
+                        }
+                    }
                 }
                 values
             }
@@ -902,29 +893,21 @@ fn cmd_recipients(vault_path: &str) {
         }
     };
 
-    // Try to decrypt meta for names and to identify "you".
-    let meta_data = env::var("MURK_KEY")
-        .ok()
-        .filter(|k| !k.is_empty())
-        .and_then(|secret_key| {
-            let identity = crypto::parse_identity(&secret_key).ok()?;
-            let my_pubkey = identity.to_public().to_string();
-            let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-            let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
-            Some((meta, my_pubkey))
-        });
+    let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
+    let entries = murk_cli::list_recipients(&vault, secret_key.as_deref());
+    let has_names = entries.iter().any(|e| e.display_name.is_some());
 
-    for pk in &vault.recipients {
-        if let Some((ref meta, ref my_pubkey)) = meta_data {
-            let name = meta.recipients.get(pk).map_or("", String::as_str);
-            let marker = if pk == my_pubkey {
+    for entry in &entries {
+        if has_names {
+            let name = entry.display_name.as_deref().unwrap_or("");
+            let marker = if entry.is_self {
                 "  (you)".green().to_string()
             } else {
                 String::new()
             };
-            println!("{}  {}{}", pk.dimmed(), name.bold(), marker);
+            println!("{}  {}{}", entry.pubkey.dimmed(), name.bold(), marker);
         } else {
-            println!("{pk}");
+            println!("{}", entry.pubkey);
         }
     }
 }

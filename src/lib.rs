@@ -42,13 +42,16 @@ pub use env::{
     warn_env_permissions, write_envrc, write_key_to_dotenv,
 };
 pub use export::{
-    DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, resolve_secrets,
+    DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets,
+    parse_and_decrypt_values, resolve_secrets,
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
 pub use info::{InfoEntry, VaultInfo, vault_info};
-pub use init::{InitStatus, check_init_status, create_vault};
+pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
-pub use recipients::{RevokeResult, authorize_recipient, revoke_recipient};
+pub use recipients::{
+    RecipientEntry, RevokeResult, authorize_recipient, list_recipients, revoke_recipient,
+};
 pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_keys, remove_secret};
 
 use std::collections::{BTreeMap, HashMap};
