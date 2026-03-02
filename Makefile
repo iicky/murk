@@ -36,32 +36,32 @@ test-team: build
 	trap "rm -rf $$base" EXIT && \
 	alice=$$base/alice && bob=$$base/bob && remote=$$base/remote && \
 	mkdir -p $$alice $$bob && \
-	git init --bare $$remote >/dev/null 2>&1 && \
+	git init --bare $$remote >/dev/null && \
 	cd $$alice && \
-	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
+	echo "alice" | $(MURK) init >/dev/null && \
 	eval $$(cat .env) && \
 	ALICE_KEY=$$MURK_KEY && \
-	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
-	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
-	echo "secret3" | $(MURK) add STRIPE_SECRET >/dev/null 2>&1 && \
-	git init >/dev/null 2>&1 && git checkout -b main >/dev/null 2>&1 && \
-	git add .murk && git commit -m "init" >/dev/null 2>&1 && \
+	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null && \
+	echo "secret2" | $(MURK) add API_KEY >/dev/null && \
+	echo "secret3" | $(MURK) add STRIPE_SECRET >/dev/null && \
+	git init >/dev/null && git checkout -b main >/dev/null && \
+	git add .murk && git commit -m "init" >/dev/null && \
 	git remote add origin $$remote && \
-	git push -u origin main >/dev/null 2>&1 && \
-	echo "localhost:5432/dev" | $(MURK) add DATABASE_URL --scoped >/dev/null 2>&1 && \
+	git push -u origin main >/dev/null && \
+	echo "localhost:5432/dev" | $(MURK) add DATABASE_URL --scoped >/dev/null && \
 	$(MURK) export 2>/dev/null | grep -q "localhost" && \
 	cd $$bob && unset MURK_KEY && \
-	git clone $$remote . >/dev/null 2>&1 && \
-	$(MURK) init >/dev/null 2>&1 && \
+	git clone $$remote . >/dev/null && \
+	$(MURK) init >/dev/null && \
 	eval $$(cat .env) && \
 	BOB_KEY=$$MURK_KEY && \
 	BOB_PUBKEY=$$($(MURK) init 2>&1 | grep "^age1") && \
 	cd $$alice && export MURK_KEY=$$ALICE_KEY && \
-	$(MURK) authorize $$BOB_PUBKEY bob >/dev/null 2>&1 && \
-	git add .murk && git commit -m "add bob" >/dev/null 2>&1 && \
-	git push >/dev/null 2>&1 && \
+	$(MURK) authorize $$BOB_PUBKEY bob >/dev/null && \
+	git add .murk && git commit -m "add bob" >/dev/null && \
+	git push >/dev/null && \
 	cd $$bob && export MURK_KEY=$$BOB_KEY && \
-	git pull >/dev/null 2>&1 && \
+	git pull >/dev/null && \
 	$(MURK) info 2>/dev/null | grep -q "2 recipients" && \
 	$(MURK) get DATABASE_URL 2>/dev/null | grep -q "secret1" && \
 	echo "ok"
