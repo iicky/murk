@@ -684,13 +684,13 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
             Ok(values) => {
                 if values.is_empty() {
                     // Check if the old vault had secrets — if so, we couldn't decrypt.
-                    if let Ok(old_vault) = vault::parse(&old_contents) {
-                        if !old_vault.secrets.is_empty() {
-                            eprintln!(
-                                "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
-                                "warning:".yellow().bold()
-                            );
-                        }
+                    if let Ok(old_vault) = vault::parse(&old_contents)
+                        && !old_vault.secrets.is_empty()
+                    {
+                        eprintln!(
+                            "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
+                            "warning:".yellow().bold()
+                        );
                     }
                 }
                 values

@@ -132,15 +132,14 @@ pub fn load_vault(
     // Decrypt our scoped (mote) overrides.
     let mut scoped = HashMap::new();
     for (key, entry) in &vault.secrets {
-        if let Some(encoded) = entry.scoped.get(&pubkey) {
-            if let Ok(plaintext) = decrypt_value(encoded, &identity) {
-                if let Ok(value) = String::from_utf8(plaintext) {
-                    scoped
-                        .entry(key.clone())
-                        .or_insert_with(HashMap::new)
-                        .insert(pubkey.clone(), value);
-                }
-            }
+        if let Some(encoded) = entry.scoped.get(&pubkey)
+            && let Ok(value) = decrypt_value(encoded, &identity)
+                .and_then(|pt| String::from_utf8(pt).map_err(|e| e.to_string()))
+        {
+            scoped
+                .entry(key.clone())
+                .or_insert_with(HashMap::new)
+                .insert(pubkey.clone(), value);
         }
     }
 

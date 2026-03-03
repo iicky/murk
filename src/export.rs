@@ -37,10 +37,11 @@ pub fn resolve_secrets(
 
     let mut result = BTreeMap::new();
     for (k, v) in &values {
-        if let Some(ref allowed) = allowed_keys {
-            if !allowed.contains(k.as_str()) {
-                continue;
-            }
+        if allowed_keys
+            .as_ref()
+            .is_some_and(|a| !a.contains(k.as_str()))
+        {
+            continue;
         }
         result.insert(k.clone(), v.clone());
     }
@@ -71,10 +72,10 @@ pub fn decrypt_vault_values(
 ) -> HashMap<String, String> {
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
-        if let Ok(plaintext) = crate::decrypt_value(&entry.shared, identity) {
-            if let Ok(value) = String::from_utf8(plaintext) {
-                values.insert(key.clone(), value);
-            }
+        if let Ok(value) = crate::decrypt_value(&entry.shared, identity)
+            .and_then(|pt| String::from_utf8(pt).map_err(|e| e.to_string()))
+        {
+            values.insert(key.clone(), value);
         }
     }
     values
