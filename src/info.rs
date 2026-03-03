@@ -182,4 +182,11 @@ mod tests {
         let result = vault_info(b"not json", &[], None);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn vault_info_valid_json_missing_fields() {
+        // Valid JSON but not a vault — should fail deserialization.
+        let result = vault_info(b"{\"foo\": \"bar\"}", &[], None);
+        assert!(result.is_err());
+    }
 }

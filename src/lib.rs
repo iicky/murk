@@ -802,6 +802,110 @@ mod tests {
     }
 
     #[test]
+    fn load_vault_not_a_recipient() {
+        let (secret, pubkey) = generate_keypair();
+        let (other_secret, other_pubkey) = generate_keypair();
+        let other_recipient = make_recipient(&other_pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_load_not_recipient");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault encrypted to `other`, not to `secret`.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![other_pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[other_recipient]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        // Save via save_vault (needs the other key for re-encryption).
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(other_pubkey.clone(), "other".into());
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        unsafe { std::env::set_var("MURK_KEY", &other_secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Now try to load with a key that is NOT a recipient.
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected load_vault to fail for non-recipient"),
+        };
+        assert!(
+            err.contains("decryption failed"),
+            "expected decryption failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_zero_secrets() {
+        let (secret, pubkey) = generate_keypair();
+
+        let dir = std::env::temp_dir().join("murk_test_load_zero_secrets");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault with no secrets at all.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let original = types::Murk {
+            values: HashMap::new(),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        assert!(result.is_ok());
+        let (_, murk, _) = result.unwrap();
+        assert!(murk.values.is_empty());
+        assert!(murk.scoped.is_empty());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn now_utc_format() {
         let ts = now_utc();
         assert!(ts.ends_with('Z'));

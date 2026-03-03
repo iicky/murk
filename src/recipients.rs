@@ -257,7 +257,58 @@ mod tests {
         assert!(murk.scoped["KEY"].is_empty());
     }
 
-    // ── New edge-case tests ──
+    #[test]
+    fn revoke_recipient_reports_exposed_keys() {
+        let (_, pk1) = generate_keypair();
+        let (_, pk2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk1.clone(), pk2.clone()];
+        // exposed_keys returns all schema keys, so we need schema entries.
+        vault.schema.insert(
+            "DB_URL".into(),
+            types::SchemaEntry {
+                description: "db".into(),
+                example: None,
+                tags: vec![],
+            },
+        );
+        vault.schema.insert(
+            "API_KEY".into(),
+            types::SchemaEntry {
+                description: "api".into(),
+                example: None,
+                tags: vec![],
+            },
+        );
+        vault.secrets.insert(
+            "DB_URL".into(),
+            types::SecretEntry {
+                shared: "ct".into(),
+                scoped: BTreeMap::from([(pk2.clone(), "scoped_db".into())]),
+            },
+        );
+        vault.secrets.insert(
+            "API_KEY".into(),
+            types::SecretEntry {
+                shared: "ct2".into(),
+                scoped: BTreeMap::from([(pk2.clone(), "scoped_api".into())]),
+            },
+        );
+        let mut murk = empty_murk();
+        murk.scoped
+            .insert("DB_URL".into(), HashMap::from([(pk2.clone(), "v".into())]));
+        murk.scoped.insert(
+            "API_KEY".into(),
+            HashMap::from([(pk2.clone(), "v2".into())]),
+        );
+
+        let result = revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
+        let mut keys = result.exposed_keys.clone();
+        keys.sort();
+        assert_eq!(keys, vec!["API_KEY", "DB_URL"]);
+        assert!(vault.secrets["DB_URL"].scoped.is_empty());
+        assert!(vault.secrets["API_KEY"].scoped.is_empty());
+    }
 
     // ── list_recipients tests ──
 

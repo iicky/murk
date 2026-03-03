@@ -411,6 +411,67 @@ mod tests {
         assert_eq!(resolved["A"], "val_a");
     }
 
+    #[test]
+    fn resolve_secrets_tag_in_schema_but_no_secret() {
+        let mut vault = empty_vault();
+        // Schema says key "ORPHAN" exists with tag "db", but no secret value.
+        vault.schema.insert(
+            "ORPHAN".into(),
+            types::SchemaEntry {
+                description: "orphan key".into(),
+                example: None,
+                tags: vec!["db".into()],
+            },
+        );
+        vault.schema.insert(
+            "REAL".into(),
+            types::SchemaEntry {
+                description: "has a value".into(),
+                example: None,
+                tags: vec!["db".into()],
+            },
+        );
+
+        let mut murk = empty_murk();
+        // Only REAL has a value, ORPHAN does not.
+        murk.values.insert("REAL".into(), "real_val".into());
+
+        let resolved = resolve_secrets(&vault, &murk, "age1pk", &["db".into()]);
+        // ORPHAN should not appear since it has no value.
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved["REAL"], "real_val");
+        assert!(!resolved.contains_key("ORPHAN"));
+    }
+
+    #[test]
+    fn resolve_secrets_scoped_pubkey_not_in_recipients() {
+        let mut vault = empty_vault();
+        vault.recipients = vec!["age1alice".into()];
+        vault.schema.insert(
+            "KEY".into(),
+            types::SchemaEntry {
+                description: String::new(),
+                example: None,
+                tags: vec![],
+            },
+        );
+
+        let mut murk = empty_murk();
+        murk.values.insert("KEY".into(), "shared".into());
+        // Scoped override for a pubkey NOT in vault.recipients.
+        let mut scoped = HashMap::new();
+        scoped.insert("age1outsider".into(), "outsider_val".into());
+        murk.scoped.insert("KEY".into(), scoped);
+
+        // The outsider's override should still be applied (resolve doesn't gate on recipient list).
+        let resolved = resolve_secrets(&vault, &murk, "age1outsider", &[]);
+        assert_eq!(resolved["KEY"], "outsider_val");
+
+        // Alice gets the shared value since she has no scoped override.
+        let resolved_alice = resolve_secrets(&vault, &murk, "age1alice", &[]);
+        assert_eq!(resolved_alice["KEY"], "shared");
+    }
+
     // ── New edge-case tests ──
 
     #[test]

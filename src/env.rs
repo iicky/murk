@@ -376,6 +376,27 @@ mod tests {
         assert!(result.unwrap_err().contains("MURK_KEY not set"));
     }
 
+    #[test]
+    fn resolve_key_murk_key_takes_priority_over_file() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let direct_key = "AGE-SECRET-KEY-1DIRECT";
+        let file_key = "AGE-SECRET-KEY-1FILE";
+
+        let path = std::env::temp_dir().join("murk_test_key_priority");
+        std::fs::write(&path, format!("{file_key}\n")).unwrap();
+
+        unsafe { env::set_var("MURK_KEY", direct_key) };
+        unsafe { env::set_var("MURK_KEY_FILE", path.to_str().unwrap()) };
+        let result = resolve_key();
+        unsafe { env::remove_var("MURK_KEY") };
+        unsafe { env::remove_var("MURK_KEY_FILE") };
+        std::fs::remove_file(&path).ok();
+
+        let secret = result.unwrap();
+        use age::secrecy::ExposeSecret;
+        assert_eq!(secret.expose_secret(), direct_key);
+    }
+
     #[cfg(unix)]
     #[test]
     fn warn_env_permissions_no_warning_on_secure_file() {

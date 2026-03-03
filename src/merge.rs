@@ -941,6 +941,56 @@ mod tests {
         assert!(r.conflicts[0].field.contains("scoped"));
     }
 
+    #[test]
+    fn merge_scoped_add_vs_base_key_removal() {
+        let base = base_vault();
+
+        // Ours: remove the base key entirely.
+        let mut ours = base.clone();
+        ours.secrets.remove("DB_URL");
+        ours.schema.remove("DB_URL");
+
+        // Theirs: add a scoped entry on the same key (shared unchanged).
+        let mut theirs = base.clone();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .scoped
+            .insert("age1alice".into(), "alice-scoped".into());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Theirs only added scoped (shared unchanged), so ours' removal wins
+        // without conflict — the scoped addition is silently dropped.
+        assert!(r.conflicts.is_empty());
+        assert!(!r.vault.secrets.contains_key("DB_URL"));
+    }
+
+    #[test]
+    fn merge_scoped_add_vs_base_key_modification() {
+        let base = base_vault();
+
+        // Ours: remove the base key entirely.
+        let mut ours = base.clone();
+        ours.secrets.remove("DB_URL");
+        ours.schema.remove("DB_URL");
+
+        // Theirs: modify the shared value AND add scoped.
+        let mut theirs = base.clone();
+        theirs.secrets.get_mut("DB_URL").unwrap().shared = "theirs-modified".into();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .scoped
+            .insert("age1alice".into(), "alice-scoped".into());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Theirs modified shared, ours removed — this IS a conflict.
+        assert_eq!(r.conflicts.len(), 1);
+        assert!(r.conflicts[0].reason.contains("removed on our side"));
+    }
+
     // -- Recipient change + secret addition --
 
     #[test]
