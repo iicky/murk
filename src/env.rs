@@ -204,6 +204,10 @@ mod tests {
     /// to avoid racing with each other (cargo test runs tests in parallel).
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Tests that call `std::env::set_current_dir` must hold this lock to
+    /// prevent CWD races (the working directory is process-global state).
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn parse_env_empty() {
         assert!(parse_env("").is_empty());
@@ -375,9 +379,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn warn_env_permissions_no_warning_on_secure_file() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         use std::os::unix::fs::PermissionsExt;
 
         let dir = std::env::temp_dir().join("murk_test_perms");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let env_path = dir.join(".env");
         std::fs::write(&env_path, "KEY=val\n").unwrap();
@@ -394,7 +400,9 @@ mod tests {
 
     #[test]
     fn read_key_from_dotenv_export_form() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_read_dotenv_export");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let env_path = dir.join(".env");
         std::fs::write(&env_path, "export MURK_KEY=AGE-SECRET-KEY-1ABC\n").unwrap();
@@ -410,7 +418,9 @@ mod tests {
 
     #[test]
     fn read_key_from_dotenv_bare_form() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_read_dotenv_bare");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let env_path = dir.join(".env");
         std::fs::write(&env_path, "MURK_KEY=AGE-SECRET-KEY-1XYZ\n").unwrap();
@@ -426,7 +436,9 @@ mod tests {
 
     #[test]
     fn read_key_from_dotenv_missing_file() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_read_dotenv_missing");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
@@ -440,7 +452,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_true() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_has_key_true");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env"), "MURK_KEY=test\n").unwrap();
 
@@ -454,7 +468,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_false() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_has_key_false");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".env"), "OTHER=val\n").unwrap();
 
@@ -468,7 +484,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_no_file() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_has_key_nofile");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
@@ -481,7 +499,9 @@ mod tests {
 
     #[test]
     fn write_key_to_dotenv_creates_new() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_write_key_new");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
@@ -497,7 +517,9 @@ mod tests {
 
     #[test]
     fn write_key_to_dotenv_replaces_existing() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_write_key_replace");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(".env"),
@@ -521,7 +543,9 @@ mod tests {
 
     #[test]
     fn write_envrc_creates_new() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_envrc_new");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
         let original_dir = std::env::current_dir().unwrap();
@@ -538,7 +562,9 @@ mod tests {
 
     #[test]
     fn write_envrc_appends() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_envrc_append");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".envrc"), "existing content\n").unwrap();
 
@@ -557,7 +583,9 @@ mod tests {
 
     #[test]
     fn write_envrc_already_present() {
+        let _cwd = CWD_LOCK.lock().unwrap();
         let dir = std::env::temp_dir().join("murk_test_envrc_present");
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(".envrc"),
