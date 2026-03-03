@@ -1,6 +1,9 @@
 //! Vault info/introspection logic.
 
-use crate::{codename, crypto, decrypt_value, types};
+use crate::{codename, crypto, types};
+
+/// Number of pubkey characters to show when a display name is unavailable.
+const PUBKEY_DISPLAY_LEN: usize = 12;
 
 /// A single key entry in the vault info output.
 #[derive(Debug)]
@@ -52,8 +55,7 @@ pub fn vault_info(
     // Try to decrypt meta for recipient names.
     let meta_data = secret_key.and_then(|sk| {
         let identity = crypto::parse_identity(sk).ok()?;
-        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-        serde_json::from_slice::<types::Meta>(&plaintext).ok()
+        crate::decrypt_meta(&vault, &identity)
     });
 
     let entries = filtered
@@ -68,7 +70,8 @@ pub fn vault_info(
                             .keys()
                             .map(|pk| {
                                 meta.recipients.get(pk).cloned().unwrap_or_else(|| {
-                                    pk.chars().take(12).collect::<String>() + "\u{2026}"
+                                    pk.chars().take(PUBKEY_DISPLAY_LEN).collect::<String>()
+                                        + "\u{2026}"
                                 })
                             })
                             .collect()
@@ -105,7 +108,7 @@ mod tests {
 
     fn test_vault_bytes(schema: BTreeMap<String, types::SchemaEntry>) -> Vec<u8> {
         let vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-01-01T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: "https://github.com/test/repo".into(),

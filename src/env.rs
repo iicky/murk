@@ -10,6 +10,14 @@ use age::secrecy::SecretString;
 /// Keys to skip when importing from a .env file.
 const IMPORT_SKIP: &[&str] = &["MURK_KEY", "MURK_KEY_FILE", "MURK_VAULT"];
 
+/// File mode for `.env`: owner read/write only.
+#[cfg(unix)]
+const SECRET_FILE_MODE: u32 = 0o600;
+
+/// Bitmask for group/other permission bits.
+#[cfg(unix)]
+const WORLD_READABLE_MASK: u32 = 0o077;
+
 /// Resolve the secret key from `MURK_KEY` or `MURK_KEY_FILE`.
 /// `MURK_KEY` takes priority; `MURK_KEY_FILE` reads the key from a file.
 /// Returns the key wrapped in `SecretString` so it is zeroized on drop.
@@ -75,7 +83,7 @@ pub fn warn_env_permissions() {
             && let Ok(meta) = fs::metadata(env_path)
         {
             let mode = meta.permissions().mode();
-            if mode & 0o077 != 0 {
+            if mode & WORLD_READABLE_MASK != 0 {
                 eprintln!(
                     "\x1b[1;33mwarning:\x1b[0m .env is readable by others (mode {:o}). Run: \x1b[1mchmod 600 .env\x1b[0m",
                     mode & 0o777
@@ -144,7 +152,7 @@ pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(env_path, fs::Permissions::from_mode(0o600))
+        fs::set_permissions(env_path, fs::Permissions::from_mode(SECRET_FILE_MODE))
             .map_err(|e| format!("chmod .env: {e}"))?;
     }
 

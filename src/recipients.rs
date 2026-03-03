@@ -1,6 +1,6 @@
 //! Recipient management: authorize, revoke, and list vault recipients.
 
-use crate::{crypto, decrypt_value, types};
+use crate::{crypto, types};
 
 /// A single recipient entry with resolved display info.
 #[derive(Debug)]
@@ -18,8 +18,7 @@ pub fn list_recipients(vault: &types::Vault, secret_key: Option<&str>) -> Vec<Re
     let meta_data = secret_key.filter(|k| !k.is_empty()).and_then(|sk| {
         let identity = crypto::parse_identity(sk).ok()?;
         let my_pubkey = identity.to_public().to_string();
-        let plaintext = decrypt_value(&vault.meta, &identity).ok()?;
-        let meta: types::Meta = serde_json::from_slice(&plaintext).ok()?;
+        let meta = crate::decrypt_meta(vault, &identity)?;
         Some((meta, my_pubkey))
     });
 

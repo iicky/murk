@@ -528,29 +528,20 @@ pub fn run_merge_driver(base: &str, ours: &str, theirs: &str) -> Result<MergeDri
 /// recomputes the MAC, and re-encrypts. Falls back to `ours.meta` if
 /// MURK_KEY is unavailable.
 pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Option<String> {
-    use crate::{compute_mac, crypto, decrypt_value, encrypt_value, resolve_key, types};
+    use crate::{compute_mac, crypto, decrypt_meta, encrypt_value, parse_recipients, resolve_key};
     use age::secrecy::ExposeSecret;
     use std::collections::HashMap;
 
     let secret_key = resolve_key().ok()?;
     let identity = crypto::parse_identity(secret_key.expose_secret()).ok()?;
 
-    // Decrypt both sides' meta for name maps.
-    let ours_meta: types::Meta = decrypt_value(&ours.meta, &identity)
-        .ok()
-        .and_then(|p| serde_json::from_slice(&p).ok())
-        .unwrap_or_else(|| types::Meta {
-            recipients: HashMap::new(),
-            mac: String::new(),
-        });
+    let default_meta = || crate::types::Meta {
+        recipients: HashMap::new(),
+        mac: String::new(),
+    };
 
-    let theirs_meta: types::Meta = decrypt_value(&theirs.meta, &identity)
-        .ok()
-        .and_then(|p| serde_json::from_slice(&p).ok())
-        .unwrap_or_else(|| types::Meta {
-            recipients: HashMap::new(),
-            mac: String::new(),
-        });
+    let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
+    let theirs_meta = decrypt_meta(theirs, &identity).unwrap_or_else(default_meta);
 
     // Merge name maps: union, ours wins on conflict.
     let mut names = theirs_meta.recipients;
@@ -562,16 +553,12 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     names.retain(|pk, _| merged.recipients.contains(pk));
 
     let mac = compute_mac(merged);
-    let meta = types::Meta {
+    let meta = crate::types::Meta {
         recipients: names,
         mac,
     };
 
-    let recipients: Vec<age::x25519::Recipient> = merged
-        .recipients
-        .iter()
-        .filter_map(|pk| crypto::parse_recipient(pk).ok())
-        .collect();
+    let recipients = parse_recipients(&merged.recipients).ok()?;
 
     if recipients.is_empty() {
         return None;
@@ -586,7 +573,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SchemaEntry, SecretEntry, Vault};
+    use crate::types::{SchemaEntry, SecretEntry, VAULT_VERSION, Vault};
     use std::collections::BTreeMap;
 
     fn base_vault() -> Vault {
@@ -610,7 +597,7 @@ mod tests {
         );
 
         Vault {
-            version: "2.0".into(),
+            version: VAULT_VERSION.into(),
             created: "2026-01-01T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),

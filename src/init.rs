@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::process::Command;
 
-use crate::{crypto, decrypt_value, encrypt_value, now_utc, types};
+use crate::{crypto, encrypt_value, now_utc, types};
 
 /// A key discovered from the environment or .env file.
 #[derive(Debug)]
@@ -55,9 +55,7 @@ pub fn check_init_status(vault: &types::Vault, secret_key: &str) -> Result<InitS
     let authorized = vault.recipients.contains(&pubkey);
 
     let display_name = if authorized {
-        decrypt_value(&vault.meta, &identity)
-            .ok()
-            .and_then(|plaintext| serde_json::from_slice::<types::Meta>(&plaintext).ok())
+        crate::decrypt_meta(vault, &identity)
             .and_then(|meta| meta.recipients.get(&pubkey).cloned())
             .filter(|name| !name.is_empty())
     } else {
@@ -99,7 +97,7 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
         .unwrap_or_default();
 
     Ok(types::Vault {
-        version: "2.0".into(),
+        version: types::VAULT_VERSION.into(),
         created: now_utc(),
         vault_name: vault_name.into(),
         repo,
@@ -244,7 +242,7 @@ mod tests {
         let (_, pubkey) = generate_keypair();
 
         let vault = create_vault(".murk", &pubkey, "Bob").unwrap();
-        assert_eq!(vault.version, "2.0");
+        assert_eq!(vault.version, types::VAULT_VERSION);
         assert_eq!(vault.vault_name, ".murk");
         assert_eq!(vault.recipients, vec![pubkey]);
         assert!(vault.schema.is_empty());

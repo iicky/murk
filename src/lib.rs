@@ -24,7 +24,6 @@ pub mod export;
 pub mod git;
 pub mod info;
 pub mod init;
-pub mod integrity;
 pub mod merge;
 pub mod recipients;
 pub mod recovery;
@@ -59,6 +58,26 @@ use std::path::Path;
 
 use age::secrecy::ExposeSecret;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+
+/// Decrypt the meta blob from a vault, returning the deserialized Meta if possible.
+pub(crate) fn decrypt_meta(
+    vault: &types::Vault,
+    identity: &age::x25519::Identity,
+) -> Option<types::Meta> {
+    if vault.meta.is_empty() {
+        return None;
+    }
+    let plaintext = decrypt_value(&vault.meta, identity).ok()?;
+    serde_json::from_slice(&plaintext).ok()
+}
+
+/// Parse a list of pubkey strings into age recipients.
+pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<age::x25519::Recipient>, String> {
+    pubkeys
+        .iter()
+        .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
+        .collect()
+}
 
 /// Encrypt a value and return base64-encoded ciphertext.
 pub fn encrypt_value(
@@ -105,7 +124,7 @@ pub fn load_vault(
         values.insert(key.clone(), value);
     }
 
-    // Decrypt our own scoped (mote) values.
+    // Decrypt our scoped (mote) overrides.
     let mut scoped = HashMap::new();
     for (key, entry) in &vault.secrets {
         if let Some(encoded) = entry.scoped.get(&pubkey) {
@@ -121,16 +140,7 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let recipients = if vault.meta.is_empty() {
-        HashMap::new()
-    } else if let Ok(plaintext) = decrypt_value(&vault.meta, &identity) {
-        let meta: types::Meta =
-            serde_json::from_slice(&plaintext).unwrap_or_else(|_| types::Meta {
-                recipients: HashMap::new(),
-                mac: String::new(),
-            });
-
-        // Validate MAC if present.
+    let recipients = if let Some(meta) = decrypt_meta(&vault, &identity) {
         if !meta.mac.is_empty() {
             let expected = compute_mac(&vault);
             if meta.mac != expected {
@@ -140,7 +150,6 @@ pub fn load_vault(
                 ));
             }
         }
-
         meta.recipients
     } else {
         HashMap::new()
@@ -163,11 +172,7 @@ pub fn save_vault(
     original: &types::Murk,
     current: &types::Murk,
 ) -> Result<(), String> {
-    let recipients: Vec<age::x25519::Recipient> = vault
-        .recipients
-        .iter()
-        .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let recipients = parse_recipients(&vault.recipients)?;
 
     // Check if recipient list changed — forces full re-encryption of shared values.
     let recipients_changed = {
@@ -243,7 +248,7 @@ pub fn save_vault(
 
 /// Compute an integrity MAC over the vault's secrets and schema.
 /// Covers: sorted key names, encrypted shared values, recipient pubkeys.
-pub fn compute_mac(vault: &types::Vault) -> String {
+pub(crate) fn compute_mac(vault: &types::Vault) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -280,7 +285,7 @@ pub fn compute_mac(vault: &types::Vault) -> String {
 }
 
 /// Generate an ISO-8601 UTC timestamp.
-pub fn now_utc() -> String {
+pub(crate) fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
@@ -342,7 +347,7 @@ mod tests {
     #[test]
     fn compute_mac_deterministic() {
         let vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -361,7 +366,7 @@ mod tests {
     #[test]
     fn compute_mac_changes_with_different_secrets() {
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -388,7 +393,7 @@ mod tests {
     #[test]
     fn compute_mac_changes_with_different_recipients() {
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -416,7 +421,7 @@ mod tests {
 
         let shared = encrypt_value(b"original", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -469,7 +474,7 @@ mod tests {
 
         let shared = encrypt_value(b"val1", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -515,7 +520,7 @@ mod tests {
         let path = dir.join("test.murk");
 
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -573,7 +578,7 @@ mod tests {
 
         let shared = encrypt_value(b"val1", &[recipient1.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -630,7 +635,7 @@ mod tests {
 
         let shared = encrypt_value(b"shared_val", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -697,7 +702,7 @@ mod tests {
 
         // Build a vault with one secret, save it (computes valid MAC).
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -756,7 +761,7 @@ mod tests {
         let path = dir.join("test.murk");
 
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),

@@ -47,7 +47,7 @@ echo 'eval $(murk export)' > .envrc
 
 ## How it works
 
-Your `.murk` file has a plaintext header (key names, descriptions — no values) and encrypted blobs. Anyone can see what secrets exist via `murk info`. Only recipients with a valid `MURK_KEY` can see values.
+Your `.murk` file has a plaintext header (key names, descriptions — no values) and encrypted values. Anyone can see what secrets exist via `murk info`. Only recipients with a valid `MURK_KEY` can see values.
 
 ```bash
 murk info           # Public schema — works without a key
@@ -62,7 +62,7 @@ murk has two layers of encryption inside the `.murk` file:
 
 **Shared secrets** (the murk) are encrypted to all recipients. When you run `murk add KEY`, every authorized team member can decrypt it. This is where production credentials, API keys, and other team-wide secrets live.
 
-**Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --scoped`, the value is stored in a personal blob that no one else can read. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
+**Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --scoped`, the value is encrypted to only your key in the vault. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
 
 ```bash
 # Shared — everyone sees this
@@ -146,7 +146,7 @@ murk restore "witch collapse practice feed shame open despair creek ..."
 
 - **age does the crypto** — no custom cryptography
 - **Git is the audit trail** — murk doesn't replicate what git does
-- **Header is public, blob is private** — key names are visible, values are not
+- **Header is public, values are private** — key names are visible, values are not
 - **Explicit over magic** — never silently overwrites or destroys data
 
 See [SPEC.md](SPEC.md) for the full specification.

@@ -54,7 +54,7 @@ pub fn write(path: &Path, vault: &Vault) -> Result<(), VaultError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SchemaEntry, SecretEntry};
+    use crate::types::{SchemaEntry, SecretEntry, VAULT_VERSION};
     use std::collections::BTreeMap;
 
     fn test_vault() -> Vault {
@@ -69,7 +69,7 @@ mod tests {
         );
 
         Vault {
-            version: "2.0".into(),
+            version: VAULT_VERSION.into(),
             created: "2026-02-27T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -98,7 +98,7 @@ mod tests {
         write(&path, &vault).unwrap();
         let read_vault = read(&path).unwrap();
 
-        assert_eq!(read_vault.version, "2.0");
+        assert_eq!(read_vault.version, VAULT_VERSION);
         assert_eq!(read_vault.recipients[0], "age1test");
         assert!(read_vault.schema.contains_key("DATABASE_URL"));
         assert!(read_vault.secrets.contains_key("DATABASE_URL"));
@@ -170,7 +170,7 @@ mod tests {
         let json = serde_json::to_string(&test_vault()).unwrap();
         let result = parse(&json);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().version, "2.0");
+        assert_eq!(result.unwrap().version, VAULT_VERSION);
     }
 
     #[test]

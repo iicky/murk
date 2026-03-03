@@ -5,6 +5,13 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+/// The `.gitattributes` line that enables the merge driver.
+const GITATTRIBUTES_LINE: &str = "*.murk merge=murk";
+
+/// Git config keys for the merge driver.
+const GIT_CONFIG_MERGE_NAME: &str = "merge.murk.name";
+const GIT_CONFIG_MERGE_DRIVER: &str = "merge.murk.driver";
+
 /// A step completed during merge driver setup.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeDriverSetupStep {
@@ -29,7 +36,7 @@ pub fn setup_merge_driver() -> Result<Vec<MergeDriverSetupStep>, String> {
 
     // 1. Write .gitattributes entry.
     let gitattributes = Path::new(".gitattributes");
-    let merge_line = "*.murk merge=murk";
+    let merge_line = GITATTRIBUTES_LINE;
 
     if gitattributes.exists() {
         let contents = fs::read_to_string(gitattributes)
@@ -52,8 +59,8 @@ pub fn setup_merge_driver() -> Result<Vec<MergeDriverSetupStep>, String> {
 
     // 2. Configure git merge driver.
     let configs = [
-        ("merge.murk.name", "murk vault merge"),
-        ("merge.murk.driver", "murk merge-driver %O %A %B"),
+        (GIT_CONFIG_MERGE_NAME, "murk vault merge"),
+        (GIT_CONFIG_MERGE_DRIVER, "murk merge-driver %O %A %B"),
     ];
     for (key, value) in &configs {
         let status = Command::new("git")

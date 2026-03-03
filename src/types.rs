@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+/// Current vault format version.
+pub const VAULT_VERSION: &str = "2.0";
+
 // -- Vault (on-disk format, v2) --
 // The entire .murk file is a single JSON document with per-value encryption.
 // Key names and schema are plaintext. Values are individually age-encrypted.

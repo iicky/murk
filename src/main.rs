@@ -11,6 +11,17 @@ use age::secrecy::ExposeSecret;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
+/// Print an error message and exit with the given code.
+fn die(msg: &dyn std::fmt::Display, code: i32) -> ! {
+    eprintln!("{} {msg}", "error:".red().bold());
+    process::exit(code);
+}
+
+/// Unwrap a result or print the error and exit with code 1.
+fn try_or_die<T>(result: Result<T, impl std::fmt::Display>) -> T {
+    result.unwrap_or_else(|e| die(&e, 1))
+}
+
 /// Encrypted secrets manager for developers.
 #[derive(Parser)]
 #[command(name = "murk", version, about)]
@@ -54,7 +65,7 @@ enum Command {
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
-        /// Store in personal blob only (scoped to your key)
+        /// Encrypt to only your key (scoped override)
         #[arg(long)]
         scoped: bool,
         /// Tag for grouping (repeatable)
@@ -148,7 +159,7 @@ enum Command {
     Authorize {
         /// Recipient's age public key
         pubkey: String,
-        /// Optional display name (stored in encrypted blob only)
+        /// Optional display name (stored in encrypted meta)
         name: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
@@ -234,13 +245,7 @@ fn prompt(label: &str, default: Option<&str>) -> String {
 /// Returns (secret_key, pubkey).
 fn generate_and_write_key() -> (String, String) {
     eprintln!("{}", "Generating keypair...".dimmed());
-    let (phrase, secret_key, pubkey) = match recovery::generate() {
-        Ok(result) => result,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let (phrase, secret_key, pubkey) = try_or_die(recovery::generate());
 
     // Check .env for existing MURK_KEY.
     if murk_cli::dotenv_has_murk_key() {
@@ -256,10 +261,7 @@ fn generate_and_write_key() -> (String, String) {
 
     // Write MURK_KEY to .env (replaces existing, sets chmod 600).
     eprintln!("{}", "Writing MURK_KEY to .env...".dimmed());
-    if let Err(e) = murk_cli::write_key_to_dotenv(&secret_key) {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    }
+    try_or_die(murk_cli::write_key_to_dotenv(&secret_key));
 
     // Print recovery phrase.
     eprintln!();
@@ -285,27 +287,18 @@ fn cmd_init(vault_name: &str) {
 
     // If vault already exists, handle onboarding flow.
     if vault_path.exists() {
-        let vault = match vault::read(vault_path) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("{} {e}", "error:".red().bold());
-                process::exit(1);
-            }
-        };
+        let vault = try_or_die(vault::read(vault_path));
 
         eprintln!("{vault_name} already exists");
 
         // Try to find an existing key: env var first, then .env file.
-        let (secret_key, pubkey) = match murk_cli::discover_existing_key() {
-            Ok(Some(dk)) => (Some(dk.secret_key), dk.pubkey),
-            Ok(None) => {
+        let dk = try_or_die(murk_cli::discover_existing_key());
+        let (secret_key, pubkey) = match dk {
+            Some(dk) => (Some(dk.secret_key), dk.pubkey),
+            None => {
                 let (_secret_key, pubkey) = generate_and_write_key();
                 eprintln!();
                 (None, pubkey)
-            }
-            Err(e) => {
-                eprintln!("{} {e}", "error:".red().bold());
-                process::exit(1);
             }
         };
 
@@ -354,24 +347,13 @@ fn cmd_init(vault_name: &str) {
     // Prompt for display name.
     let name = prompt("Enter your name or email", None);
     if name.is_empty() {
-        eprintln!("{} name is required", "error:".red().bold());
-        process::exit(1);
+        die(&"name is required", 1);
     }
 
     let (_secret_key, pubkey) = generate_and_write_key();
 
-    let v = match murk_cli::create_vault(vault_name, &pubkey, &name) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
-    if let Err(e) = vault::write(vault_path, &v) {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    }
+    let v = try_or_die(murk_cli::create_vault(vault_name, &pubkey, &name));
+    try_or_die(vault::write(vault_path, &v));
 
     eprintln!();
     eprintln!(
@@ -383,18 +365,12 @@ fn cmd_init(vault_name: &str) {
 }
 
 fn resolve_key() -> age::secrecy::SecretString {
-    murk_cli::resolve_key().unwrap_or_else(|e| {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    })
+    try_or_die(murk_cli::resolve_key())
 }
 
 fn load_vault(vault: &str) -> (types::Vault, types::Murk, age::x25519::Identity) {
     murk_cli::warn_env_permissions();
-    murk_cli::load_vault(vault).unwrap_or_else(|e| {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    })
+    try_or_die(murk_cli::load_vault(vault))
 }
 
 fn save_vault(
@@ -403,10 +379,7 @@ fn save_vault(
     original: &types::Murk,
     current: &types::Murk,
 ) {
-    murk_cli::save_vault(vault_path, vault, original, current).unwrap_or_else(|e| {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    });
+    try_or_die(murk_cli::save_vault(vault_path, vault, original, current));
 }
 
 /// Resolve the secret value from stdin pipe or interactive prompt.
@@ -416,14 +389,13 @@ fn resolve_value(key: &str) -> String {
     if !stdin.is_terminal() {
         // Piped input: `echo "secret" | murk add KEY`
         let mut buf = String::new();
-        stdin.lock().read_to_string(&mut buf).unwrap_or_else(|e| {
-            eprintln!("{} reading stdin: {e}", "error:".red().bold());
-            process::exit(1);
-        });
+        stdin
+            .lock()
+            .read_to_string(&mut buf)
+            .unwrap_or_else(|e| die(&format_args!("reading stdin: {e}"), 1));
         let trimmed = buf.trim_end_matches('\n').to_string();
         if trimmed.is_empty() {
-            eprintln!("{} empty value from stdin", "error:".red().bold());
-            process::exit(1);
+            die(&"empty value from stdin", 1);
         }
         return trimmed;
     }
@@ -432,12 +404,11 @@ fn resolve_value(key: &str) -> String {
     eprint!("value for {key}: ");
     io::stderr().flush().ok();
     let password = rpassword::read_password().unwrap_or_else(|e| {
-        eprintln!("\n{} reading input: {e}", "error:".red().bold());
-        process::exit(1);
+        eprintln!();
+        die(&format_args!("reading input: {e}"), 1);
     });
     if password.is_empty() {
-        eprintln!("{} empty value", "error:".red().bold());
-        process::exit(1);
+        die(&"empty value", 1);
     }
     password
 }
@@ -479,13 +450,8 @@ fn cmd_add(
 }
 
 fn cmd_import(file: &str, vault_path: &str) {
-    let contents = match fs::read_to_string(file) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{} cannot read {file}: {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let contents = fs::read_to_string(file)
+        .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1));
 
     let pairs = murk_cli::parse_env(&contents);
 
@@ -531,25 +497,20 @@ fn cmd_get(key: &str, vault_path: &str) {
     if let Some(value) = murk_cli::get_secret(&murk, key, &pubkey) {
         println!("{value}");
     } else {
-        eprintln!(
-            "{} key not found: {}. Run {} to see available keys",
-            "error:".red().bold(),
-            key.bold(),
-            "murk ls".bold()
+        die(
+            &format_args!(
+                "key not found: {}. Run {} to see available keys",
+                key.bold(),
+                "murk ls".bold()
+            ),
+            1,
         );
-        process::exit(1);
     }
 }
 
 fn cmd_ls(tags: &[String], vault_path: &str) {
     let path = Path::new(vault_path);
-    let vault = match vault::read(path) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let vault = try_or_die(vault::read(path));
 
     for key in murk_cli::list_keys(&vault, tags) {
         println!("{key}");
@@ -598,8 +559,7 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
             .args(args)
             .envs(&secrets)
             .exec();
-        eprintln!("{} {err}", "error:".red().bold());
-        process::exit(1);
+        die(&err, 1);
     }
 
     #[cfg(not(unix))]
@@ -608,10 +568,7 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
             .args(args)
             .envs(&secrets)
             .status()
-            .unwrap_or_else(|e| {
-                eprintln!("{} {e}", "error:".red().bold());
-                process::exit(1);
-            });
+            .unwrap_or_else(|e| die(&e, 1));
         process::exit(status.code().unwrap_or(1));
     }
 }
@@ -638,38 +595,20 @@ fn cmd_env(vault: &str) {
                 "direnv allow".bold()
             );
         }
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
+        Err(e) => die(&e, 1),
     }
 }
 
 fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
-    let base_contents = fs::read_to_string(base_path).unwrap_or_else(|e| {
-        eprintln!("{} reading base {base_path}: {e}", "error:".red().bold());
-        process::exit(2);
-    });
-    let ours_contents = fs::read_to_string(ours_path).unwrap_or_else(|e| {
-        eprintln!("{} reading ours {ours_path}: {e}", "error:".red().bold());
-        process::exit(2);
-    });
-    let theirs_contents = fs::read_to_string(theirs_path).unwrap_or_else(|e| {
-        eprintln!(
-            "{} reading theirs {theirs_path}: {e}",
-            "error:".red().bold()
-        );
-        process::exit(2);
-    });
+    let base_contents = fs::read_to_string(base_path)
+        .unwrap_or_else(|e| die(&format_args!("reading base {base_path}: {e}"), 2));
+    let ours_contents = fs::read_to_string(ours_path)
+        .unwrap_or_else(|e| die(&format_args!("reading ours {ours_path}: {e}"), 2));
+    let theirs_contents = fs::read_to_string(theirs_path)
+        .unwrap_or_else(|e| die(&format_args!("reading theirs {theirs_path}: {e}"), 2));
 
-    let output = match murk_cli::run_merge_driver(&base_contents, &ours_contents, &theirs_contents)
-    {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(2);
-        }
-    };
+    let output = murk_cli::run_merge_driver(&base_contents, &ours_contents, &theirs_contents)
+        .unwrap_or_else(|e| die(&e, 2));
 
     if !output.meta_regenerated {
         eprintln!(
@@ -679,10 +618,8 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
     }
 
     // Write merged result to ours path (%A).
-    if let Err(e) = vault::write(Path::new(ours_path), &output.result.vault) {
-        eprintln!("{} writing merged vault: {e}", "error:".red().bold());
-        process::exit(2);
-    }
+    vault::write(Path::new(ours_path), &output.result.vault)
+        .unwrap_or_else(|e| die(&format_args!("writing merged vault: {e}"), 2));
 
     if output.result.conflicts.is_empty() {
         eprintln!("{} vault merged cleanly", "ok:".green().bold());
@@ -706,13 +643,7 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
 }
 
 fn cmd_setup_merge_driver() {
-    let steps = match murk_cli::setup_merge_driver() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let steps = try_or_die(murk_cli::setup_merge_driver());
 
     for step in &steps {
         match step {
@@ -747,10 +678,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
     let output = process::Command::new("git")
         .args(["show", &format!("{git_ref}:{vault_path}")])
         .output()
-        .unwrap_or_else(|e| {
-            eprintln!("{} running git: {e}", "error:".red().bold());
-            process::exit(1);
-        });
+        .unwrap_or_else(|e| die(&format_args!("running git: {e}"), 1));
 
     let old_values: HashMap<String, String> = if output.status.success() {
         let old_contents = String::from_utf8_lossy(&output.stdout);
@@ -769,10 +697,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                 }
                 values
             }
-            Err(e) => {
-                eprintln!("{} parsing vault at {git_ref}: {e}", "error:".red().bold());
-                process::exit(1);
-            }
+            Err(e) => die(&format_args!("parsing vault at {git_ref}: {e}"), 1),
         }
     } else {
         HashMap::new()
@@ -833,10 +758,12 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
     let original = murk.clone();
     let mut current = murk;
 
-    if let Err(e) = murk_cli::authorize_recipient(&mut vault, &mut current, pubkey, name) {
-        eprintln!("{} {e}", "error:".red().bold());
-        process::exit(1);
-    }
+    try_or_die(murk_cli::authorize_recipient(
+        &mut vault,
+        &mut current,
+        pubkey,
+        name,
+    ));
 
     save_vault(vault_path, &mut vault, &original, &current);
 
@@ -849,13 +776,11 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
     let original = murk.clone();
     let mut current = murk;
 
-    let result = match murk_cli::revoke_recipient(&mut vault, &mut current, recipient) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let result = try_or_die(murk_cli::revoke_recipient(
+        &mut vault,
+        &mut current,
+        recipient,
+    ));
 
     save_vault(vault_path, &mut vault, &original, &current);
 
@@ -885,13 +810,7 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
 
 fn cmd_recipients(vault_path: &str) {
     let path = Path::new(vault_path);
-    let vault = match vault::read(path) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let vault = try_or_die(vault::read(path));
 
     let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
     let entries = murk_cli::list_recipients(&vault, secret_key.as_deref());
@@ -924,49 +843,29 @@ fn cmd_restore(phrase: Option<&str>) {
     };
 
     if phrase.is_empty() {
-        eprintln!("{} recovery phrase is required", "error:".red().bold());
-        process::exit(1);
+        die(&"recovery phrase is required", 1);
     }
 
-    match recovery::recover(&phrase) {
-        Ok(key) => println!("{key}"),
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    }
+    println!("{}", try_or_die(recovery::recover(&phrase)));
 }
 
 fn cmd_recover() {
     let secret_key = resolve_key();
 
-    match recovery::phrase_from_key(secret_key.expose_secret()) {
-        Ok(phrase) => println!("{phrase}"),
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    }
+    println!(
+        "{}",
+        try_or_die(recovery::phrase_from_key(secret_key.expose_secret()))
+    );
 }
 
 fn cmd_info(tags: &[String], vault_path: &str) {
-    let raw_bytes = match fs::read(vault_path) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
-
+    let raw_bytes = fs::read(vault_path).unwrap_or_else(|e| die(&e, 1));
     let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
-
-    let info = match murk_cli::vault_info(&raw_bytes, tags, secret_key.as_deref()) {
-        Ok(i) => i,
-        Err(e) => {
-            eprintln!("{} {e}", "error:".red().bold());
-            process::exit(1);
-        }
-    };
+    let info = try_or_die(murk_cli::vault_info(
+        &raw_bytes,
+        tags,
+        secret_key.as_deref(),
+    ));
 
     // Display vault header.
     println!("{}: {}", "vault".dimmed(), info.vault_name.bold());
