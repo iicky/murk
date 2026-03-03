@@ -67,14 +67,14 @@ murk has two layers of encryption inside the `.murk` file:
 **Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --scoped`, the value is encrypted to only your key in the vault. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
 
 ```bash
-# Shared — everyone sees this
+# Shared — everyone sees this (prompts for value, hidden input)
 murk add DATABASE_URL
 
 # Scoped — only you see this, overrides the shared value during export
 murk add DATABASE_URL --scoped
 
-# Or pipe for scripting
-echo "postgres://prod:pass@host/db" | murk add DATABASE_URL
+# Or pipe for scripting (use a command that doesn't leak to shell history)
+pbpaste | murk add DATABASE_URL
 ```
 
 ## Teams
@@ -82,7 +82,7 @@ echo "postgres://prod:pass@host/db" | murk add DATABASE_URL
 ```bash
 # Alice sets up the vault
 murk init
-echo "postgres://prod/db" | murk add DATABASE_URL
+murk add DATABASE_URL
 
 # Bob generates his own key
 murk init
@@ -94,7 +94,7 @@ murk authorize age1bob... bob@example.com
 murk export
 
 # Bob overrides a value for local dev
-echo "postgres://localhost/dev" | murk add DATABASE_URL --scoped
+murk add DATABASE_URL --scoped
 ```
 
 <p align="center">
@@ -107,7 +107,7 @@ When someone leaves, revoke their access and rotate the secrets:
 
 ```bash
 murk revoke carol
-murk add DATABASE_URL    # re-encrypt with new value
+murk add DATABASE_URL    # prompts for new value
 murk add API_KEY
 git commit -am "revoke carol, rotate secrets" && git push
 ```
@@ -121,8 +121,8 @@ git commit -am "revoke carol, rotate secrets" && git push
 Your key is a BIP39 mnemonic. `murk init` prints 24 recovery words — write them down.
 
 ```bash
-# Lost your key? Recover it from the phrase
-murk restore "witch collapse practice feed shame open despair creek ..."
+# Lost your key? Recover it (prompts for phrase, hidden input)
+murk restore
 ```
 
 ## Commands
@@ -152,6 +152,10 @@ murk restore "witch collapse practice feed shame open despair creek ..."
 - **Explicit over magic** — never silently overwrites or destroys data
 
 See [SPEC.md](SPEC.md) for the full specification.
+
+## Security notes
+
+`murk add` and `murk restore` prompt interactively with hidden input — prefer these over passing secrets as arguments or via `echo`, which can leak to shell history. When piping from scripts, use commands that don't record to history (e.g. `pbpaste | murk add KEY` or reading from a file).
 
 ## License
 
