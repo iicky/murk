@@ -124,36 +124,44 @@ pub fn dotenv_has_murk_key() -> bool {
 }
 
 /// Write a MURK_KEY to `.env`, removing any existing MURK_KEY lines.
-/// Sets file permissions to 600 on Unix.
+/// On Unix, sets file permissions to 600 atomically at creation time to
+/// prevent a TOCTOU window where the secret key is world-readable.
+/// On non-Unix platforms, permissions are not hardened.
 pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
     let env_path = Path::new(".env");
 
-    // Remove existing MURK_KEY line(s) if file exists.
-    if env_path.exists() {
+    // Read existing content (minus any MURK_KEY lines).
+    let existing = if env_path.exists() {
         let contents = fs::read_to_string(env_path).map_err(|e| format!("reading .env: {e}"))?;
         let filtered: Vec<&str> = contents
             .lines()
             .filter(|l| !l.starts_with("MURK_KEY=") && !l.starts_with("export MURK_KEY="))
             .collect();
-        fs::write(env_path, filtered.join("\n") + "\n")
+        filtered.join("\n") + "\n"
+    } else {
+        String::new()
+    };
+
+    let full_content = format!("{existing}export MURK_KEY={secret_key}\n");
+
+    // Write the file with restricted permissions from the start (Unix).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(SECRET_FILE_MODE)
+            .open(env_path)
+            .map_err(|e| format!("opening .env: {e}"))?;
+        file.write_all(full_content.as_bytes())
             .map_err(|e| format!("writing .env: {e}"))?;
     }
 
-    // Append MURK_KEY.
-    let mut env_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(env_path)
-        .map_err(|e| format!("opening .env: {e}"))?;
-    writeln!(env_file, "export MURK_KEY={secret_key}").map_err(|e| format!("writing .env: {e}"))?;
-    drop(env_file);
-
-    // Restrict to owner-only.
-    #[cfg(unix)]
+    #[cfg(not(unix))]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(env_path, fs::Permissions::from_mode(SECRET_FILE_MODE))
-            .map_err(|e| format!("chmod .env: {e}"))?;
+        fs::write(env_path, &full_content).map_err(|e| format!("writing .env: {e}"))?;
     }
 
     Ok(())
@@ -557,6 +565,41 @@ mod tests {
         assert!(contents.contains("export MURK_KEY=AGE-SECRET-KEY-1REPLACED"));
         assert!(!contents.contains("MURK_KEY=old"));
         assert!(!contents.contains("also_old"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_key_to_dotenv_permissions_are_600() {
+        let _cwd = CWD_LOCK.lock().unwrap();
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("murk_test_write_key_perms");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        // Create new .env — should be 0o600 from the start.
+        write_key_to_dotenv("AGE-SECRET-KEY-1PERMTEST").unwrap();
+        let meta = std::fs::metadata(dir.join(".env")).unwrap();
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            SECRET_FILE_MODE,
+            "new .env should be created with mode 600"
+        );
+
+        // Replace existing — should still be 0o600.
+        write_key_to_dotenv("AGE-SECRET-KEY-1PERMTEST2").unwrap();
+        let meta = std::fs::metadata(dir.join(".env")).unwrap();
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            SECRET_FILE_MODE,
+            "rewritten .env should maintain mode 600"
+        );
 
         std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
