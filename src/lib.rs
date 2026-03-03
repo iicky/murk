@@ -22,6 +22,7 @@ pub mod crypto;
 pub mod env;
 pub mod export;
 pub mod git;
+pub mod github;
 pub mod info;
 pub mod init;
 pub mod merge;
@@ -45,6 +46,7 @@ pub use export::{
     parse_and_decrypt_values, resolve_secrets,
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
+pub use github::{GitHubError, fetch_keys};
 pub use info::{InfoEntry, VaultInfo, vault_info};
 pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
@@ -59,10 +61,13 @@ use std::path::Path;
 use age::secrecy::ExposeSecret;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
+// Re-export polymorphic types for consumers.
+pub use crypto::{MurkIdentity, MurkRecipient};
+
 /// Decrypt the meta blob from a vault, returning the deserialized Meta if possible.
 pub(crate) fn decrypt_meta(
     vault: &types::Vault,
-    identity: &age::x25519::Identity,
+    identity: &crypto::MurkIdentity,
 ) -> Option<types::Meta> {
     if vault.meta.is_empty() {
         return None;
@@ -71,8 +76,8 @@ pub(crate) fn decrypt_meta(
     serde_json::from_slice(&plaintext).ok()
 }
 
-/// Parse a list of pubkey strings into age recipients.
-pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<age::x25519::Recipient>, String> {
+/// Parse a list of pubkey strings into recipients (age or SSH).
+pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<crypto::MurkRecipient>, String> {
     pubkeys
         .iter()
         .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
@@ -82,14 +87,14 @@ pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<age::x25519::Re
 /// Encrypt a value and return base64-encoded ciphertext.
 pub fn encrypt_value(
     plaintext: &[u8],
-    recipients: &[age::x25519::Recipient],
+    recipients: &[crypto::MurkRecipient],
 ) -> Result<String, String> {
     let ciphertext = crypto::encrypt(plaintext, recipients).map_err(|e| e.to_string())?;
     Ok(BASE64.encode(&ciphertext))
 }
 
 /// Decrypt a base64-encoded ciphertext and return plaintext bytes.
-pub fn decrypt_value(encoded: &str, identity: &age::x25519::Identity) -> Result<Vec<u8>, String> {
+pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<Vec<u8>, String> {
     let ciphertext = BASE64
         .decode(encoded)
         .map_err(|e| format!("invalid base64: {e}"))?;
@@ -101,17 +106,17 @@ pub fn decrypt_value(encoded: &str, identity: &age::x25519::Identity) -> Result<
 /// the decrypted murk, and the identity.
 pub fn load_vault(
     vault_path: &str,
-) -> Result<(types::Vault, types::Murk, age::x25519::Identity), String> {
+) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), String> {
     let path = Path::new(vault_path);
     let secret_key = resolve_key()?;
 
     let identity =
         crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
-            format!("invalid MURK_KEY (expected AGE-SECRET-KEY-1...): {e}. Run `murk restore` to recover from your 24-word phrase")
+            format!("invalid key: {e}. For age keys, set MURK_KEY. For SSH keys, set MURK_KEY_FILE=~/.ssh/id_ed25519")
         })?;
 
     let vault = vault::read(path).map_err(|e| e.to_string())?;
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity.pubkey_string().map_err(|e| e.to_string())?;
 
     // Decrypt shared values.
     let mut values = HashMap::new();

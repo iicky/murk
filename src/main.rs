@@ -1,4 +1,4 @@
-use murk_cli::{DiffKind, EnvrcStatus, MergeDriverSetupStep, recovery, types, vault};
+use murk_cli::{DiffKind, EnvrcStatus, MergeDriverSetupStep, MurkIdentity, recovery, types, vault};
 
 use std::collections::HashMap;
 use std::env;
@@ -157,7 +157,7 @@ enum Command {
 
     /// Add a recipient to the vault
     Authorize {
-        /// Recipient's age public key
+        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
         pubkey: String,
         /// Optional display name (stored in encrypted meta)
         name: Option<String>,
@@ -366,7 +366,7 @@ fn resolve_key() -> age::secrecy::SecretString {
     try_or_die(murk_cli::resolve_key())
 }
 
-fn load_vault(vault: &str) -> (types::Vault, types::Murk, age::x25519::Identity) {
+fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
     murk_cli::warn_env_permissions();
     try_or_die(murk_cli::load_vault(vault))
 }
@@ -490,7 +490,7 @@ fn cmd_rm(key: &str, vault_path: &str) {
 
 fn cmd_get(key: &str, vault_path: &str) {
     let (_vault, murk, identity) = load_vault(vault_path);
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     if let Some(value) = murk_cli::get_secret(&murk, key, &pubkey) {
         println!("{value}");
@@ -534,7 +534,7 @@ fn cmd_describe(
 
 fn cmd_export(tags: &[String], vault_path: &str) {
     let (vault, murk, identity) = load_vault(vault_path);
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
     for (k, escaped) in &exports {
@@ -544,7 +544,7 @@ fn cmd_export(tags: &[String], vault_path: &str) {
 
 fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
     let (vault, murk, identity) = load_vault(vault_path);
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
     let secrets = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
 
     let program = &command[0];
@@ -756,17 +756,74 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
     let original = murk.clone();
     let mut current = murk;
 
-    try_or_die(murk_cli::authorize_recipient(
-        &mut vault,
-        &mut current,
-        pubkey,
-        name,
-    ));
+    if let Some(username) = pubkey.strip_prefix("github:") {
+        // Fetch all SSH keys from GitHub.
+        let keys = try_or_die(murk_cli::fetch_keys(username).map_err(|e| e.to_string()));
 
-    save_vault(vault_path, &mut vault, &original, &current);
+        let display_name = format!("@{username}");
+        let mut added = 0;
+        let mut type_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
-    let display = name.unwrap_or(pubkey);
-    eprintln!("{} {}", "authorized".green(), display.bold());
+        for (_, key_string) in &keys {
+            // Skip keys already in the vault.
+            if vault.recipients.contains(key_string) {
+                continue;
+            }
+
+            try_or_die(murk_cli::authorize_recipient(
+                &mut vault,
+                &mut current,
+                key_string,
+                Some(&display_name),
+            ));
+
+            let key_type = murk_cli::github::key_type_label(key_string);
+            *type_counts.entry(key_type.to_string()).or_default() += 1;
+            added += 1;
+        }
+
+        if added == 0 {
+            eprintln!(
+                "{} all {} SSH keys for @{} are already authorized",
+                "ok:".green().bold(),
+                keys.len(),
+                username
+            );
+            return;
+        }
+
+        save_vault(vault_path, &mut vault, &original, &current);
+
+        // Build summary like "2 ssh-ed25519, 1 ssh-rsa".
+        let mut parts: Vec<String> = type_counts
+            .iter()
+            .map(|(t, n)| format!("{n} {t}"))
+            .collect();
+        parts.sort();
+        let summary = parts.join(", ");
+
+        eprintln!(
+            "{} {} ({} key{})",
+            "authorized".green(),
+            display_name.bold(),
+            summary,
+            if added == 1 { "" } else { "s" }
+        );
+    } else {
+        // Raw pubkey (age or SSH).
+        try_or_die(murk_cli::authorize_recipient(
+            &mut vault,
+            &mut current,
+            pubkey,
+            name,
+        ));
+
+        save_vault(vault_path, &mut vault, &original, &current);
+
+        let display = name.unwrap_or(pubkey);
+        eprintln!("{} {}", "authorized".green(), display.bold());
+    }
 }
 
 fn cmd_revoke(recipient: &str, vault_path: &str) {
@@ -856,6 +913,16 @@ fn cmd_restore(phrase: Option<&str>) {
 
 fn cmd_recover() {
     let secret_key = resolve_key();
+
+    // SSH keys don't have BIP39 recovery phrases — only age keys do.
+    let identity =
+        murk_cli::crypto::parse_identity(secret_key.expose_secret()).unwrap_or_else(|e| die(&e, 1));
+    if matches!(identity, MurkIdentity::Ssh(_)) {
+        die(
+            &"recovery phrases are for age keys only. SSH keys are managed by your SSH agent — back up ~/.ssh instead",
+            1,
+        );
+    }
 
     println!(
         "{}",

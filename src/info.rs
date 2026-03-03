@@ -1,6 +1,6 @@
 //! Vault info/introspection logic.
 
-use crate::{codename, crypto, types};
+use crate::{codename, types};
 
 /// Number of pubkey characters to show when a display name is unavailable.
 const PUBKEY_DISPLAY_LEN: usize = 12;
@@ -54,7 +54,7 @@ pub fn vault_info(
 
     // Try to decrypt meta for recipient names.
     let meta_data = secret_key.and_then(|sk| {
-        let identity = crypto::parse_identity(sk).ok()?;
+        let identity = crate::crypto::parse_identity(sk).ok()?;
         crate::decrypt_meta(&vault, &identity)
     });
 

@@ -67,7 +67,7 @@ pub fn export_secrets(
 /// a recipient at the time the vault was written). Returns a map of key → plaintext value.
 pub fn decrypt_vault_values(
     vault: &types::Vault,
-    identity: &age::x25519::Identity,
+    identity: &crate::crypto::MurkIdentity,
 ) -> HashMap<String, String> {
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
@@ -86,7 +86,7 @@ pub fn decrypt_vault_values(
 /// where the vault contents come from a string (e.g., `git show`).
 pub fn parse_and_decrypt_values(
     vault_contents: &str,
-    identity: &age::x25519::Identity,
+    identity: &crate::crypto::MurkIdentity,
 ) -> Result<HashMap<String, String>, String> {
     let vault = crate::vault::parse(vault_contents).map_err(|e| e.to_string())?;
     Ok(decrypt_vault_values(&vault, identity))

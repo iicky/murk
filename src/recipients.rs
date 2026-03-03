@@ -17,7 +17,7 @@ pub struct RecipientEntry {
 pub fn list_recipients(vault: &types::Vault, secret_key: Option<&str>) -> Vec<RecipientEntry> {
     let meta_data = secret_key.filter(|k| !k.is_empty()).and_then(|sk| {
         let identity = crypto::parse_identity(sk).ok()?;
-        let my_pubkey = identity.to_public().to_string();
+        let my_pubkey = identity.pubkey_string().ok()?;
         let meta = crate::decrypt_meta(vault, &identity)?;
         Some((meta, my_pubkey))
     });
