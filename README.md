@@ -116,6 +116,21 @@ git commit -am "revoke carol, rotate secrets" && git push
   <img src="https://raw.githubusercontent.com/iicky/murk/demo/offboard.gif" alt="murk offboarding demo" width="900">
 </p>
 
+## CI/CD
+
+Use [murk-action](https://github.com/iicky/murk-action) to decrypt secrets in GitHub Actions workflows:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+  - uses: iicky/murk-action@v1
+    with:
+      murk-key: ${{ secrets.MURK_KEY }}
+  - run: ./deploy.sh  # all vault secrets are now in the environment
+```
+
+Store your `MURK_KEY` as a GitHub Actions secret. All decrypted values are masked in logs.
+
 ## Recovery
 
 Your key is a BIP39 mnemonic. `murk init` prints 24 recovery words — write them down.
