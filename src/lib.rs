@@ -21,7 +21,9 @@ pub mod codename;
 pub mod crypto;
 pub mod env;
 pub mod export;
-pub mod integrity;
+pub mod git;
+pub mod info;
+pub mod init;
 pub mod merge;
 pub mod recipients;
 pub mod recovery;
@@ -34,16 +36,48 @@ pub mod vault;
 pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
-pub use env::{parse_env, resolve_key, warn_env_permissions};
-pub use export::{DiffEntry, DiffKind, diff_secrets, export_secrets, resolve_secrets};
-pub use recipients::{RevokeResult, authorize_recipient, revoke_recipient};
-pub use secrets::{add_secret, describe_key, get_secret, list_keys, remove_secret};
+pub use env::{
+    EnvrcStatus, dotenv_has_murk_key, parse_env, read_key_from_dotenv, resolve_key,
+    warn_env_permissions, write_envrc, write_key_to_dotenv,
+};
+pub use export::{
+    DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets,
+    parse_and_decrypt_values, resolve_secrets,
+};
+pub use git::{MergeDriverSetupStep, setup_merge_driver};
+pub use info::{InfoEntry, VaultInfo, vault_info};
+pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
+pub use merge::{MergeDriverOutput, run_merge_driver};
+pub use recipients::{
+    RecipientEntry, RevokeResult, authorize_recipient, list_recipients, revoke_recipient,
+};
+pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_keys, remove_secret};
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use age::secrecy::ExposeSecret;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+
+/// Decrypt the meta blob from a vault, returning the deserialized Meta if possible.
+pub(crate) fn decrypt_meta(
+    vault: &types::Vault,
+    identity: &age::x25519::Identity,
+) -> Option<types::Meta> {
+    if vault.meta.is_empty() {
+        return None;
+    }
+    let plaintext = decrypt_value(&vault.meta, identity).ok()?;
+    serde_json::from_slice(&plaintext).ok()
+}
+
+/// Parse a list of pubkey strings into age recipients.
+pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<age::x25519::Recipient>, String> {
+    pubkeys
+        .iter()
+        .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
+        .collect()
+}
 
 /// Encrypt a value and return base64-encoded ciphertext.
 pub fn encrypt_value(
@@ -90,7 +124,7 @@ pub fn load_vault(
         values.insert(key.clone(), value);
     }
 
-    // Decrypt our own scoped (mote) values.
+    // Decrypt our scoped (mote) overrides.
     let mut scoped = HashMap::new();
     for (key, entry) in &vault.secrets {
         if let Some(encoded) = entry.scoped.get(&pubkey) {
@@ -106,16 +140,7 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let recipients = if vault.meta.is_empty() {
-        HashMap::new()
-    } else if let Ok(plaintext) = decrypt_value(&vault.meta, &identity) {
-        let meta: types::Meta =
-            serde_json::from_slice(&plaintext).unwrap_or_else(|_| types::Meta {
-                recipients: HashMap::new(),
-                mac: String::new(),
-            });
-
-        // Validate MAC if present.
+    let recipients = if let Some(meta) = decrypt_meta(&vault, &identity) {
         if !meta.mac.is_empty() {
             let expected = compute_mac(&vault);
             if meta.mac != expected {
@@ -125,7 +150,6 @@ pub fn load_vault(
                 ));
             }
         }
-
         meta.recipients
     } else {
         HashMap::new()
@@ -148,11 +172,7 @@ pub fn save_vault(
     original: &types::Murk,
     current: &types::Murk,
 ) -> Result<(), String> {
-    let recipients: Vec<age::x25519::Recipient> = vault
-        .recipients
-        .iter()
-        .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let recipients = parse_recipients(&vault.recipients)?;
 
     // Check if recipient list changed — forces full re-encryption of shared values.
     let recipients_changed = {
@@ -228,7 +248,7 @@ pub fn save_vault(
 
 /// Compute an integrity MAC over the vault's secrets and schema.
 /// Covers: sorted key names, encrypted shared values, recipient pubkeys.
-pub fn compute_mac(vault: &types::Vault) -> String {
+pub(crate) fn compute_mac(vault: &types::Vault) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -258,14 +278,14 @@ pub fn compute_mac(vault: &types::Vault) -> String {
         "sha256:{}",
         digest.iter().fold(String::new(), |mut s, b| {
             use std::fmt::Write;
-            write!(s, "{b:02x}").unwrap();
+            let _ = write!(s, "{b:02x}");
             s
         })
     )
 }
 
 /// Generate an ISO-8601 UTC timestamp.
-pub fn now_utc() -> String {
+pub(crate) fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
@@ -327,7 +347,7 @@ mod tests {
     #[test]
     fn compute_mac_deterministic() {
         let vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -346,7 +366,7 @@ mod tests {
     #[test]
     fn compute_mac_changes_with_different_secrets() {
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -373,7 +393,7 @@ mod tests {
     #[test]
     fn compute_mac_changes_with_different_recipients() {
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -401,7 +421,7 @@ mod tests {
 
         let shared = encrypt_value(b"original", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -454,7 +474,7 @@ mod tests {
 
         let shared = encrypt_value(b"val1", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -500,7 +520,7 @@ mod tests {
         let path = dir.join("test.murk");
 
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -558,7 +578,7 @@ mod tests {
 
         let shared = encrypt_value(b"val1", &[recipient1.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -615,7 +635,7 @@ mod tests {
 
         let shared = encrypt_value(b"shared_val", &[recipient.clone()]).unwrap();
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -682,7 +702,7 @@ mod tests {
 
         // Build a vault with one secret, save it (computes valid MAC).
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -741,7 +761,7 @@ mod tests {
         let path = dir.join("test.murk");
 
         let mut vault = types::Vault {
-            version: "2.0".into(),
+            version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -777,6 +797,110 @@ mod tests {
         assert!(result.is_ok());
         let (_, murk, _) = result.unwrap();
         assert_eq!(murk.values["KEY1"], "val1");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_not_a_recipient() {
+        let (secret, pubkey) = generate_keypair();
+        let (other_secret, other_pubkey) = generate_keypair();
+        let other_recipient = make_recipient(&other_pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_load_not_recipient");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault encrypted to `other`, not to `secret`.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![other_pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[other_recipient]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        // Save via save_vault (needs the other key for re-encryption).
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(other_pubkey.clone(), "other".into());
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        unsafe { std::env::set_var("MURK_KEY", &other_secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Now try to load with a key that is NOT a recipient.
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected load_vault to fail for non-recipient"),
+        };
+        assert!(
+            err.contains("decryption failed"),
+            "expected decryption failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_zero_secrets() {
+        let (secret, pubkey) = generate_keypair();
+
+        let dir = std::env::temp_dir().join("murk_test_load_zero_secrets");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault with no secrets at all.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let original = types::Murk {
+            values: HashMap::new(),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        unsafe { std::env::set_var("MURK_KEY", secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        assert!(result.is_ok());
+        let (_, murk, _) = result.unwrap();
+        assert!(murk.values.is_empty());
+        assert!(murk.scoped.is_empty());
 
         fs::remove_dir_all(&dir).unwrap();
     }

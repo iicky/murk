@@ -23,7 +23,7 @@ pub fn make_identity(secret: &str) -> age::x25519::Identity {
 
 pub fn empty_vault() -> types::Vault {
     types::Vault {
-        version: "2.0".into(),
+        version: types::VAULT_VERSION.into(),
         created: "2026-02-28T00:00:00Z".into(),
         vault_name: ".murk".into(),
         repo: String::new(),

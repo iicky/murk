@@ -1,6 +1,46 @@
-//! Recipient management: authorize and revoke vault access.
+//! Recipient management: authorize, revoke, and list vault recipients.
 
 use crate::{crypto, types};
+
+/// A single recipient entry with resolved display info.
+#[derive(Debug)]
+pub struct RecipientEntry {
+    pub pubkey: String,
+    pub display_name: Option<String>,
+    pub is_self: bool,
+}
+
+/// List all recipients in the vault with optional name resolution.
+///
+/// If `secret_key` is provided, decrypts meta to resolve display names
+/// and marks which recipient corresponds to the caller's key.
+pub fn list_recipients(vault: &types::Vault, secret_key: Option<&str>) -> Vec<RecipientEntry> {
+    let meta_data = secret_key.filter(|k| !k.is_empty()).and_then(|sk| {
+        let identity = crypto::parse_identity(sk).ok()?;
+        let my_pubkey = identity.to_public().to_string();
+        let meta = crate::decrypt_meta(vault, &identity)?;
+        Some((meta, my_pubkey))
+    });
+
+    vault
+        .recipients
+        .iter()
+        .map(|pk| {
+            let (display_name, is_self) = match &meta_data {
+                Some((meta, my_pubkey)) => {
+                    let name = meta.recipients.get(pk).filter(|n| !n.is_empty()).cloned();
+                    (name, pk == my_pubkey)
+                }
+                None => (None, false),
+            };
+            RecipientEntry {
+                pubkey: pk.clone(),
+                display_name,
+                is_self,
+            }
+        })
+        .collect()
+}
 
 /// Add a recipient to the vault. Returns an error if the pubkey is invalid or already present.
 pub fn authorize_recipient(
@@ -217,7 +257,134 @@ mod tests {
         assert!(murk.scoped["KEY"].is_empty());
     }
 
-    // ── New edge-case tests ──
+    #[test]
+    fn revoke_recipient_reports_exposed_keys() {
+        let (_, pk1) = generate_keypair();
+        let (_, pk2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk1.clone(), pk2.clone()];
+        // exposed_keys returns all schema keys, so we need schema entries.
+        vault.schema.insert(
+            "DB_URL".into(),
+            types::SchemaEntry {
+                description: "db".into(),
+                example: None,
+                tags: vec![],
+            },
+        );
+        vault.schema.insert(
+            "API_KEY".into(),
+            types::SchemaEntry {
+                description: "api".into(),
+                example: None,
+                tags: vec![],
+            },
+        );
+        vault.secrets.insert(
+            "DB_URL".into(),
+            types::SecretEntry {
+                shared: "ct".into(),
+                scoped: BTreeMap::from([(pk2.clone(), "scoped_db".into())]),
+            },
+        );
+        vault.secrets.insert(
+            "API_KEY".into(),
+            types::SecretEntry {
+                shared: "ct2".into(),
+                scoped: BTreeMap::from([(pk2.clone(), "scoped_api".into())]),
+            },
+        );
+        let mut murk = empty_murk();
+        murk.scoped
+            .insert("DB_URL".into(), HashMap::from([(pk2.clone(), "v".into())]));
+        murk.scoped.insert(
+            "API_KEY".into(),
+            HashMap::from([(pk2.clone(), "v2".into())]),
+        );
+
+        let result = revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
+        let mut keys = result.exposed_keys.clone();
+        keys.sort();
+        assert_eq!(keys, vec!["API_KEY", "DB_URL"]);
+        assert!(vault.secrets["DB_URL"].scoped.is_empty());
+        assert!(vault.secrets["API_KEY"].scoped.is_empty());
+    }
+
+    // ── list_recipients tests ──
+
+    #[test]
+    fn list_recipients_with_meta() {
+        let (secret, pubkey) = generate_keypair();
+        let (_, pk2) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+
+        let mut names = std::collections::HashMap::new();
+        names.insert(pubkey.clone(), "Alice".to_string());
+        names.insert(pk2.clone(), "Bob".to_string());
+        let meta = types::Meta {
+            recipients: names,
+            mac: String::new(),
+        };
+        let meta_json = serde_json::to_vec(&meta).unwrap();
+        let r2 = make_recipient(&pk2);
+        let meta_enc = crate::encrypt_value(&meta_json, &[recipient, r2]).unwrap();
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey.clone(), pk2.clone()];
+        vault.meta = meta_enc;
+
+        let entries = list_recipients(&vault, Some(&secret));
+        assert_eq!(entries.len(), 2);
+        let me = entries.iter().find(|e| e.pubkey == pubkey).unwrap();
+        assert!(me.is_self);
+        assert_eq!(me.display_name.as_deref(), Some("Alice"));
+        let other = entries.iter().find(|e| e.pubkey == pk2).unwrap();
+        assert!(!other.is_self);
+        assert_eq!(other.display_name.as_deref(), Some("Bob"));
+    }
+
+    #[test]
+    fn list_recipients_without_key() {
+        let (_, pubkey) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey.clone()];
+
+        let entries = list_recipients(&vault, None);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].pubkey, pubkey);
+        assert!(entries[0].display_name.is_none());
+        assert!(!entries[0].is_self);
+    }
+
+    #[test]
+    fn list_recipients_wrong_key() {
+        let (_, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let (wrong_secret, _) = generate_keypair();
+
+        let meta = types::Meta {
+            recipients: std::collections::HashMap::from([(pubkey.clone(), "Alice".into())]),
+            mac: String::new(),
+        };
+        let meta_json = serde_json::to_vec(&meta).unwrap();
+        let meta_enc = crate::encrypt_value(&meta_json, &[recipient]).unwrap();
+
+        let mut vault = empty_vault();
+        vault.recipients = vec![pubkey.clone()];
+        vault.meta = meta_enc;
+
+        let entries = list_recipients(&vault, Some(&wrong_secret));
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].display_name.is_none());
+        assert!(!entries[0].is_self);
+    }
+
+    #[test]
+    fn list_recipients_empty_vault() {
+        let vault = empty_vault();
+        let entries = list_recipients(&vault, None);
+        assert!(entries.is_empty());
+    }
 
     #[test]
     fn revoke_recipient_no_scoped() {

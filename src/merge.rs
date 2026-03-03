@@ -494,35 +494,54 @@ fn merge_secrets_both_reencrypted(
     result
 }
 
+/// Output of the merge driver: the merge result and whether meta was regenerated.
+#[derive(Debug)]
+pub struct MergeDriverOutput {
+    pub result: MergeResult,
+    pub meta_regenerated: bool,
+}
+
+/// Run the three-way merge driver on vault contents (as strings).
+///
+/// Parses all three versions, merges, and attempts meta regeneration.
+/// Returns the merged vault and conflict list. The caller is responsible for
+/// writing the result to disk.
+pub fn run_merge_driver(base: &str, ours: &str, theirs: &str) -> Result<MergeDriverOutput, String> {
+    use crate::vault;
+
+    let base_vault = vault::parse(base).map_err(|e| format!("parsing base: {e}"))?;
+    let ours_vault = vault::parse(ours).map_err(|e| format!("parsing ours: {e}"))?;
+    let theirs_vault = vault::parse(theirs).map_err(|e| format!("parsing theirs: {e}"))?;
+
+    let mut result = merge_vaults(&base_vault, &ours_vault, &theirs_vault);
+    let meta_regenerated = regenerate_meta(&mut result.vault, &ours_vault, &theirs_vault).is_some();
+
+    Ok(MergeDriverOutput {
+        result,
+        meta_regenerated,
+    })
+}
+
 /// Attempt to regenerate the meta blob for a merged vault.
 ///
 /// Decrypts meta from `ours` and `theirs` to merge recipient name maps,
 /// recomputes the MAC, and re-encrypts. Falls back to `ours.meta` if
 /// MURK_KEY is unavailable.
 pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Option<String> {
-    use crate::{compute_mac, crypto, decrypt_value, encrypt_value, resolve_key, types};
+    use crate::{compute_mac, crypto, decrypt_meta, encrypt_value, parse_recipients, resolve_key};
     use age::secrecy::ExposeSecret;
     use std::collections::HashMap;
 
     let secret_key = resolve_key().ok()?;
     let identity = crypto::parse_identity(secret_key.expose_secret()).ok()?;
 
-    // Decrypt both sides' meta for name maps.
-    let ours_meta: types::Meta = decrypt_value(&ours.meta, &identity)
-        .ok()
-        .and_then(|p| serde_json::from_slice(&p).ok())
-        .unwrap_or_else(|| types::Meta {
-            recipients: HashMap::new(),
-            mac: String::new(),
-        });
+    let default_meta = || crate::types::Meta {
+        recipients: HashMap::new(),
+        mac: String::new(),
+    };
 
-    let theirs_meta: types::Meta = decrypt_value(&theirs.meta, &identity)
-        .ok()
-        .and_then(|p| serde_json::from_slice(&p).ok())
-        .unwrap_or_else(|| types::Meta {
-            recipients: HashMap::new(),
-            mac: String::new(),
-        });
+    let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
+    let theirs_meta = decrypt_meta(theirs, &identity).unwrap_or_else(default_meta);
 
     // Merge name maps: union, ours wins on conflict.
     let mut names = theirs_meta.recipients;
@@ -534,16 +553,12 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     names.retain(|pk, _| merged.recipients.contains(pk));
 
     let mac = compute_mac(merged);
-    let meta = types::Meta {
+    let meta = crate::types::Meta {
         recipients: names,
         mac,
     };
 
-    let recipients: Vec<age::x25519::Recipient> = merged
-        .recipients
-        .iter()
-        .filter_map(|pk| crypto::parse_recipient(pk).ok())
-        .collect();
+    let recipients = parse_recipients(&merged.recipients).ok()?;
 
     if recipients.is_empty() {
         return None;
@@ -558,7 +573,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SchemaEntry, SecretEntry, Vault};
+    use crate::types::{SchemaEntry, SecretEntry, VAULT_VERSION, Vault};
     use std::collections::BTreeMap;
 
     fn base_vault() -> Vault {
@@ -582,7 +597,7 @@ mod tests {
         );
 
         Vault {
-            version: "2.0".into(),
+            version: VAULT_VERSION.into(),
             created: "2026-01-01T00:00:00Z".into(),
             vault_name: ".murk".into(),
             repo: String::new(),
@@ -924,6 +939,56 @@ mod tests {
         let r = merge_vaults(&base, &ours, &theirs);
         assert_eq!(r.conflicts.len(), 1);
         assert!(r.conflicts[0].field.contains("scoped"));
+    }
+
+    #[test]
+    fn merge_scoped_add_vs_base_key_removal() {
+        let base = base_vault();
+
+        // Ours: remove the base key entirely.
+        let mut ours = base.clone();
+        ours.secrets.remove("DB_URL");
+        ours.schema.remove("DB_URL");
+
+        // Theirs: add a scoped entry on the same key (shared unchanged).
+        let mut theirs = base.clone();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .scoped
+            .insert("age1alice".into(), "alice-scoped".into());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Theirs only added scoped (shared unchanged), so ours' removal wins
+        // without conflict — the scoped addition is silently dropped.
+        assert!(r.conflicts.is_empty());
+        assert!(!r.vault.secrets.contains_key("DB_URL"));
+    }
+
+    #[test]
+    fn merge_scoped_add_vs_base_key_modification() {
+        let base = base_vault();
+
+        // Ours: remove the base key entirely.
+        let mut ours = base.clone();
+        ours.secrets.remove("DB_URL");
+        ours.schema.remove("DB_URL");
+
+        // Theirs: modify the shared value AND add scoped.
+        let mut theirs = base.clone();
+        theirs.secrets.get_mut("DB_URL").unwrap().shared = "theirs-modified".into();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .scoped
+            .insert("age1alice".into(), "alice-scoped".into());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Theirs modified shared, ours removed — this IS a conflict.
+        assert_eq!(r.conflicts.len(), 1);
+        assert!(r.conflicts[0].reason.contains("removed on our side"));
     }
 
     // -- Recipient change + secret addition --
