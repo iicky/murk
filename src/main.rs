@@ -302,12 +302,10 @@ fn cmd_init(vault_name: &str) {
             }
         };
 
-        let status = match murk_cli::check_init_status(&vault, secret_key.as_deref().unwrap_or(""))
-        {
-            Ok(s) => s,
-            Err(_) => {
-                // If we just generated a key, check_init_status won't work with empty string.
-                // Fall back to simple recipient check.
+        let status = match secret_key.as_deref() {
+            Some(sk) => try_or_die(murk_cli::check_init_status(&vault, sk)),
+            None => {
+                // No secret key — fall back to simple recipient check.
                 if vault.recipients.contains(&pubkey) {
                     eprintln!("{}  {}", "authorized".green(), pubkey.dimmed(),);
                 } else {
@@ -888,13 +886,13 @@ fn cmd_info(tags: &[String], vault_path: &str) {
     }
 
     // Compute column widths for aligned output.
-    let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap();
+    let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
     let desc_width = info
         .entries
         .iter()
         .map(|e| e.description.len())
         .max()
-        .unwrap();
+        .unwrap_or(0);
 
     let example_width = info
         .entries
@@ -905,7 +903,7 @@ fn cmd_info(tags: &[String], vault_path: &str) {
                 .map_or(0, |ex| format!("(e.g. {ex})").len())
         })
         .max()
-        .unwrap();
+        .unwrap_or(0);
 
     let tag_width = info
         .entries
@@ -918,7 +916,7 @@ fn cmd_info(tags: &[String], vault_path: &str) {
             }
         })
         .max()
-        .unwrap();
+        .unwrap_or(0);
 
     let has_meta = secret_key.is_some();
 

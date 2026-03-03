@@ -278,7 +278,7 @@ pub(crate) fn compute_mac(vault: &types::Vault) -> String {
         "sha256:{}",
         digest.iter().fold(String::new(), |mut s, b| {
             use std::fmt::Write;
-            write!(s, "{b:02x}").unwrap();
+            let _ = write!(s, "{b:02x}");
             s
         })
     )
