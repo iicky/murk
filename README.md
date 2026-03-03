@@ -161,6 +161,8 @@ See [SPEC.md](SPEC.md) for the full specification.
 
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 
+See [THREAT_MODEL.md](THREAT_MODEL.md) for the full threat model.
+
 ## License
 
 MIT OR Apache-2.0

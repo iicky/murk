@@ -6,6 +6,8 @@ murk does not implement any cryptography. All encryption and decryption is perfo
 
 If you find a vulnerability in the underlying cryptographic primitives, please report it to the [age](https://github.com/FiloSottile/age) or [rage](https://github.com/str4d/rage) projects directly.
 
+For a detailed analysis of what murk protects and what it doesn't, see [THREAT_MODEL.md](THREAT_MODEL.md).
+
 ## Supported Versions
 
 | Version | Supported |
