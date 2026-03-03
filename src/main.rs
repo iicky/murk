@@ -760,7 +760,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         // Fetch all SSH keys from GitHub.
         let keys = try_or_die(murk_cli::fetch_keys(username).map_err(|e| e.to_string()));
 
-        let display_name = format!("@{username}");
+        let display_name = format!("{username}@github");
         let mut added = 0;
         let mut type_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -785,7 +785,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
 
         if added == 0 {
             eprintln!(
-                "{} all {} SSH keys for @{} are already authorized",
+                "{} all {} SSH keys for {}@github are already authorized",
                 "ok:".green().bold(),
                 keys.len(),
                 username
