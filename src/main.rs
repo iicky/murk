@@ -832,9 +832,16 @@ fn cmd_recipients(vault_path: &str) {
 fn cmd_restore(phrase: Option<&str>) {
     let phrase = if let Some(p) = phrase {
         p.to_string()
-    } else {
+    } else if io::stdin().is_terminal() {
         eprint!("Enter 24-word recovery phrase: ");
-        io::stdout().flush().ok();
+        io::stderr().flush().ok();
+        let password = rpassword::read_password().unwrap_or_else(|e| {
+            eprintln!();
+            die(&format_args!("reading input: {e}"), 1);
+        });
+        eprintln!();
+        password
+    } else {
         let mut line = String::new();
         io::stdin().lock().read_line(&mut line).unwrap_or(0);
         line.trim().to_string()

@@ -79,12 +79,6 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
     recipient_names.insert(pubkey.to_string(), name.to_string());
 
     let recipient = crypto::parse_recipient(pubkey).map_err(|e| e.to_string())?;
-    let meta = types::Meta {
-        recipients: recipient_names,
-        mac: String::new(), // Will be computed by vault write.
-    };
-    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
-    let meta_enc = encrypt_value(&meta_json, &[recipient])?;
 
     // Detect git repo URL.
     let repo = Command::new("git")
@@ -96,7 +90,8 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    Ok(types::Vault {
+    // Build the vault first so we can compute a real MAC over it.
+    let mut vault = types::Vault {
         version: types::VAULT_VERSION.into(),
         created: now_utc(),
         vault_name: vault_name.into(),
@@ -104,8 +99,18 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
         recipients: vec![pubkey.to_string()],
         schema: BTreeMap::new(),
         secrets: BTreeMap::new(),
-        meta: meta_enc,
-    })
+        meta: String::new(),
+    };
+
+    let mac = crate::compute_mac(&vault);
+    let meta = types::Meta {
+        recipients: recipient_names,
+        mac,
+    };
+    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    vault.meta = encrypt_value(&meta_json, &[recipient])?;
+
+    Ok(vault)
 }
 
 #[cfg(test)]

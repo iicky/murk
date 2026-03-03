@@ -140,19 +140,27 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let recipients = if let Some(meta) = decrypt_meta(&vault, &identity) {
-        if !meta.mac.is_empty() {
-            let expected = compute_mac(&vault);
-            if meta.mac != expected {
-                return Err(format!(
-                    "integrity check failed: vault may have been tampered with (expected {}, got {})",
-                    meta.mac, expected
-                ));
-            }
+    let recipients = if vault.secrets.is_empty() {
+        // Fresh vault with no secrets — allow missing/empty meta since there's nothing to protect.
+        decrypt_meta(&vault, &identity)
+            .map(|m| m.recipients)
+            .unwrap_or_default()
+    } else {
+        // Vault has secrets — MAC is mandatory.
+        let meta = decrypt_meta(&vault, &identity).ok_or(
+            "integrity check failed: vault has secrets but no meta — vault may have been tampered with"
+        )?;
+        if meta.mac.is_empty() {
+            return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
+        }
+        let expected = compute_mac(&vault);
+        if meta.mac != expected {
+            return Err(format!(
+                "integrity check failed: vault may have been tampered with (expected {}, got {})",
+                meta.mac, expected
+            ));
         }
         meta.recipients
-    } else {
-        HashMap::new()
     };
 
     let murk = types::Murk {
@@ -901,6 +909,123 @@ mod tests {
         let (_, murk, _) = result.unwrap();
         assert!(murk.values.is_empty());
         assert!(murk.scoped.is_empty());
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_stripped_meta_with_secrets_fails() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_load_stripped_meta");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault with one secret and a valid MAC via save_vault.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[recipient]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            recipients: recipients_map,
+            scoped: HashMap::new(),
+        };
+
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Tamper: strip meta field entirely.
+        let mut tampered: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        tampered.meta = String::new();
+        fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+
+        // Load should fail: secrets present but no meta.
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = result.err().expect("expected MAC validation to fail");
+        assert!(
+            err.contains("integrity check failed"),
+            "expected integrity check failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_empty_mac_with_secrets_fails() {
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_load_empty_mac");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Build a vault with one secret.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        // Manually create meta with empty MAC and encrypt it.
+        let mut recipients_map = HashMap::new();
+        recipients_map.insert(pubkey.clone(), "alice".into());
+        let meta = types::Meta {
+            recipients: recipients_map,
+            mac: String::new(),
+        };
+        let meta_json = serde_json::to_vec(&meta).unwrap();
+        vault.meta = encrypt_value(&meta_json, &[recipient]).unwrap();
+
+        // Write the vault to disk.
+        crate::vault::write(Path::new(path.to_str().unwrap()), &vault).unwrap();
+
+        // Load should fail: secrets present but MAC is empty.
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = result.err().expect("expected MAC validation to fail");
+        assert!(
+            err.contains("integrity check failed"),
+            "expected integrity check failure, got: {err}"
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }
