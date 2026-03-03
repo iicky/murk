@@ -871,17 +871,45 @@ fn cmd_recipients(vault_path: &str) {
     let entries = murk_cli::list_recipients(&vault, secret_key.as_deref());
     let has_names = entries.iter().any(|e| e.display_name.is_some());
 
-    for entry in &entries {
-        if has_names {
-            let name = entry.display_name.as_deref().unwrap_or("");
-            let marker = if entry.is_self {
-                "  (you)".green().to_string()
-            } else {
-                String::new()
-            };
-            println!("{}  {}{}", entry.pubkey.dimmed(), name.bold(), marker);
-        } else {
+    if !has_names {
+        for entry in &entries {
             println!("{}", entry.pubkey);
+        }
+        return;
+    }
+
+    // Group entries by display name so multi-key recipients (e.g. github
+    // users with several SSH keys) are shown as a single consolidated line.
+    let mut groups: Vec<(Option<&str>, Vec<&murk_cli::RecipientEntry>)> = Vec::new();
+    for entry in &entries {
+        let name = entry.display_name.as_deref();
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|(n, _)| *n == name && name.is_some())
+        {
+            group.1.push(entry);
+        } else {
+            groups.push((name, vec![entry]));
+        }
+    }
+
+    for (name, group) in &groups {
+        let is_self = group.iter().any(|e| e.is_self);
+        let marker = if is_self {
+            "  (you)".green().to_string()
+        } else {
+            String::new()
+        };
+        let label = name.unwrap_or("");
+
+        if group.len() == 1 {
+            println!("{}  {}{}", group[0].pubkey.dimmed(), label.bold(), marker);
+        } else {
+            println!("{}  ({} keys){}", label.bold(), group.len(), marker,);
+            for entry in group {
+                let key_type = entry.pubkey.split_whitespace().next().unwrap_or("key");
+                println!("  {}  {}", key_type.dimmed(), entry.pubkey.dimmed());
+            }
         }
     }
 }

@@ -1,5 +1,10 @@
 [advisories]
 yanked = "warn"
+ignore = [
+    # rsa timing sidechannel (Marvin Attack) — no fix available.
+    # Only reachable via age's SSH-RSA recipient support; murk prefers ed25519.
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 allow = [
