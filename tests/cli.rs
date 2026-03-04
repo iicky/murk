@@ -1702,3 +1702,28 @@ fn old_vault_without_repo_parses() {
         .success()
         .stdout(predicate::str::contains("codename"));
 }
+
+// ── import ──
+
+#[test]
+fn import_warns_on_murk_keys() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // Write a .env file that contains MURK_KEY and other keys.
+    fs::write(
+        dir.path().join("import.env"),
+        "MURK_KEY=secret\nMURK_VAULT=.murk\nKEEP_THIS=yes\n",
+    )
+    .unwrap();
+
+    murk(&dir, &key)
+        .args(["import", "import.env", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("skipping MURK_KEY")
+                .and(predicate::str::contains("skipping MURK_VAULT"))
+                .and(predicate::str::contains("KEEP_THIS")),
+        );
+}

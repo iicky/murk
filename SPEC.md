@@ -1,4 +1,4 @@
-# murk — Specification v1.0
+# murk — Specification v2.0
 
 > Encrypted secrets manager for developers. One key unlocks everything.
 
@@ -9,14 +9,14 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 - Stores encrypted secrets in a single `.murk` file safe to commit to git
 - Uses one key (`MURK_KEY`) in `.env` to unlock everything
 - Integrates naturally with `direnv`
-- Supports multiple users and per-identity private secrets
+- Supports multiple users and per-identity scoped secrets
 - Documents itself via `murk info` — no key required
 
 ---
 
 ## Design Philosophy
 
-- **Header is public, blob is private.** Anyone with repo access can see what keys exist and what they're for. Only authorized recipients can see values.
+- **Header is public, values are private.** Anyone with repo access can see what keys exist and what they're for. Only authorized recipients can see values.
 - **age does the crypto.** murk handles UX and data structure. No custom crypto.
 - **One binary, no runtime dependency.** Wrappable from any language via subprocess.
 - **Git is the audit trail.** murk doesn't try to replicate what git already does.
@@ -24,19 +24,27 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 
 ---
 
+## Terminology
+
+- **murk** — the shared layer. Secrets encrypted to all recipients.
+- **mote** — a scoped secret. Encrypted to a single recipient's key. Overrides the shared value during export.
+
+---
+
 ## Environment Variables
 
-| Variable     | Required | Description                                             |
-| ------------ | -------- | ------------------------------------------------------- |
-| `MURK_KEY`   | Yes      | Your age private key. Written to `.env` by `murk init`. |
-| `MURK_VAULT` | No       | Vault filename. Defaults to `.murk`.                    |
+| Variable       | Required | Description                                             |
+| -------------- | -------- | ------------------------------------------------------- |
+| `MURK_KEY`     | Yes      | Your age private key. Written to `.env` by `murk init`. |
+| `MURK_KEY_FILE`| No       | Path to a file containing your age private key. `MURK_KEY` takes priority. |
+| `MURK_VAULT`   | No       | Vault filename. Defaults to `.murk`.                    |
 
-Your identity is your key. murk derives your public key from `MURK_KEY` to determine which personal blob is yours and to identify you in the recipient list. No separate username variable is needed.
+Your identity is your key. murk derives your public key from `MURK_KEY` to determine which scoped secrets are yours and to identify you in the recipient list.
 
 ### `.env` example
 
 ```
-MURK_KEY=AGE-SECRET-KEY-1...
+export MURK_KEY=AGE-SECRET-KEY-1...
 MURK_VAULT=prod.murk  # optional
 ```
 
@@ -46,108 +54,97 @@ MURK_VAULT=prod.murk  # optional
 
 ## File Format
 
-A `.murk` file has three sections:
-
-```
-[plaintext JSON header]
-[newline separator]
-[shared age blob]
-[newline separator]
-[anonymous personal blob]
-[newline separator]
-[anonymous personal blob]
-...
-```
-
-### Plaintext Header
-
-Public. Readable by anyone. Contains no secret values, identity information, or access metadata.
+A `.murk` file is a single JSON document. All fields except encrypted values and the meta blob are plaintext.
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "created": "2026-02-27T00:00:00Z",
   "vault_name": ".murk",
-  "shared_blob_hash": "sha256:abc123...",
+  "repo": "https://github.com/org/repo",
   "recipients": [
     "age1abc...",
     "age1xyz..."
   ],
-  "schema": [
-    {
-      "key": "DATABASE_URL",
+  "schema": {
+    "DATABASE_URL": {
       "description": "postgres connection string",
       "example": "postgres://user:pass@host/db"
     },
-    {
-      "key": "OPENAI_KEY",
-      "description": "openai api key",
-      "example": "sk-..."
+    "OPENAI_KEY": {
+      "description": "openai api key"
     }
-  ]
+  },
+  "secrets": {
+    "DATABASE_URL": {
+      "shared": "<base64 age ciphertext>",
+      "scoped": {
+        "age1xyz...": "<base64 age ciphertext>"
+      }
+    },
+    "OPENAI_KEY": {
+      "shared": "<base64 age ciphertext>"
+    }
+  },
+  "meta": "<base64 age ciphertext>"
 }
 ```
 
-**Recipients are public keys only.** No names or emails in the header. Name↔pubkey mappings live inside the encrypted shared blob where only authorized recipients can see them.
+### Version
 
-**Schema is intentionally minimal.** Key names and descriptions should not themselves be sensitive.
+The `version` field uses semver. murk validates the major version on load — a vault with major version other than `2` is rejected. Minor version bumps (e.g. `2.1`) are accepted.
 
-### Shared Age Blob
+### Recipients
 
-Encrypted to all recipients. Contains actual secret values, recipient name mappings, per-key access metadata (v2), and the personal blob manifest.
+Public keys only — no names or emails. Name-to-pubkey mappings live inside the encrypted meta blob where only authorized recipients can see them.
+
+### Schema
+
+Key metadata stored as a map of key name to entry. Each entry has a `description` and optional `example` and `tags` fields. Schema is public and readable without decryption.
+
+Key names must be valid shell identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
+
+### Secrets
+
+Each secret has a `shared` field containing age ciphertext encrypted to all recipients, and an optional `scoped` map of recipient pubkey to age ciphertext encrypted to only that recipient.
+
+During `murk export`, scoped values override shared values for the current identity.
+
+All age ciphertext is base64-encoded (standard alphabet, with padding).
+
+### Meta
+
+The `meta` field is a single age blob encrypted to all recipients. It contains:
 
 ```json
 {
-  "values": {
-    "DATABASE_URL": "postgres://prod:pass@host/db",
-    "OPENAI_KEY": "sk-abc123..."
-  },
   "recipients": {
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "per_key_access": {
-    "DATABASE_URL": ["age1abc...", "age1xyz..."],
-    "OPENAI_KEY": ["age1abc..."]
-  },
-  "personal_blobs": {
-    "age1abc...": "sha256:def456...",
-    "age1xyz...": "sha256:ghi789..."
-  }
+  "mac": "sha256v2:abc123..."
 }
 ```
 
-`recipients` maps public keys to display names. This is the only place names are stored — they never appear in the plaintext header.
+`recipients` maps public keys to display names. This is the only place names are stored.
 
-`per_key_access` is stored in v1 but not enforced until v2. All recipients can decrypt all shared values in v1.
+`mac` is an integrity hash over the vault's encrypted content (see Integrity below).
 
-`personal_blobs` maps recipient pubkey to the SHA256 hash of their personal blob for integrity verification.
+### Integrity
 
-### Personal Age Blobs
+The MAC is a SHA-256 hash covering, in order:
 
-Each personal blob is encrypted only to that recipient's public key. They appear in the file as anonymous age payloads — there is no plaintext label indicating who they belong to. Only someone who can decrypt the shared blob knows the manifest, and only the key owner can decrypt their personal blob.
+1. **Key names** — iterated in sorted order (BTreeMap), each followed by `\x00`
+2. **Per-key encrypted values** — for each key (sorted):
+   - The shared ciphertext, followed by `\x00`
+   - For each scoped entry (sorted by pubkey): the pubkey followed by `\x01`, the scoped ciphertext followed by `\x00`
+3. **Recipient pubkeys** — sorted, each followed by `\x00`
 
-```json
-{
-  "values": {
-    "DATABASE_URL": "postgres://localhost/dev",
-    "MY_PERSONAL_KEY": "abc123"
-  }
-}
-```
+The resulting digest is prefixed with `sha256v2:` and stored as the `mac` field in meta.
 
-Personal values override shared values during `murk export`.
+On load, murk verifies the MAC. Both `sha256:` (v1, no scoped coverage) and `sha256v2:` (v2, full coverage) prefixes are accepted for backward compatibility. On save, murk always writes `sha256v2:`.
 
-### Integrity Chain
-
-```
-plaintext header
-  └── shared_blob_hash ──→ shared blob
-                              └── personal_blobs[1] ──→ personal blob 1
-                              └── personal_blobs[2] ──→ personal blob 2
-```
-
-Tampering with any blob is detectable at the appropriate level.
+The MAC is parasitic — its security depends on being stored inside the encrypted meta blob. It detects accidental corruption and naive tampering, but is not a keyed HMAC.
 
 ---
 
@@ -155,192 +152,119 @@ Tampering with any blob is detectable at the appropriate level.
 
 ### `murk init [--vault NAME]`
 
-Interactive setup. Prompts for:
-
-- Name or email (display label, stored inside encrypted blob only)
-- Vault filename (defaults to `.murk`)
-
-Then:
+Interactive setup. Prompts for a display name. Then:
 
 1. Generates an age keypair via BIP39 (24-word mnemonic encodes the key directly)
-2. Appends `MURK_KEY=...` to `.env` (creates `.env` if missing, alerts and confirms if `MURK_KEY` already present)
+2. Writes `export MURK_KEY=...` to `.env` with mode 0600 (creates if missing, warns if `MURK_KEY` already present)
 3. Creates empty `.murk` vault with user's pubkey as first recipient
-4. Prints BIP39 24-word recovery phrase to stdout with a warning
-
-```
-$ murk init
-Enter your name or email: mickey@example.com
-Enter vault name [.murk]:
-Generating keypair...
-Writing MURK_KEY to .env...
-
-⚠  RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:
-witch collapse practice feed shame open despair creek
-road again ice least fiction coyote partial album
-fury mirror essay cigar approve taxi coral pelican
-
-Vault initialized. Added as recipient.
-Next: murk add KEY
-```
+4. Prints BIP39 24-word recovery phrase to stderr
 
 ---
 
-### `murk add KEY [--scoped] [--vault NAME]`
+### `murk add KEY [--scoped] [--desc DESC] [--vault NAME]`
 
-Adds or updates a secret. Prompts for the value interactively (hidden input) or reads from stdin when piped. Without `--scoped`, writes to the shared blob. With `--scoped`, writes to your personal blob only.
+Adds or updates a secret. Prompts for the value interactively (hidden input via rpassword) or reads from stdin when piped.
 
-If no description exists for the key, prints a nudge:
+Without `--scoped`, encrypts to all recipients (shared/murk layer). With `--scoped`, encrypts to only your key (scoped/mote layer).
 
-```
-⚠  No description set. Run: murk describe DATABASE_URL "your description"
-```
+Key names are validated as shell identifiers. Invalid names are rejected.
 
 ---
 
 ### `murk rm KEY [--vault NAME]`
 
-Removes a key from the shared blob. Prints `removed KEY` to stderr. No confirmation prompt — git is your safety net.
+Removes a key from the vault (shared value, schema entry, and all scoped entries). No confirmation prompt — git is your safety net.
 
 ---
 
 ### `murk get KEY [--vault NAME]`
 
-Prints a single decrypted value to stdout. Exits with code 1 and prints to stderr if key not found. Useful for scripting:
-
-```bash
-DB=$(murk get DATABASE_URL)
-```
+Prints a single decrypted value to stdout. Scoped values take priority over shared values. Exits with code 1 if key not found.
 
 ---
 
 ### `murk ls [--vault NAME]`
 
-Lists key names only. No values. One per line. Useful for scripting and quick reference.
+Lists key names, one per line.
 
 ---
 
-### `murk describe KEY "description" [--example "..."] [--vault NAME]`
+### `murk describe KEY "description" [--vault NAME]`
 
-Adds or updates the description and optional example for a key in the plaintext header. Does not touch the encrypted blob.
-
-```
-murk describe DATABASE_URL "postgres connection string" --example "postgres://user:pass@host/db"
-```
+Sets the description for a key in the plaintext schema. Does not touch encrypted values.
 
 ---
 
 ### `murk export [--vault NAME]`
 
-Decrypts the vault and prints all key/value pairs as shell export statements. Personal overrides take precedence over shared values.
+Prints all secrets as `export KEY=VALUE` statements to stdout. Scoped values override shared values for the current identity. Errors go to stderr.
 
-Stdout only — clean for `eval`. All errors go to stderr.
-
-**Primary usage via direnv:**
+Primary usage via direnv:
 
 ```bash
 # .envrc
-eval $(murk export)
+eval "$(murk export)"
 ```
+
+---
+
+### `murk import [FILE] [--vault NAME]`
+
+Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning.
 
 ---
 
 ### `murk info [--vault NAME]`
 
-Prints the public schema. Works without `MURK_KEY`. Shows key names, descriptions, and examples.
-
-With a valid `MURK_KEY`, also shows per-key recipient access:
-
-```
-$ murk info
-DATABASE_URL  postgres connection string  (e.g. postgres://user:pass@host/db)  [mickey, alice]
-OPENAI_KEY    openai api key              (e.g. sk-...)                         [mickey]
-```
-
-Without `MURK_KEY`:
-
-```
-DATABASE_URL  postgres connection string  (e.g. postgres://user:pass@host/db)
-OPENAI_KEY    openai api key              (e.g. sk-...)
-```
+Prints the public schema. Works without `MURK_KEY`. With a valid key, also shows recipient names and count.
 
 ---
 
 ### `murk recover`
 
-Re-derives and prints the BIP39 24-word recovery phrase from the current `MURK_KEY`. Requires `MURK_KEY` to be set.
+Prints the BIP39 24-word recovery phrase for the current `MURK_KEY`.
 
-Recovery words are a BIP39 encoding of the private key itself — not a separate keypair. Entering the words reconstructs the exact same `MURK_KEY`.
+---
+
+### `murk restore`
+
+Recovers `MURK_KEY` from a BIP39 recovery phrase. Prompts for the phrase interactively (hidden input) or reads from stdin when piped.
+
+---
+
+### `murk circle`
+
+Lists all recipients. With `MURK_KEY`, shows display names from the encrypted meta and marks the current user with `*`.
 
 ---
 
 ### `murk circle authorize PUBKEY [--name NAME] [--vault NAME]`
 
-Adds a new recipient to the vault. Re-encrypts the shared blob to include the new public key. Only existing recipients can authorize new ones. The optional `--name` is stored as a display label inside the encrypted shared blob. For `github:username`, the name is auto-derived.
-
-```
-murk circle authorize age1xyz... --name alice@example.com
-```
+Adds a new recipient. Re-encrypts all shared secrets to include the new public key. Accepts `age1...`, `ssh-ed25519 ...`, or `github:username` formats.
 
 ---
 
 ### `murk circle revoke RECIPIENT [--vault NAME]`
 
-Removes a recipient by public key or display name. If a name is given, murk decrypts the shared blob to resolve it to a pubkey. Re-encrypts the shared blob without their key. Removes their personal blob from the file.
-
-```
-$ murk circle revoke alice@example.com
-Removed alice@example.com (age1xyz...) from recipients. Vault re-encrypted.
-⚠  This recipient can still decrypt previous versions from git history.
-   Rotate any sensitive credentials to complete revocation.
-```
+Removes a recipient by pubkey or display name. Re-encrypts all shared secrets without their key. Removes their scoped entries.
 
 ---
 
-### `murk circle [--vault NAME]`
+### `murk diff [REF] [--vault NAME]`
 
-Lists all recipient public keys. With `MURK_KEY`, also shows display names from the encrypted blob and marks the current user.
-
-```
-age1abc...  mickey@example.com  (you)
-age1xyz...  alice@example.com
-```
-
-Without `MURK_KEY` (pubkeys are in the plaintext header):
-
-```
-age1abc...
-age1xyz...
-```
+Shows which secrets changed between the current vault and a git ref (defaults to `HEAD`).
 
 ---
 
-## Multi-User Workflow
+### `murk merge-driver ANCESTOR OURS THEIRS [--vault NAME]`
 
-```bash
-# Alice initializes
-murk init
+Git merge driver for `.murk` files. Merges non-conflicting secret changes automatically.
 
-# Alice adds secrets
-murk add DATABASE_URL postgres://prod/db
-murk describe DATABASE_URL "production postgres"
+---
 
-# Bob generates a keypair (on his machine)
-murk init  # creates his own .env with MURK_KEY
+### `murk setup-merge-driver`
 
-# Bob shares his public key with Alice
-# Alice authorizes Bob
-murk circle authorize age1bob... --name bob@example.com
-
-# Bob adds MURK_KEY to his .env
-# Bob can now decrypt
-murk export
-
-# Bob adds a personal override
-murk add DATABASE_URL postgres://localhost/dev --scoped
-
-# Bob's export gives him his local DB, shared secrets for everything else
-eval $(murk export)
-```
+Configures git to use `murk merge-driver` for `.murk` files via `.gitattributes` and `.git/config`.
 
 ---
 
@@ -349,57 +273,33 @@ eval $(murk export)
 **What murk protects against:**
 
 - Repo leaks — `.murk` is safe to commit, useless without a private key
-- Accidental secret exposure — plaintext `.env` never committed if `.gitignore` is set correctly
-- Insider read access — personal blobs are encrypted only to their owner
+- Accidental secret exposure — `.env` is never committed if `.gitignore` is set correctly
+- Private overrides — scoped secrets (motes) are encrypted only to their owner
 
 **What murk does not protect against:**
 
 - A compromised machine with `MURK_KEY` present
 - Historical access after revocation — old `.murk` versions remain in git history. Always rotate credentials when revoking.
 - Fine-grained audit logging — use a secrets server for regulated environments
+- Malicious recipients — any authorized recipient can decrypt all shared secrets
 
 **Treat `MURK_KEY` like your SSH private key.** Never commit it. Never share it.
 
-**Revocation is incomplete without credential rotation.** murk will always tell you this.
+**Revocation is incomplete without credential rotation.** murk always warns about this.
 
 ### Scope
 
-murk is appropriate for dev tooling and small teams. It is not designed for regulated environments handling PII, financial data, or healthcare data where audit trails, key management infrastructure, and provable access controls are required.
-
-Most teams are sharing `.env` files over Slack, email, or shared docs. Encrypted credentials in a repo is a meaningful improvement over that baseline.
+murk is appropriate for dev tooling and small teams. It is not designed for regulated environments requiring audit trails, key management infrastructure, or provable access controls.
 
 ---
 
-## Direnv Integration
-
-```bash
-# .envrc
-eval $(murk export)
-```
-
----
-
-## V1 Scope
-
-- All commands above
-- Single shared blob + per-identity personal blobs
-- Per-key recipient metadata stored but not enforced
-- BIP39 recovery
-- direnv integration
-
-## V2 Planned
-
-- Per-key recipient enforcement (multiple blobs per key)
-- `murk verify` + `.murk.sha256` integrity checking
-- `murk grant KEY NAME` / `murk ungrant KEY NAME`
-- `murk rotate` for credential rotation workflow
-
----
-
-## Crate Dependencies (planned)
+## Crate Dependencies
 
 - `age` / `rage` — encryption
-- `bip39` — recovery phrase
+- `bip39` — recovery phrase generation
 - `serde` / `serde_json` — serialization
-- `clap` — CLI
-- `sha2` — hashing
+- `clap` — CLI argument parsing
+- `sha2` — integrity hashing
+- `chrono` — timestamps
+- `colored` — terminal output
+- `rpassword` — hidden input prompting

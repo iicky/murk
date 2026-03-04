@@ -499,6 +499,25 @@ fn cmd_import(file: &str, vault_path: &str) {
     let contents = fs::read_to_string(file)
         .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1));
 
+    // Warn about MURK_* keys that will be skipped during import.
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some((key, _)) = line.split_once('=') {
+            let key = key.trim();
+            if key.starts_with("MURK_") {
+                eprintln!(
+                    "{} skipping {}: murk variables cannot be imported",
+                    "⚠".yellow(),
+                    key.bold()
+                );
+            }
+        }
+    }
+
     let all_pairs = murk_cli::parse_env(&contents);
 
     // Filter out keys that aren't valid shell identifiers.
