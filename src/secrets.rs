@@ -1,6 +1,6 @@
 //! Secret CRUD operations on the in-memory `Murk` state.
 
-use crate::types;
+use crate::{crypto, types};
 
 /// Add or update a secret in the working state.
 /// If `scoped` is true, stores in scoped (encrypted to self only).
@@ -13,10 +13,10 @@ pub fn add_secret(
     desc: Option<&str>,
     scoped: bool,
     tags: &[String],
-    identity: &age::x25519::Identity,
+    identity: &crypto::MurkIdentity,
 ) -> bool {
     if scoped {
-        let pubkey = identity.to_public().to_string();
+        let pubkey = identity.pubkey_string().expect("valid identity has pubkey");
         murk.scoped
             .entry(key.into())
             .or_default()

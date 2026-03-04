@@ -17,7 +17,7 @@ pub struct RecipientEntry {
 pub fn list_recipients(vault: &types::Vault, secret_key: Option<&str>) -> Vec<RecipientEntry> {
     let meta_data = secret_key.filter(|k| !k.is_empty()).and_then(|sk| {
         let identity = crypto::parse_identity(sk).ok()?;
-        let my_pubkey = identity.to_public().to_string();
+        let my_pubkey = identity.pubkey_string().ok()?;
         let meta = crate::decrypt_meta(vault, &identity)?;
         Some((meta, my_pubkey))
     });
@@ -76,39 +76,54 @@ pub struct RevokeResult {
 }
 
 /// Remove a recipient from the vault. `recipient` can be a pubkey or a display name.
-/// Returns an error if the recipient is not found or is the last one.
+///
+/// When matched by display name, removes **all** recipients sharing that name
+/// (e.g. multiple SSH keys added via `github:username`).
+/// Returns an error if the recipient is not found or would remove the last recipient.
 pub fn revoke_recipient(
     vault: &mut types::Vault,
     murk: &mut types::Murk,
     recipient: &str,
 ) -> Result<RevokeResult, String> {
-    // Resolve to pubkey.
-    let pubkey = if vault.recipients.contains(&recipient.to_string()) {
-        recipient.to_string()
+    // Resolve to one or more pubkeys.
+    let pubkeys: Vec<String> = if vault.recipients.contains(&recipient.to_string()) {
+        // Exact pubkey match — single key.
+        vec![recipient.to_string()]
     } else {
-        murk.recipients
+        // Name match — collect ALL pubkeys with this display name.
+        let matched: Vec<String> = murk
+            .recipients
             .iter()
-            .find(|(_, name)| name.as_str() == recipient)
+            .filter(|(_, name)| name.as_str() == recipient)
             .map(|(pk, _)| pk.clone())
-            .ok_or_else(|| format!("recipient not found: {recipient}"))?
+            .collect();
+        if matched.is_empty() {
+            return Err(format!("recipient not found: {recipient}"));
+        }
+        matched
     };
 
-    if vault.recipients.len() == 1 {
+    if vault.recipients.len() <= pubkeys.len() {
         return Err(
             "cannot revoke last recipient — vault would become permanently inaccessible".into(),
         );
     }
 
-    vault.recipients.retain(|pk| pk != &pubkey);
+    let mut display_name = None;
+    for pubkey in &pubkeys {
+        vault.recipients.retain(|pk| pk != pubkey);
 
-    let display_name = murk.recipients.remove(&pubkey);
+        if let Some(name) = murk.recipients.remove(pubkey) {
+            display_name = Some(name);
+        }
 
-    // Remove their scoped entries.
-    for scoped_map in murk.scoped.values_mut() {
-        scoped_map.remove(&pubkey);
-    }
-    for entry in vault.secrets.values_mut() {
-        entry.scoped.remove(&pubkey);
+        // Remove their scoped entries.
+        for scoped_map in murk.scoped.values_mut() {
+            scoped_map.remove(pubkey);
+        }
+        for entry in vault.secrets.values_mut() {
+            entry.scoped.remove(pubkey);
+        }
     }
 
     let exposed_keys = vault.schema.keys().cloned().collect();
@@ -398,5 +413,42 @@ mod tests {
         let result = revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
         assert_eq!(result.display_name.as_deref(), Some("bob"));
         assert!(!vault.recipients.contains(&pk2));
+    }
+
+    #[test]
+    fn revoke_by_name_removes_all_matching_keys() {
+        let (_, pk_owner) = generate_keypair();
+        let (_, pk_ssh1) = generate_keypair();
+        let (_, pk_ssh2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk_owner.clone(), pk_ssh1.clone(), pk_ssh2.clone()];
+        let mut murk = empty_murk();
+        murk.recipients
+            .insert(pk_ssh1.clone(), "alice@github".into());
+        murk.recipients
+            .insert(pk_ssh2.clone(), "alice@github".into());
+
+        let result = revoke_recipient(&mut vault, &mut murk, "alice@github").unwrap();
+        assert_eq!(result.display_name.as_deref(), Some("alice@github"));
+        assert!(!vault.recipients.contains(&pk_ssh1));
+        assert!(!vault.recipients.contains(&pk_ssh2));
+        assert!(vault.recipients.contains(&pk_owner));
+    }
+
+    #[test]
+    fn revoke_all_matching_blocked_if_last() {
+        let (_, pk_ssh1) = generate_keypair();
+        let (_, pk_ssh2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk_ssh1.clone(), pk_ssh2.clone()];
+        let mut murk = empty_murk();
+        murk.recipients
+            .insert(pk_ssh1.clone(), "alice@github".into());
+        murk.recipients
+            .insert(pk_ssh2.clone(), "alice@github".into());
+
+        let result = revoke_recipient(&mut vault, &mut murk, "alice@github");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot revoke last recipient"));
     }
 }

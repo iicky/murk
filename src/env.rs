@@ -22,10 +22,8 @@ const WORLD_READABLE_MASK: u32 = 0o077;
 /// `MURK_KEY` takes priority; `MURK_KEY_FILE` reads the key from a file.
 /// Returns the key wrapped in `SecretString` so it is zeroized on drop.
 pub fn resolve_key() -> Result<SecretString, String> {
-    if let Ok(k) = env::var("MURK_KEY") {
-        if !k.is_empty() {
-            return Ok(SecretString::from(k));
-        }
+    if let Some(k) = env::var("MURK_KEY").ok().filter(|k| !k.is_empty()) {
+        return Ok(SecretString::from(k));
     }
     if let Ok(path) = env::var("MURK_KEY_FILE") {
         return fs::read_to_string(&path)

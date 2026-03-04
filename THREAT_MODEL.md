@@ -56,6 +56,20 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **What crosses the boundary in plaintext:** key names, key descriptions, example values, recipient public keys, vault metadata (version, creation date, repo URL).
 
+## GitHub SSH key onboarding
+
+`murk authorize github:username` fetches SSH public keys from `https://github.com/username.keys` without authentication. This introduces trust assumptions:
+
+**You trust GitHub as a key directory.** The keys returned by GitHub are whatever the user has uploaded to their GitHub account. If an attacker compromises a GitHub account and adds their own SSH key, `murk authorize github:attacker` would grant them access to vault secrets.
+
+**You trust that the GitHub username belongs to who you think it does.** There is no out-of-band verification. If you authorize `github:alice` you are trusting that the GitHub user "alice" is your teammate Alice. For most teams this is reasonable — you already trust teammates' GitHub accounts for code review and merge access.
+
+**No TOFU (Trust On First Use) pinning.** murk does not remember which keys were previously fetched for a username. If a user rotates their SSH keys on GitHub, a subsequent `authorize` would add the new keys. Revocation of old keys must be done manually via `murk revoke`.
+
+**SSH keys in the vault are just longer pubkey strings.** The vault format is unchanged — `vault.recipients` stores `ssh-ed25519 AAAA...` strings alongside `age1...` strings. All existing integrity protections (MAC, per-value encryption) apply equally to SSH recipients.
+
+**Acceptable risk profile:** For a team secrets tool, trusting GitHub as a key directory is a reasonable trade-off. You are already trusting your teammates with code access, CI credentials, and production deployments through the same GitHub accounts. The alternative (manual key exchange) has worse security properties in practice because teams resort to sharing keys over Slack or email.
+
 ## Key compromise scenarios
 
 | Scenario | Impact | Mitigation |
@@ -65,6 +79,8 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 | Recovery phrase exposed | Attacker can derive the secret key | Same as key leak |
 | Repository made public | Key names and encrypted values exposed; values remain safe if keys are secure | Rotate secrets as a precaution if key names alone are sensitive |
 | Recipient revoked | Revoked user retains access to historical versions in git | Rotate all secrets that the revoked user had access to |
+| GitHub account compromised | Attacker could be authorized via `github:username` if the vault owner runs authorize after compromise | Verify teammate identity before authorizing; revoke and rotate if compromise is suspected |
+| SSH private key leaked | Attacker can decrypt all secrets the SSH key was a recipient for | Revoke the compromised SSH key from the vault, rotate secrets |
 
 ## Cryptographic properties
 
@@ -72,8 +88,9 @@ murk delegates all cryptography to age. It does not implement any custom cryptog
 
 - **Encryption:** age v1 (X25519 key agreement, ChaCha20-Poly1305 payload encryption)
 - **Per-value encryption:** each secret value is encrypted independently with a fresh age file key
+- **Recipient types:** age x25519 keys (`age1...`) and SSH keys (`ssh-ed25519`, `ssh-rsa`) — age handles both natively
 - **Integrity:** SHA-256 MAC over sorted key names + encrypted shared values + sorted recipient public keys, stored inside an age-encrypted meta blob
-- **Key derivation:** BIP39 mnemonic (256 bits of entropy) → SHA-256 → age identity
+- **Key derivation:** BIP39 mnemonic (256 bits of entropy) → SHA-256 → age identity (age keys only; SSH keys use their native format)
 
 The MAC binds independent age ciphertexts together. Without it, an attacker could swap ciphertexts between key names (age authenticates individual ciphertexts but has no cross-value binding).
 

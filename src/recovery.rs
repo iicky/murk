@@ -35,7 +35,9 @@ pub fn generate() -> Result<(String, String, String), RecoveryError> {
 
     let identity = crate::crypto::parse_identity(&secret_key)
         .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity
+        .pubkey_string()
+        .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
 
     Ok((mnemonic.to_string(), secret_key, pubkey))
 }

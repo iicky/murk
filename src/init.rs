@@ -24,7 +24,7 @@ pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
     match raw {
         Some(key) => {
             let identity = crypto::parse_identity(&key).map_err(|e| e.to_string())?;
-            let pubkey = identity.to_public().to_string();
+            let pubkey = identity.pubkey_string().map_err(|e| e.to_string())?;
             Ok(Some(DiscoveredKey {
                 secret_key: key,
                 pubkey,
@@ -51,7 +51,7 @@ pub struct InitStatus {
 /// attempts to decrypt meta for the display name.
 pub fn check_init_status(vault: &types::Vault, secret_key: &str) -> Result<InitStatus, String> {
     let identity = crypto::parse_identity(secret_key).map_err(|e| e.to_string())?;
-    let pubkey = identity.to_public().to_string();
+    let pubkey = identity.pubkey_string().map_err(|e| e.to_string())?;
     let authorized = vault.recipients.contains(&pubkey);
 
     let display_name = if authorized {

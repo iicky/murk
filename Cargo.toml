@@ -2,7 +2,7 @@
 name = "murk-cli"
 version = "0.2.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "Encrypted secrets manager for developers — one file, age encryption, git-friendly"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/iicky/murk"
@@ -19,7 +19,8 @@ name = "murk"
 path = "src/main.rs"
 
 [dependencies]
-age = "0.11.2"
+age = { version = "0.11.2", features = ["ssh"] }
+ureq = "3"
 base64 = "0.22.1"
 bech32 = "0.11.1"
 bip39 = "2.2.2"

@@ -13,11 +13,11 @@ pub fn generate_keypair() -> (String, String) {
     (secret.expose_secret().to_string(), pubkey)
 }
 
-pub fn make_recipient(pubkey: &str) -> age::x25519::Recipient {
+pub fn make_recipient(pubkey: &str) -> crypto::MurkRecipient {
     crypto::parse_recipient(pubkey).unwrap()
 }
 
-pub fn make_identity(secret: &str) -> age::x25519::Identity {
+pub fn make_identity(secret: &str) -> crypto::MurkIdentity {
     crypto::parse_identity(secret).unwrap()
 }
 
