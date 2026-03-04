@@ -29,12 +29,26 @@ impl From<std::io::Error> for VaultError {
 }
 
 /// Parse vault from a JSON string.
+///
+/// Rejects vaults with an unrecognized major version to prevent
+/// silently misinterpreting a newer format.
 pub fn parse(contents: &str) -> Result<Vault, VaultError> {
-    serde_json::from_str(contents).map_err(|e| {
+    let vault: Vault = serde_json::from_str(contents).map_err(|e| {
         VaultError::Parse(format!(
             "invalid vault JSON: {e}. Vault may be corrupted — restore from git"
         ))
-    })
+    })?;
+
+    // Accept any 2.x version (same major).
+    let major = vault.version.split('.').next().unwrap_or("");
+    if major != "2" {
+        return Err(VaultError::Parse(format!(
+            "unsupported vault version: {}. This build of murk supports version 2.x",
+            vault.version
+        )));
+    }
+
+    Ok(vault)
 }
 
 /// Read a .murk vault file.
@@ -171,6 +185,25 @@ mod tests {
         let result = parse(&json);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().version, VAULT_VERSION);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_major_version() {
+        let mut vault = test_vault();
+        vault.version = "99.0".into();
+        let json = serde_json::to_string(&vault).unwrap();
+        let result = parse(&json);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported vault version: 99.0"));
+    }
+
+    #[test]
+    fn parse_accepts_minor_version_bump() {
+        let mut vault = test_vault();
+        vault.version = "2.1".into();
+        let json = serde_json::to_string(&vault).unwrap();
+        let result = parse(&json);
+        assert!(result.is_ok());
     }
 
     #[test]

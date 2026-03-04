@@ -1653,10 +1653,11 @@ fn restore_recovers_key_from_phrase() {
     let phrase = String::from_utf8(output.stdout).unwrap().trim().to_string();
     assert_eq!(phrase.split_whitespace().count(), 24);
 
-    // Restore from phrase — should print the same key.
+    // Restore from phrase via stdin — should print the same key.
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["restore", &phrase])
+        .arg("restore")
+        .write_stdin(format!("{phrase}\n"))
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
@@ -1670,7 +1671,8 @@ fn restore_invalid_phrase_fails() {
 
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["restore", "not a valid recovery phrase at all"])
+        .arg("restore")
+        .write_stdin("not a valid recovery phrase at all\n")
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
