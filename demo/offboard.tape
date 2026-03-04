@@ -77,7 +77,7 @@ Type "# Revoke Carol's access"
 Enter
 Sleep 500ms
 
-Type "murk revoke carol"
+Type "murk circle revoke carol"
 Enter
 Sleep 3s
 

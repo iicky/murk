@@ -50,7 +50,7 @@ Type "# Add a teammate by GitHub username"
 Enter
 Sleep 500ms
 
-Type "murk authorize github:iicky"
+Type "murk circle authorize github:iicky"
 Enter
 Sleep 3s
 

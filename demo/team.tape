@@ -137,7 +137,7 @@ Type "# Alice authorizes Bob"
 Enter
 Sleep 500ms
 
-Type `murk authorize $BOB_PUBKEY bob`
+Type `murk circle authorize $BOB_PUBKEY --name bob`
 Enter
 Sleep 2s
 

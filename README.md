@@ -88,7 +88,7 @@ murk add DATABASE_URL
 murk init
 
 # Alice adds Bob as a recipient
-murk authorize age1bob... bob@example.com
+murk circle authorize age1bob... --name bob@example.com
 
 # Bob can now decrypt
 murk export
@@ -106,7 +106,7 @@ murk add DATABASE_URL --scoped
 When someone leaves, revoke their access and rotate the secrets:
 
 ```bash
-murk revoke carol
+murk circle revoke carol
 murk add DATABASE_URL    # prompts for new value
 murk add API_KEY
 git commit -am "revoke carol, rotate secrets" && git push
@@ -153,9 +153,9 @@ murk restore
 | `murk import [FILE]` | Import secrets from a .env file |
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
-| `murk authorize PUBKEY [NAME]` | Add a recipient |
-| `murk revoke RECIPIENT` | Remove a recipient |
 | `murk circle` | List recipients |
+| `murk circle authorize PUBKEY [--name NAME]` | Add a recipient |
+| `murk circle revoke RECIPIENT` | Remove a recipient |
 | `murk restore [PHRASE]` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
 

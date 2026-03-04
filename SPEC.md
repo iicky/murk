@@ -273,22 +273,22 @@ Recovery words are a BIP39 encoding of the private key itself — not a separate
 
 ---
 
-### `murk authorize PUBKEY [NAME] [--vault NAME]`
+### `murk circle authorize PUBKEY [--name NAME] [--vault NAME]`
 
-Adds a new recipient to the vault. Re-encrypts the shared blob to include the new public key. Only existing recipients can authorize new ones. The optional name is stored as a display label inside the encrypted shared blob.
+Adds a new recipient to the vault. Re-encrypts the shared blob to include the new public key. Only existing recipients can authorize new ones. The optional `--name` is stored as a display label inside the encrypted shared blob. For `github:username`, the name is auto-derived.
 
 ```
-murk authorize age1xyz... alice@example.com
+murk circle authorize age1xyz... --name alice@example.com
 ```
 
 ---
 
-### `murk revoke RECIPIENT [--vault NAME]`
+### `murk circle revoke RECIPIENT [--vault NAME]`
 
 Removes a recipient by public key or display name. If a name is given, murk decrypts the shared blob to resolve it to a pubkey. Re-encrypts the shared blob without their key. Removes their personal blob from the file.
 
 ```
-$ murk revoke alice@example.com
+$ murk circle revoke alice@example.com
 Removed alice@example.com (age1xyz...) from recipients. Vault re-encrypted.
 ⚠  This recipient can still decrypt previous versions from git history.
    Rotate any sensitive credentials to complete revocation.
@@ -329,7 +329,7 @@ murk init  # creates his own .env with MURK_KEY
 
 # Bob shares his public key with Alice
 # Alice authorizes Bob
-murk authorize age1bob... bob@example.com
+murk circle authorize age1bob... --name bob@example.com
 
 # Bob adds MURK_KEY to his .env
 # Bob can now decrypt

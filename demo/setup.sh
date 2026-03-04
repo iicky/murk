@@ -99,7 +99,7 @@ demo_alice_authorize() {
 
     cd "$ALICE_DIR" || return 1
     export MURK_KEY="$ALICE_KEY"
-    murk authorize "${!pubkey_var}" "$name" >/dev/null 2>&1
+    murk circle authorize "${!pubkey_var}" --name "$name" >/dev/null 2>&1
 }
 
 # Git add .murk, commit, and push as Alice.

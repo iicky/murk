@@ -63,7 +63,7 @@ test-offboard: build
 	demo_pull carol && \
 	cd $$BOB_DIR && export MURK_KEY=$$BOB_KEY && \
 	murk circle 2>/dev/null | grep -q "carol" && \
-	murk revoke carol >/dev/null 2>&1 && \
+	murk circle revoke carol >/dev/null 2>&1 && \
 	echo "rotated1" | murk add DATABASE_URL >/dev/null 2>&1 && \
 	echo "rotated2" | murk add API_KEY >/dev/null 2>&1 && \
 	echo "rotated3" | murk add STRIPE_SECRET >/dev/null 2>&1 && \
