@@ -155,7 +155,7 @@ murk restore
 | `murk info` | Show public schema (no key required) |
 | `murk authorize PUBKEY [NAME]` | Add a recipient |
 | `murk revoke RECIPIENT` | Remove a recipient |
-| `murk recipients` | List recipients |
+| `murk circle` | List recipients |
 | `murk restore [PHRASE]` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
 

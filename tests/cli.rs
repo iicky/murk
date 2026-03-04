@@ -551,7 +551,7 @@ fn recover_without_key_fails() {
         .stderr(predicate::str::contains("MURK_KEY not set"));
 }
 
-// ── recipients ──
+// ── circle ──
 
 #[test]
 fn recipients_lists_creator() {
@@ -559,14 +559,10 @@ fn recipients_lists_creator() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains(&pubkey)
-                .and(predicate::str::contains("testuser"))
-                .and(predicate::str::contains("(you)")),
-        );
+        .stderr(predicate::str::contains("testuser").and(predicate::str::contains("◆")));
 }
 
 #[test]
@@ -577,7 +573,7 @@ fn recipients_works_without_murk_key() {
     // Without MURK_KEY, just shows pubkeys (no names).
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
@@ -603,10 +599,10 @@ fn authorize_adds_recipient() {
         .stderr(predicate::str::contains("authorized bob"));
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(&second_pubkey).and(predicate::str::contains("bob")));
+        .stderr(predicate::str::contains("bob"));
 }
 
 #[test]
@@ -656,7 +652,7 @@ fn revoke_removes_recipient() {
 
     // Should no longer appear in recipients.
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&second_pubkey).not());
@@ -682,7 +678,7 @@ fn revoke_by_pubkey_works() {
         .success();
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&second_pubkey).not());

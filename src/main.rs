@@ -176,7 +176,8 @@ enum Command {
     },
 
     /// List all recipients
-    Recipients {
+    #[command(alias = "recipients")]
+    Circle {
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -863,6 +864,46 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
     );
 }
 
+/// Truncate a pubkey for display: first 8 chars + "…" + last 4 chars.
+fn truncate_pubkey(pk: &str) -> String {
+    // SSH keys: "ssh-ed25519 AAAA..." — truncate the base64 portion.
+    if let Some(key_data) = pk.strip_prefix("ssh-ed25519 ") {
+        return truncate_raw(key_data);
+    }
+    if let Some(key_data) = pk.strip_prefix("ssh-rsa ") {
+        return truncate_raw(key_data);
+    }
+    // age keys: "age1..."
+    truncate_raw(pk)
+}
+
+fn truncate_raw(s: &str) -> String {
+    if s.len() <= 13 {
+        return s.to_string();
+    }
+    let start: String = s.chars().take(8).collect();
+    let end: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{start}…{end}")
+}
+
+/// Return the key type label for a pubkey.
+fn key_type_label(pk: &str) -> &'static str {
+    if pk.starts_with("ssh-ed25519 ") {
+        "ed25519"
+    } else if pk.starts_with("ssh-rsa ") {
+        "rsa"
+    } else {
+        "age"
+    }
+}
+
 fn cmd_recipients(vault_path: &str) {
     let path = Path::new(vault_path);
     let vault = try_or_die(vault::read(path));
@@ -872,6 +913,7 @@ fn cmd_recipients(vault_path: &str) {
     let has_names = entries.iter().any(|e| e.display_name.is_some());
 
     if !has_names {
+        // Locked: plain pubkeys to stdout for piping.
         for entry in &entries {
             println!("{}", entry.pubkey);
         }
@@ -893,23 +935,38 @@ fn cmd_recipients(vault_path: &str) {
         }
     }
 
+    // Compute name column width for alignment.
+    let name_width = groups
+        .iter()
+        .map(|(name, _)| name.map_or(0, |n| n.len()))
+        .max()
+        .unwrap_or(0);
+
     for (name, group) in &groups {
         let is_self = group.iter().any(|e| e.is_self);
-        let marker = if is_self {
-            "  (you)".green().to_string()
-        } else {
-            String::new()
-        };
+        let marker = if is_self { "◆" } else { " " };
         let label = name.unwrap_or("");
+        let label_padded = format!("{label:<name_width$}");
 
-        if group.len() == 1 {
-            println!("{}  {}{}", group[0].pubkey.dimmed(), label.bold(), marker);
+        let key_type = key_type_label(&group[0].pubkey);
+        let key_info = if group.len() == 1 {
+            truncate_pubkey(&group[0].pubkey)
         } else {
-            println!("{}  ({} keys){}", label.bold(), group.len(), marker,);
-            for entry in group {
-                let key_type = entry.pubkey.split_whitespace().next().unwrap_or("key");
-                println!("  {}  {}", key_type.dimmed(), entry.pubkey.dimmed());
-            }
+            format!("({} keys)", group.len())
+        };
+
+        if is_self {
+            eprintln!(
+                "{} {}  {}",
+                marker.magenta(),
+                label_padded.magenta().bold(),
+                format!("{key_info}  {key_type}").dimmed()
+            );
+        } else {
+            eprintln!(
+                "{}",
+                format!("  {label_padded}  {key_info}  {key_type}").dimmed()
+            );
         }
     }
 }
@@ -1113,7 +1170,7 @@ fn main() {
             vault,
         } => cmd_authorize(&pubkey, name.as_deref(), &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
-        Command::Recipients { vault } => cmd_recipients(&vault),
+        Command::Circle { vault } => cmd_recipients(&vault),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,

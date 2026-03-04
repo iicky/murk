@@ -42,7 +42,7 @@ Type "# One recipient so far"
 Enter
 Sleep 500ms
 
-Type "murk recipients"
+Type "murk circle"
 Enter
 Sleep 2s
 
@@ -58,7 +58,7 @@ Type "# SSH keys fetched and added automatically"
 Enter
 Sleep 500ms
 
-Type "murk recipients"
+Type "murk circle"
 Enter
 Sleep 3s
 

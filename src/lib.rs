@@ -122,7 +122,7 @@ pub fn load_vault(
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
         let plaintext = decrypt_value(&entry.shared, &identity).map_err(|_| {
-            "decryption failed — your MURK_KEY may not be a recipient of this vault. Check with `murk recipients`".to_string()
+            "decryption failed — your MURK_KEY may not be a recipient of this vault. Check with `murk circle`".to_string()
         })?;
         let value = String::from_utf8(plaintext)
             .map_err(|e| format!("invalid UTF-8 in secret {key}: {e}"))?;

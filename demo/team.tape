@@ -141,7 +141,7 @@ Type `murk authorize $BOB_PUBKEY bob`
 Enter
 Sleep 2s
 
-Type "murk recipients"
+Type "murk circle"
 Enter
 Sleep 2s
 

@@ -69,7 +69,7 @@ Type "# Carol is leaving — who's on the team?"
 Enter
 Sleep 500ms
 
-Type "murk recipients"
+Type "murk circle"
 Enter
 Sleep 2s
 
@@ -106,7 +106,7 @@ Type "sk_live_rotated456"
 Enter
 Sleep 2s
 
-Type "murk recipients"
+Type "murk circle"
 Enter
 Sleep 2s
 

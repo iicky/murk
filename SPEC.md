@@ -296,7 +296,7 @@ Removed alice@example.com (age1xyz...) from recipients. Vault re-encrypted.
 
 ---
 
-### `murk recipients [--vault NAME]`
+### `murk circle [--vault NAME]`
 
 Lists all recipient public keys. With `MURK_KEY`, also shows display names from the encrypted blob and marks the current user.
 
