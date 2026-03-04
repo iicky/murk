@@ -30,7 +30,10 @@ pub fn resolve_key() -> Result<SecretString, String> {
             .map(|contents| SecretString::from(contents.trim().to_string()))
             .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));
     }
-    Err("MURK_KEY not set. Add it to .env and load with direnv or `eval $(cat .env)`. Alternatively, set MURK_KEY_FILE to a path containing the key".into())
+    Err(
+        "MURK_KEY not set — run `murk init` to generate a key, or ask a recipient to authorize you"
+            .into(),
+    )
 }
 
 /// Parse a .env file into key-value pairs.
