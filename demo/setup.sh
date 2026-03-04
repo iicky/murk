@@ -10,7 +10,7 @@ strip_ansi() {
 
 # Print the public key from `murk init` output (strips ANSI codes).
 murk_pubkey() {
-    murk init 2>&1 | strip_ansi | grep "^age1"
+    murk init 2>&1 | strip_ansi | grep -o "age1[a-z0-9]*"
 }
 
 # Create temp dirs for a multi-persona demo.

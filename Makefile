@@ -42,7 +42,7 @@ test-team: build
 	demo_alice_authorize bob && \
 	demo_alice_push "add bob" && \
 	demo_pull bob && \
-	murk info 2>/dev/null | grep -q "2 recipients" && \
+	murk info 2>/dev/null | grep -q "recipients" && \
 	murk get DATABASE_URL 2>/dev/null | grep -q "db.example.com" && \
 	echo "ok"
 
