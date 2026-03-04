@@ -347,7 +347,7 @@ fn describe_adds_description() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(
+        .stdout(
             predicate::str::contains("PostgreSQL connection string")
                 .and(predicate::str::contains("postgres://user:pass@host/db")),
         );
@@ -374,7 +374,7 @@ fn info_works_without_murk_key() {
         .env_remove("MURK_KEY")
         .assert()
         .success()
-        .stderr(predicate::str::contains("TOKEN"));
+        .stdout(predicate::str::contains("TOKEN"));
 }
 
 // ── export ──
@@ -562,7 +562,7 @@ fn recipients_lists_creator() {
         .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("testuser").and(predicate::str::contains("◆")));
+        .stdout(predicate::str::contains("testuser").and(predicate::str::contains("◆")));
 }
 
 #[test]
@@ -593,7 +593,15 @@ fn authorize_adds_recipient() {
     let second_pubkey = second_identity.to_public().to_string();
 
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("authorized bob"));
@@ -602,7 +610,7 @@ fn authorize_adds_recipient() {
         .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("bob"));
+        .stdout(predicate::str::contains("bob"));
 }
 
 #[test]
@@ -611,7 +619,7 @@ fn authorize_duplicate_fails() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["authorize", &pubkey, "--vault", "test.murk"])
+        .args(["circle", "authorize", &pubkey, "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already a recipient"));
@@ -623,7 +631,13 @@ fn authorize_invalid_key_fails() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["authorize", "not-a-real-key", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            "not-a-real-key",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid public key"));
@@ -639,12 +653,20 @@ fn revoke_removes_recipient() {
 
     // Authorize then revoke.
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["revoke", "bob", "--vault", "test.murk"])
+        .args(["circle", "revoke", "bob", "--vault", "test.murk"])
         .assert()
         .success()
         .stderr(predicate::str::contains("removed"))
@@ -667,13 +689,19 @@ fn revoke_by_pubkey_works() {
     let second_pubkey = second_identity.to_public().to_string();
 
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
     // Revoke by pubkey instead of name.
     murk(&dir, &key)
-        .args(["revoke", &second_pubkey, "--vault", "test.murk"])
+        .args(["circle", "revoke", &second_pubkey, "--vault", "test.murk"])
         .assert()
         .success();
 
@@ -690,7 +718,7 @@ fn revoke_last_recipient_fails() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["revoke", &pubkey, "--vault", "test.murk"])
+        .args(["circle", "revoke", &pubkey, "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot revoke last recipient"));
@@ -702,7 +730,7 @@ fn revoke_unknown_fails() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["revoke", "nobody", "--vault", "test.murk"])
+        .args(["circle", "revoke", "nobody", "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("recipient not found"));
@@ -806,7 +834,15 @@ fn authorized_recipient_can_decrypt() {
     };
 
     murk(&dir, &key_a)
-        .args(["authorize", &pk_b, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &pk_b,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
@@ -836,7 +872,7 @@ fn add_with_tag() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("[db]"));
+        .stdout(predicate::str::contains("[db]"));
 }
 
 #[test]
@@ -863,7 +899,7 @@ fn add_with_multiple_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("[db, backend]"));
+        .stdout(predicate::str::contains("[db, backend]"));
 }
 
 #[test]
@@ -888,7 +924,7 @@ fn add_merges_tags_on_existing_key() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("[db, backend]"));
+        .stdout(predicate::str::contains("[db, backend]"));
 }
 
 #[test]
@@ -919,7 +955,7 @@ fn describe_sets_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("[auth]"));
+        .stdout(predicate::str::contains("[auth]"));
 }
 
 #[test]
@@ -950,7 +986,7 @@ fn describe_replaces_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("[new]").and(predicate::str::contains("[old]").not()));
+        .stdout(predicate::str::contains("[new]").and(predicate::str::contains("[old]").not()));
 }
 
 #[test]
@@ -1062,7 +1098,7 @@ fn info_filters_by_tag() {
         .args(["info", "--tag", "api", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("API_KEY").and(predicate::str::contains("DB_URL").not()));
+        .stdout(predicate::str::contains("API_KEY").and(predicate::str::contains("DB_URL").not()));
 }
 
 // ── end-to-end workflow ──
@@ -1538,7 +1574,7 @@ fn info_displays_codename() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("codename"));
+        .stdout(predicate::str::contains("codename"));
 }
 
 #[test]
@@ -1556,7 +1592,7 @@ fn codename_changes_when_vault_changes() {
         .args(["info", "--vault", "test.murk"])
         .output()
         .unwrap();
-    let info1 = String::from_utf8(out1.stderr).unwrap();
+    let info1 = String::from_utf8(out1.stdout).unwrap();
 
     // Get info output after adding second secret.
     murk(&dir, &key)
@@ -1568,7 +1604,7 @@ fn codename_changes_when_vault_changes() {
         .args(["info", "--vault", "test.murk"])
         .output()
         .unwrap();
-    let info2 = String::from_utf8(out2.stderr).unwrap();
+    let info2 = String::from_utf8(out2.stdout).unwrap();
 
     // Extract codename lines.
     let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
@@ -1599,8 +1635,8 @@ fn codename_is_deterministic() {
         .output()
         .unwrap();
 
-    let info1 = String::from_utf8(out1.stderr).unwrap();
-    let info2 = String::from_utf8(out2.stderr).unwrap();
+    let info1 = String::from_utf8(out1.stdout).unwrap();
+    let info2 = String::from_utf8(out2.stdout).unwrap();
 
     let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
     let cn2 = info2.lines().find(|l| l.contains("codename")).unwrap();
@@ -1662,5 +1698,5 @@ fn old_vault_without_repo_parses() {
         .env_remove("MURK_KEY")
         .assert()
         .success()
-        .stderr(predicate::str::contains("codename"));
+        .stdout(predicate::str::contains("codename"));
 }

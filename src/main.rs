@@ -156,10 +156,12 @@ enum Command {
     },
 
     /// Add a recipient to the vault
+    #[command(hide = true)]
     Authorize {
         /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
         pubkey: String,
-        /// Optional display name (stored in encrypted meta)
+        /// Display name for this recipient
+        #[arg(long)]
         name: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
@@ -167,6 +169,7 @@ enum Command {
     },
 
     /// Remove a recipient from the vault
+    #[command(hide = true)]
     Revoke {
         /// Recipient pubkey or display name
         recipient: String,
@@ -175,9 +178,11 @@ enum Command {
         vault: String,
     },
 
-    /// List all recipients
+    /// Manage recipients
     #[command(alias = "recipients")]
     Circle {
+        #[command(subcommand)]
+        sub: Option<CircleCommand>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -217,6 +222,30 @@ enum Command {
     /// Configure git to use murk's merge driver for .murk files
     #[command(name = "setup-merge-driver")]
     SetupMergeDriver,
+}
+
+#[derive(Subcommand)]
+enum CircleCommand {
+    /// Add a recipient to the vault
+    Authorize {
+        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        pubkey: String,
+        /// Display name for this recipient
+        #[arg(long)]
+        name: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Remove a recipient from the vault
+    Revoke {
+        /// Recipient pubkey or display name
+        recipient: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 }
 
 /// Prompt the user for a line of input, with an optional default value.
@@ -715,12 +744,12 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                 if show_values {
                     println!(
                         "{} {} = {}",
-                        "+".green().bold(),
-                        entry.key,
+                        "+".magenta().bold(),
+                        entry.key.bold(),
                         entry.new_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "+".green().bold(), entry.key);
+                    println!("{} {}", "+".magenta().bold(), entry.key.bold());
                 }
             }
             DiffKind::Removed => {
@@ -728,24 +757,25 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                     println!(
                         "{} {} = {}",
                         "-".red().bold(),
-                        entry.key,
+                        entry.key.bold(),
                         entry.old_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "-".red().bold(), entry.key);
+                    println!("{} {}", "-".red().bold(), entry.key.bold());
                 }
             }
             DiffKind::Changed => {
                 if show_values {
                     println!(
-                        "{} {}: {} → {}",
+                        "{} {} {} {} {}",
                         "~".yellow().bold(),
-                        entry.key,
+                        entry.key.bold(),
                         entry.old_value.as_deref().unwrap_or(""),
+                        "→".dimmed(),
                         entry.new_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "~".yellow().bold(), entry.key);
+                    println!("{} {}", "~".yellow().bold(), entry.key.bold());
                 }
             }
         }
@@ -956,14 +986,14 @@ fn cmd_recipients(vault_path: &str) {
         };
 
         if is_self {
-            eprintln!(
+            println!(
                 "{} {}  {}",
                 marker.magenta(),
                 label_padded.magenta().bold(),
                 format!("{key_info}  {key_type}").dimmed()
             );
         } else {
-            eprintln!(
+            println!(
                 "{}",
                 format!("  {label_padded}  {key_info}  {key_type}").dimmed()
             );
@@ -1025,25 +1055,25 @@ fn cmd_info(tags: &[String], vault_path: &str) {
     ));
 
     // Nameplate: ░▓ vault_name
-    eprintln!(
+    println!(
         "{} {}",
         "▓░".dimmed(),
         info.vault_name.truecolor(135, 95, 255).bold()
     );
-    eprintln!("   {}    {}", "codename".dimmed(), info.codename);
+    println!("   {}    {}", "codename".dimmed(), info.codename);
     if !info.repo.is_empty() {
-        eprintln!("   {}        {}", "repo".dimmed(), info.repo);
+        println!("   {}        {}", "repo".dimmed(), info.repo);
     }
-    eprintln!("   {}     {}", "created".dimmed(), info.created);
-    eprintln!("   {}  {}", "recipients".dimmed(), info.recipient_count);
+    println!("   {}     {}", "created".dimmed(), info.created);
+    println!("   {}  {}", "recipients".dimmed(), info.recipient_count);
 
     if info.entries.is_empty() {
-        eprintln!();
-        eprintln!("   {}", "no keys in vault".dimmed());
+        println!();
+        println!("   {}", "no keys in vault".dimmed());
         return;
     }
 
-    eprintln!();
+    println!();
 
     // Compute column widths for aligned output.
     let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
@@ -1110,7 +1140,7 @@ fn cmd_info(tags: &[String], vault_path: &str) {
                 format!("✦ {}", entry.scoped_recipients.join(", "))
             };
 
-            eprintln!(
+            println!(
                 "   {}  {}  {}  {}  {}",
                 key_padded.magenta().dimmed().bold(),
                 desc_padded,
@@ -1119,7 +1149,7 @@ fn cmd_info(tags: &[String], vault_path: &str) {
                 scoped_str.dimmed()
             );
         } else {
-            eprintln!(
+            println!(
                 "   {}  {}  {}",
                 key_padded.magenta().dimmed().bold(),
                 desc_padded,
@@ -1170,7 +1200,20 @@ fn main() {
             vault,
         } => cmd_authorize(&pubkey, name.as_deref(), &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
-        Command::Circle { vault } => cmd_recipients(&vault),
+        Command::Circle { sub: None, vault } => cmd_recipients(&vault),
+        Command::Circle {
+            sub:
+                Some(CircleCommand::Authorize {
+                    pubkey,
+                    name,
+                    vault,
+                }),
+            ..
+        } => cmd_authorize(&pubkey, name.as_deref(), &vault),
+        Command::Circle {
+            sub: Some(CircleCommand::Revoke { recipient, vault }),
+            ..
+        } => cmd_revoke(&recipient, &vault),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,
