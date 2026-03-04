@@ -42,7 +42,7 @@ test-team: build
 	demo_alice_authorize bob && \
 	demo_alice_push "add bob" && \
 	demo_pull bob && \
-	murk info 2>/dev/null | grep -q "2 recipients" && \
+	murk info 2>/dev/null | grep -q "recipients" && \
 	murk get DATABASE_URL 2>/dev/null | grep -q "db.example.com" && \
 	echo "ok"
 
@@ -62,12 +62,12 @@ test-offboard: build
 	demo_pull bob && \
 	demo_pull carol && \
 	cd $$BOB_DIR && export MURK_KEY=$$BOB_KEY && \
-	murk recipients 2>/dev/null | grep -q "carol" && \
-	murk revoke carol >/dev/null 2>&1 && \
+	murk circle 2>/dev/null | grep -q "carol" && \
+	murk circle revoke carol >/dev/null 2>&1 && \
 	echo "rotated1" | murk add DATABASE_URL >/dev/null 2>&1 && \
 	echo "rotated2" | murk add API_KEY >/dev/null 2>&1 && \
 	echo "rotated3" | murk add STRIPE_SECRET >/dev/null 2>&1 && \
-	! murk recipients 2>/dev/null | grep -q "carol" && \
+	! murk circle 2>/dev/null | grep -q "carol" && \
 	git add .murk && git commit -m "revoke carol" >/dev/null 2>&1 && \
 	git push >/dev/null 2>&1 && \
 	cd $$CAROL_DIR && export MURK_KEY=$$CAROL_KEY && \

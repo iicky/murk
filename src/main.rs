@@ -13,7 +13,7 @@ use colored::Colorize;
 
 /// Print an error message and exit with the given code.
 fn die(msg: &dyn std::fmt::Display, code: i32) -> ! {
-    eprintln!("{} {msg}", "error:".red().bold());
+    eprintln!("{} {msg}", "✕".red());
     process::exit(code);
 }
 
@@ -156,10 +156,12 @@ enum Command {
     },
 
     /// Add a recipient to the vault
+    #[command(hide = true)]
     Authorize {
         /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
         pubkey: String,
-        /// Optional display name (stored in encrypted meta)
+        /// Display name for this recipient
+        #[arg(long)]
         name: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
@@ -167,6 +169,7 @@ enum Command {
     },
 
     /// Remove a recipient from the vault
+    #[command(hide = true)]
     Revoke {
         /// Recipient pubkey or display name
         recipient: String,
@@ -175,8 +178,11 @@ enum Command {
         vault: String,
     },
 
-    /// List all recipients
-    Recipients {
+    /// Manage recipients
+    #[command(alias = "recipients")]
+    Circle {
+        #[command(subcommand)]
+        sub: Option<CircleCommand>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -218,6 +224,30 @@ enum Command {
     SetupMergeDriver,
 }
 
+#[derive(Subcommand)]
+enum CircleCommand {
+    /// Add a recipient to the vault
+    Authorize {
+        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        pubkey: String,
+        /// Display name for this recipient
+        #[arg(long)]
+        name: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Remove a recipient from the vault
+    Revoke {
+        /// Recipient pubkey or display name
+        recipient: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+}
+
 /// Prompt the user for a line of input, with an optional default value.
 fn prompt(label: &str, default: Option<&str>) -> String {
     let stdin = io::stdin();
@@ -244,7 +274,7 @@ fn prompt(label: &str, default: Option<&str>) -> String {
 /// Generate a BIP39 keypair, write to .env, print recovery phrase.
 /// Returns (secret_key, pubkey).
 fn generate_and_write_key() -> (String, String) {
-    eprintln!("{}", "Generating keypair...".dimmed());
+    eprintln!("{} generating keypair...", "◆".magenta());
     let (phrase, secret_key, pubkey) = try_or_die(recovery::generate());
 
     // Check .env for existing MURK_KEY.
@@ -260,23 +290,26 @@ fn generate_and_write_key() -> (String, String) {
     }
 
     // Write MURK_KEY to .env (replaces existing, sets chmod 600).
-    eprintln!("{}", "Writing MURK_KEY to .env...".dimmed());
+    eprintln!("{} writing MURK_KEY to .env...", "◆".magenta());
     try_or_die(murk_cli::write_key_to_dotenv(&secret_key));
 
     // Print recovery phrase.
     eprintln!();
     eprintln!(
-        "{}",
+        "{} {}",
+        "⚠".yellow(),
         "RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:"
             .yellow()
             .bold()
     );
-    eprintln!("{}", phrase.bold());
+    eprintln!("  {}", phrase.bold());
     eprintln!();
     eprintln!(
         "{} {}",
-        "MURK_KEY saved to .env —".yellow().bold(),
-        "do not commit this file.".yellow().bold()
+        "⚠".yellow(),
+        "MURK_KEY saved to .env — do not commit this file"
+            .yellow()
+            .bold()
     );
 
     (secret_key, pubkey)
@@ -289,7 +322,7 @@ fn cmd_init(vault_name: &str) {
     if vault_path.exists() {
         let vault = try_or_die(vault::read(vault_path));
 
-        eprintln!("{vault_name} already exists");
+        eprintln!("{}", format!("{vault_name} already exists").dimmed());
 
         // Try to find an existing key: env var first, then .env file.
         let dk = try_or_die(murk_cli::discover_existing_key());
@@ -307,13 +340,14 @@ fn cmd_init(vault_name: &str) {
             None => {
                 // No secret key — fall back to simple recipient check.
                 if vault.recipients.contains(&pubkey) {
-                    eprintln!("{}  {}", "authorized".green(), pubkey.dimmed(),);
+                    eprintln!("{} authorized  {}", "◆".magenta(), pubkey.dimmed());
                 } else {
                     eprintln!(
-                        "{}",
+                        "{} {}",
+                        "⚠".yellow(),
                         "not authorized \u{2014} share your public key to get added:".yellow()
                     );
-                    eprintln!("{}", pubkey.bold());
+                    eprintln!("  {}", pubkey.bold());
                 }
                 return;
             }
@@ -325,17 +359,18 @@ fn cmd_init(vault_name: &str) {
                 _ => String::new(),
             };
             eprintln!(
-                "{}  {}{}",
-                "authorized".green(),
+                "{} authorized  {}{}",
+                "◆".magenta(),
                 status.pubkey.dimmed(),
                 name_display
             );
         } else {
             eprintln!(
-                "{}",
+                "{} {}",
+                "⚠".yellow(),
                 "not authorized \u{2014} share your public key to get added:".yellow()
             );
-            eprintln!("{}", status.pubkey.bold());
+            eprintln!("  {}", status.pubkey.bold());
         }
         return;
     }
@@ -355,11 +390,11 @@ fn cmd_init(vault_name: &str) {
 
     eprintln!();
     eprintln!(
-        "{} Added {} as recipient.",
-        "Vault initialized.".green(),
+        "{} vault initialized — added {} as recipient",
+        "◆".magenta(),
         name.bold()
     );
-    eprintln!("Next: {}", "murk add KEY".bold());
+    eprintln!("  {}", "run: murk add KEY".dimmed());
 }
 
 fn resolve_key() -> age::secrecy::SecretString {
@@ -434,13 +469,16 @@ fn cmd_add(
         &identity,
     );
 
-    eprintln!("{} {}", "added".green(), key.bold());
+    if scoped {
+        eprintln!("{} added {} (scoped)", "✦".yellow(), key.bold());
+    } else {
+        eprintln!("{} added {}", "◆".magenta(), key.bold());
+    }
 
     if needs_desc_hint {
         eprintln!(
-            "{} no description set. Run: {}",
-            "hint:".dimmed(),
-            format!("murk describe {key} \"your description\"").bold()
+            "  {}",
+            format!("run: murk describe {key} \"your description\"").dimmed()
         );
     }
 
@@ -454,7 +492,7 @@ fn cmd_import(file: &str, vault_path: &str) {
     let pairs = murk_cli::parse_env(&contents);
 
     if pairs.is_empty() {
-        eprintln!("no secrets found in {file}");
+        eprintln!("{}", format!("no secrets found in {file}").dimmed());
         return;
     }
 
@@ -465,14 +503,14 @@ fn cmd_import(file: &str, vault_path: &str) {
     let imported = murk_cli::import_secrets(&mut vault, &mut current, &pairs);
 
     for key in &imported {
-        eprintln!("  {} {}", "+".green(), key.bold());
+        eprintln!("  {} {}", "◆".magenta(), key.bold());
     }
 
     save_vault(vault_path, &mut vault, &original, &current);
     let count = imported.len();
     eprintln!(
-        "{} {count} secret{}",
-        "imported".green(),
+        "{} imported {count} secret{}",
+        "◆".magenta(),
         if count == 1 { "" } else { "s" }
     );
 }
@@ -485,7 +523,7 @@ fn cmd_rm(key: &str, vault_path: &str) {
     murk_cli::remove_secret(&mut vault, &mut current, key);
 
     save_vault(vault_path, &mut vault, &original, &current);
-    eprintln!("{} {}", "removed".green(), key.bold());
+    eprintln!("{} removed {}", "◆".magenta(), key.bold());
 }
 
 fn cmd_get(key: &str, vault_path: &str) {
@@ -574,24 +612,15 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
 fn cmd_env(vault: &str) {
     match murk_cli::write_envrc(vault) {
         Ok(EnvrcStatus::AlreadyPresent) => {
-            eprintln!(
-                "{} .envrc already contains murk export",
-                "ok:".green().bold()
-            );
+            eprintln!("{} .envrc already contains murk export", "◆".magenta());
         }
         Ok(EnvrcStatus::Appended) => {
-            eprintln!(
-                "{} appended to .envrc. Run: {}",
-                "ok:".green().bold(),
-                "direnv allow".bold()
-            );
+            eprintln!("{} appended to .envrc", "◆".magenta());
+            eprintln!("  {}", "run: direnv allow".dimmed());
         }
         Ok(EnvrcStatus::Created) => {
-            eprintln!(
-                "{} created .envrc. Run: {}",
-                "ok:".green().bold(),
-                "direnv allow".bold()
-            );
+            eprintln!("{} created .envrc", "◆".magenta());
+            eprintln!("  {}", "run: direnv allow".dimmed());
         }
         Err(e) => die(&e, 1),
     }
@@ -610,8 +639,8 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
 
     if !output.meta_regenerated {
         eprintln!(
-            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix.",
-            "warning:".yellow().bold()
+            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix",
+            "⚠".yellow()
         );
     }
 
@@ -620,12 +649,12 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
         .unwrap_or_else(|e| die(&format_args!("writing merged vault: {e}"), 2));
 
     if output.result.conflicts.is_empty() {
-        eprintln!("{} vault merged cleanly", "ok:".green().bold());
+        eprintln!("{} vault merged cleanly", "◆".magenta());
         process::exit(0);
     } else {
         eprintln!(
             "{} {} conflict{}:",
-            "conflict:".red().bold(),
+            "✕".red(),
             output.result.conflicts.len(),
             if output.result.conflicts.len() == 1 {
                 ""
@@ -634,7 +663,7 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
             }
         );
         for c in &output.result.conflicts {
-            eprintln!("  {} {} — {}", "-".red(), c.field.bold(), c.reason);
+            eprintln!("  {} {} — {}", "✕".red(), c.field.bold(), c.reason);
         }
         process::exit(1);
     }
@@ -648,24 +677,24 @@ fn cmd_setup_merge_driver() {
             MergeDriverSetupStep::GitattributesAlreadyExists => {
                 eprintln!(
                     "{} .gitattributes already contains merge driver entry",
-                    "ok:".green().bold()
+                    "◆".magenta()
                 );
             }
             MergeDriverSetupStep::GitattributesAppended => {
-                eprintln!("{} appended to .gitattributes", "ok:".green().bold());
+                eprintln!("{} appended to .gitattributes", "◆".magenta());
             }
             MergeDriverSetupStep::GitattributesCreated => {
-                eprintln!("{} created .gitattributes", "ok:".green().bold());
+                eprintln!("{} created .gitattributes", "◆".magenta());
             }
             MergeDriverSetupStep::GitConfigured => {
-                eprintln!("{} git merge driver configured", "ok:".green().bold());
+                eprintln!("{} git merge driver configured", "◆".magenta());
             }
         }
     }
 
     eprintln!(
-        "{}",
-        "Commit .gitattributes so all collaborators use the merge driver.".dimmed()
+        "  {}",
+        "commit .gitattributes so all collaborators use the merge driver".dimmed()
     );
 }
 
@@ -689,7 +718,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                     {
                         eprintln!(
                             "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
-                            "warning:".yellow().bold()
+                            "⚠".yellow()
                         );
                     }
                 }
@@ -714,12 +743,12 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                 if show_values {
                     println!(
                         "{} {} = {}",
-                        "+".green().bold(),
-                        entry.key,
+                        "+".magenta().bold(),
+                        entry.key.bold(),
                         entry.new_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "+".green().bold(), entry.key);
+                    println!("{} {}", "+".magenta().bold(), entry.key.bold());
                 }
             }
             DiffKind::Removed => {
@@ -727,24 +756,25 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                     println!(
                         "{} {} = {}",
                         "-".red().bold(),
-                        entry.key,
+                        entry.key.bold(),
                         entry.old_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "-".red().bold(), entry.key);
+                    println!("{} {}", "-".red().bold(), entry.key.bold());
                 }
             }
             DiffKind::Changed => {
                 if show_values {
                     println!(
-                        "{} {}: {} → {}",
+                        "{} {} {} {} {}",
                         "~".yellow().bold(),
-                        entry.key,
+                        entry.key.bold(),
                         entry.old_value.as_deref().unwrap_or(""),
+                        "→".dimmed(),
                         entry.new_value.as_deref().unwrap_or("")
                     );
                 } else {
-                    println!("{} {}", "~".yellow().bold(), entry.key);
+                    println!("{} {}", "~".yellow().bold(), entry.key.bold());
                 }
             }
         }
@@ -786,7 +816,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         if added == 0 {
             eprintln!(
                 "{} all {} SSH keys for {}@github are already authorized",
-                "ok:".green().bold(),
+                "◆".magenta(),
                 keys.len(),
                 username
             );
@@ -804,8 +834,8 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         let summary = parts.join(", ");
 
         eprintln!(
-            "{} {} ({} key{})",
-            "authorized".green(),
+            "{} authorized {} ({} key{})",
+            "◆".magenta(),
             display_name.bold(),
             summary,
             if added == 1 { "" } else { "s" }
@@ -822,7 +852,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         save_vault(vault_path, &mut vault, &original, &current);
 
         let display = name.unwrap_or(pubkey);
-        eprintln!("{} {}", "authorized".green(), display.bold());
+        eprintln!("{} authorized {}", "◆".magenta(), display.bold());
     }
 }
 
@@ -841,26 +871,66 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
 
     let display = result.display_name.as_deref().unwrap_or(recipient);
     eprintln!(
-        "{} {} from recipients. Vault re-encrypted.",
-        "removed".green(),
+        "{} removed {} from recipients",
+        "◆".magenta(),
         display.bold(),
     );
 
     if !result.exposed_keys.is_empty() {
         eprintln!();
         eprintln!(
-            "{} {display} had access to these secrets (rotate them):",
-            "warning:".yellow().bold()
+            "{} {display} had access to these secrets — rotate them:",
+            "⚠".yellow()
         );
         for key in &result.exposed_keys {
-            eprintln!("  {} {}", "-".dimmed(), key.bold());
+            eprintln!("  {} {}", "▸".dimmed(), key.bold());
         }
     }
     eprintln!();
     eprintln!(
-        "{}",
-        "This recipient can still decrypt previous versions from git history.".dimmed()
+        "  {}",
+        "this recipient can still decrypt previous versions from git history".dimmed()
     );
+}
+
+/// Truncate a pubkey for display: first 8 chars + "…" + last 4 chars.
+fn truncate_pubkey(pk: &str) -> String {
+    // SSH keys: "ssh-ed25519 AAAA..." — truncate the base64 portion.
+    if let Some(key_data) = pk.strip_prefix("ssh-ed25519 ") {
+        return truncate_raw(key_data);
+    }
+    if let Some(key_data) = pk.strip_prefix("ssh-rsa ") {
+        return truncate_raw(key_data);
+    }
+    // age keys: "age1..."
+    truncate_raw(pk)
+}
+
+fn truncate_raw(s: &str) -> String {
+    if s.len() <= 13 {
+        return s.to_string();
+    }
+    let start: String = s.chars().take(8).collect();
+    let end: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{start}…{end}")
+}
+
+/// Return the key type label for a pubkey.
+fn key_type_label(pk: &str) -> &'static str {
+    if pk.starts_with("ssh-ed25519 ") {
+        "ed25519"
+    } else if pk.starts_with("ssh-rsa ") {
+        "rsa"
+    } else {
+        "age"
+    }
 }
 
 fn cmd_recipients(vault_path: &str) {
@@ -872,6 +942,7 @@ fn cmd_recipients(vault_path: &str) {
     let has_names = entries.iter().any(|e| e.display_name.is_some());
 
     if !has_names {
+        // Locked: plain pubkeys to stdout for piping.
         for entry in &entries {
             println!("{}", entry.pubkey);
         }
@@ -893,23 +964,38 @@ fn cmd_recipients(vault_path: &str) {
         }
     }
 
+    // Compute name column width for alignment.
+    let name_width = groups
+        .iter()
+        .map(|(name, _)| name.map_or(0, |n| n.len()))
+        .max()
+        .unwrap_or(0);
+
     for (name, group) in &groups {
         let is_self = group.iter().any(|e| e.is_self);
-        let marker = if is_self {
-            "  (you)".green().to_string()
-        } else {
-            String::new()
-        };
+        let marker = if is_self { "◆" } else { " " };
         let label = name.unwrap_or("");
+        let label_padded = format!("{label:<name_width$}");
 
-        if group.len() == 1 {
-            println!("{}  {}{}", group[0].pubkey.dimmed(), label.bold(), marker);
+        let key_type = key_type_label(&group[0].pubkey);
+        let key_info = if group.len() == 1 {
+            truncate_pubkey(&group[0].pubkey)
         } else {
-            println!("{}  ({} keys){}", label.bold(), group.len(), marker,);
-            for entry in group {
-                let key_type = entry.pubkey.split_whitespace().next().unwrap_or("key");
-                println!("  {}  {}", key_type.dimmed(), entry.pubkey.dimmed());
-            }
+            format!("({} keys)", group.len())
+        };
+
+        if is_self {
+            println!(
+                "{} {}  {}",
+                marker.magenta(),
+                label_padded.magenta().bold(),
+                format!("{key_info}  {key_type}").dimmed()
+            );
+        } else {
+            println!(
+                "{}",
+                format!("  {label_padded}  {key_info}  {key_type}").dimmed()
+            );
         }
     }
 }
@@ -967,25 +1053,26 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         secret_key.as_deref(),
     ));
 
-    // Display vault header.
-    println!("{}: {}", "vault".dimmed(), info.vault_name.bold());
-    println!("{}: {}", "codename".dimmed(), info.codename.bold());
-    if !info.repo.is_empty() {
-        println!("{}: {}", "repo".dimmed(), info.repo);
-    }
-    println!("{}: {}", "created".dimmed(), info.created);
+    // Nameplate: ░▓ vault_name
     println!(
-        "{}: {} recipient{}",
-        "recipients".dimmed(),
-        info.recipient_count,
-        if info.recipient_count == 1 { "" } else { "s" }
+        "{} {}",
+        "▓░".dimmed(),
+        info.vault_name.truecolor(135, 95, 255).bold()
     );
-    println!();
+    println!("   {}    {}", "codename".dimmed(), info.codename);
+    if !info.repo.is_empty() {
+        println!("   {}        {}", "repo".dimmed(), info.repo);
+    }
+    println!("   {}     {}", "created".dimmed(), info.created);
+    println!("   {}  {}", "recipients".dimmed(), info.recipient_count);
 
     if info.entries.is_empty() {
-        println!("{}", "no keys in vault".dimmed());
+        println!();
+        println!("   {}", "no keys in vault".dimmed());
         return;
     }
+
+    println!();
 
     // Compute column widths for aligned output.
     let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
@@ -1007,20 +1094,24 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         .max()
         .unwrap_or(0);
 
-    let tag_width = info
-        .entries
-        .iter()
-        .map(|e| {
-            if e.tags.is_empty() {
-                0
-            } else {
-                format!("[{}]", e.tags.join(", ")).len()
-            }
-        })
-        .max()
-        .unwrap_or(0);
-
     let has_meta = secret_key.is_some();
+
+    // Tag and scoped columns only when unlocked.
+    let tag_width = if has_meta {
+        info.entries
+            .iter()
+            .map(|e| {
+                if e.tags.is_empty() {
+                    0
+                } else {
+                    format!("[{}]", e.tags.join(", ")).len()
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
 
     for entry in &info.entries {
         let example_str = entry
@@ -1029,39 +1120,39 @@ fn cmd_info(tags: &[String], vault_path: &str) {
             .map(|ex| format!("(e.g. {ex})"))
             .unwrap_or_default();
 
-        let tag_str = if entry.tags.is_empty() {
-            String::new()
-        } else {
-            format!("[{}]", entry.tags.join(", "))
-        };
-
         // Pad plain strings for alignment, then apply colors.
         let key_padded = format!("{:<key_width$}", entry.key);
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
-        let tag_padded = format!("{tag_str:<tag_width$}");
 
         if has_meta {
+            let tag_str = if entry.tags.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", entry.tags.join(", "))
+            };
+            let tag_padded = format!("{tag_str:<tag_width$}");
+
             let scoped_str = if entry.scoped_recipients.is_empty() {
                 String::new()
             } else {
-                format!("[{}]", entry.scoped_recipients.join(", "))
+                format!("✦ {}", entry.scoped_recipients.join(", "))
             };
+
             println!(
-                "{}  {}  {}  {}  {}",
-                key_padded.bold(),
+                "   {}  {}  {}  {}  {}",
+                key_padded.magenta().dimmed().bold(),
                 desc_padded,
                 ex_padded.dimmed(),
-                tag_padded.cyan(),
+                tag_padded.yellow(),
                 scoped_str.dimmed()
             );
         } else {
             println!(
-                "{}  {}  {}  {}",
-                key_padded.bold(),
+                "   {}  {}  {}",
+                key_padded.magenta().dimmed().bold(),
                 desc_padded,
-                ex_padded.dimmed(),
-                tag_padded.cyan()
+                ex_padded.dimmed()
             );
         }
     }
@@ -1108,7 +1199,20 @@ fn main() {
             vault,
         } => cmd_authorize(&pubkey, name.as_deref(), &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
-        Command::Recipients { vault } => cmd_recipients(&vault),
+        Command::Circle { sub: None, vault } => cmd_recipients(&vault),
+        Command::Circle {
+            sub:
+                Some(CircleCommand::Authorize {
+                    pubkey,
+                    name,
+                    vault,
+                }),
+            ..
+        } => cmd_authorize(&pubkey, name.as_deref(), &vault),
+        Command::Circle {
+            sub: Some(CircleCommand::Revoke { recipient, vault }),
+            ..
+        } => cmd_revoke(&recipient, &vault),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,

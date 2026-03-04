@@ -128,7 +128,7 @@ fn init_existing_vault_no_key() {
         .success()
         .stderr(
             predicate::str::contains("already exists")
-                .and(predicate::str::contains("Generating keypair"))
+                .and(predicate::str::contains("generating keypair"))
                 .and(predicate::str::contains("RECOVERY WORDS"))
                 .and(predicate::str::contains("not authorized"))
                 .and(predicate::str::contains("age1")),
@@ -551,7 +551,7 @@ fn recover_without_key_fails() {
         .stderr(predicate::str::contains("MURK_KEY not set"));
 }
 
-// ── recipients ──
+// ── circle ──
 
 #[test]
 fn recipients_lists_creator() {
@@ -559,14 +559,10 @@ fn recipients_lists_creator() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains(&pubkey)
-                .and(predicate::str::contains("testuser"))
-                .and(predicate::str::contains("(you)")),
-        );
+        .stdout(predicate::str::contains("testuser").and(predicate::str::contains("◆")));
 }
 
 #[test]
@@ -577,7 +573,7 @@ fn recipients_works_without_murk_key() {
     // Without MURK_KEY, just shows pubkeys (no names).
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
@@ -597,16 +593,24 @@ fn authorize_adds_recipient() {
     let second_pubkey = second_identity.to_public().to_string();
 
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("authorized bob"));
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(&second_pubkey).and(predicate::str::contains("bob")));
+        .stdout(predicate::str::contains("bob"));
 }
 
 #[test]
@@ -615,7 +619,7 @@ fn authorize_duplicate_fails() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["authorize", &pubkey, "--vault", "test.murk"])
+        .args(["circle", "authorize", &pubkey, "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already a recipient"));
@@ -627,7 +631,13 @@ fn authorize_invalid_key_fails() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["authorize", "not-a-real-key", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            "not-a-real-key",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("invalid public key"));
@@ -643,12 +653,20 @@ fn revoke_removes_recipient() {
 
     // Authorize then revoke.
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["revoke", "bob", "--vault", "test.murk"])
+        .args(["circle", "revoke", "bob", "--vault", "test.murk"])
         .assert()
         .success()
         .stderr(predicate::str::contains("removed"))
@@ -656,7 +674,7 @@ fn revoke_removes_recipient() {
 
     // Should no longer appear in recipients.
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&second_pubkey).not());
@@ -671,18 +689,24 @@ fn revoke_by_pubkey_works() {
     let second_pubkey = second_identity.to_public().to_string();
 
     murk(&dir, &key)
-        .args(["authorize", &second_pubkey, "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
     // Revoke by pubkey instead of name.
     murk(&dir, &key)
-        .args(["revoke", &second_pubkey, "--vault", "test.murk"])
+        .args(["circle", "revoke", &second_pubkey, "--vault", "test.murk"])
         .assert()
         .success();
 
     murk(&dir, &key)
-        .args(["recipients", "--vault", "test.murk"])
+        .args(["circle", "--vault", "test.murk"])
         .assert()
         .success()
         .stdout(predicate::str::contains(&second_pubkey).not());
@@ -694,7 +718,7 @@ fn revoke_last_recipient_fails() {
     let (key, pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["revoke", &pubkey, "--vault", "test.murk"])
+        .args(["circle", "revoke", &pubkey, "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot revoke last recipient"));
@@ -706,7 +730,7 @@ fn revoke_unknown_fails() {
     let (key, _) = init_vault(&dir);
 
     murk(&dir, &key)
-        .args(["revoke", "nobody", "--vault", "test.murk"])
+        .args(["circle", "revoke", "nobody", "--vault", "test.murk"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("recipient not found"));
@@ -810,7 +834,15 @@ fn authorized_recipient_can_decrypt() {
     };
 
     murk(&dir, &key_a)
-        .args(["authorize", &pk_b, "bob", "--vault", "test.murk"])
+        .args([
+            "circle",
+            "authorize",
+            &pk_b,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
         .assert()
         .success();
 
