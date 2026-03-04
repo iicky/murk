@@ -13,7 +13,7 @@ use colored::Colorize;
 
 /// Print an error message and exit with the given code.
 fn die(msg: &dyn std::fmt::Display, code: i32) -> ! {
-    eprintln!("{} {msg}", "error:".red().bold());
+    eprintln!("{} {msg}", "✕".red());
     process::exit(code);
 }
 
@@ -274,7 +274,7 @@ fn prompt(label: &str, default: Option<&str>) -> String {
 /// Generate a BIP39 keypair, write to .env, print recovery phrase.
 /// Returns (secret_key, pubkey).
 fn generate_and_write_key() -> (String, String) {
-    eprintln!("{}", "Generating keypair...".dimmed());
+    eprintln!("{} generating keypair...", "◆".magenta());
     let (phrase, secret_key, pubkey) = try_or_die(recovery::generate());
 
     // Check .env for existing MURK_KEY.
@@ -290,23 +290,26 @@ fn generate_and_write_key() -> (String, String) {
     }
 
     // Write MURK_KEY to .env (replaces existing, sets chmod 600).
-    eprintln!("{}", "Writing MURK_KEY to .env...".dimmed());
+    eprintln!("{} writing MURK_KEY to .env...", "◆".magenta());
     try_or_die(murk_cli::write_key_to_dotenv(&secret_key));
 
     // Print recovery phrase.
     eprintln!();
     eprintln!(
-        "{}",
+        "{} {}",
+        "⚠".yellow(),
         "RECOVERY WORDS — WRITE THESE DOWN AND STORE SAFELY:"
             .yellow()
             .bold()
     );
-    eprintln!("{}", phrase.bold());
+    eprintln!("  {}", phrase.bold());
     eprintln!();
     eprintln!(
         "{} {}",
-        "MURK_KEY saved to .env —".yellow().bold(),
-        "do not commit this file.".yellow().bold()
+        "⚠".yellow(),
+        "MURK_KEY saved to .env — do not commit this file"
+            .yellow()
+            .bold()
     );
 
     (secret_key, pubkey)
@@ -319,7 +322,7 @@ fn cmd_init(vault_name: &str) {
     if vault_path.exists() {
         let vault = try_or_die(vault::read(vault_path));
 
-        eprintln!("{vault_name} already exists");
+        eprintln!("{}", format!("{vault_name} already exists").dimmed());
 
         // Try to find an existing key: env var first, then .env file.
         let dk = try_or_die(murk_cli::discover_existing_key());
@@ -337,13 +340,14 @@ fn cmd_init(vault_name: &str) {
             None => {
                 // No secret key — fall back to simple recipient check.
                 if vault.recipients.contains(&pubkey) {
-                    eprintln!("{}  {}", "authorized".green(), pubkey.dimmed(),);
+                    eprintln!("{} authorized  {}", "◆".magenta(), pubkey.dimmed());
                 } else {
                     eprintln!(
-                        "{}",
+                        "{} {}",
+                        "⚠".yellow(),
                         "not authorized \u{2014} share your public key to get added:".yellow()
                     );
-                    eprintln!("{}", pubkey.bold());
+                    eprintln!("  {}", pubkey.bold());
                 }
                 return;
             }
@@ -355,17 +359,18 @@ fn cmd_init(vault_name: &str) {
                 _ => String::new(),
             };
             eprintln!(
-                "{}  {}{}",
-                "authorized".green(),
+                "{} authorized  {}{}",
+                "◆".magenta(),
                 status.pubkey.dimmed(),
                 name_display
             );
         } else {
             eprintln!(
-                "{}",
+                "{} {}",
+                "⚠".yellow(),
                 "not authorized \u{2014} share your public key to get added:".yellow()
             );
-            eprintln!("{}", status.pubkey.bold());
+            eprintln!("  {}", status.pubkey.bold());
         }
         return;
     }
@@ -385,11 +390,11 @@ fn cmd_init(vault_name: &str) {
 
     eprintln!();
     eprintln!(
-        "{} Added {} as recipient.",
-        "Vault initialized.".green(),
+        "{} vault initialized — added {} as recipient",
+        "◆".magenta(),
         name.bold()
     );
-    eprintln!("Next: {}", "murk add KEY".bold());
+    eprintln!("  {}", "run: murk add KEY".dimmed());
 }
 
 fn resolve_key() -> age::secrecy::SecretString {
@@ -464,13 +469,16 @@ fn cmd_add(
         &identity,
     );
 
-    eprintln!("{} {}", "added".green(), key.bold());
+    if scoped {
+        eprintln!("{} added {} (scoped)", "✦".yellow(), key.bold());
+    } else {
+        eprintln!("{} added {}", "◆".magenta(), key.bold());
+    }
 
     if needs_desc_hint {
         eprintln!(
-            "{} no description set. Run: {}",
-            "hint:".dimmed(),
-            format!("murk describe {key} \"your description\"").bold()
+            "  {}",
+            format!("run: murk describe {key} \"your description\"").dimmed()
         );
     }
 
@@ -484,7 +492,7 @@ fn cmd_import(file: &str, vault_path: &str) {
     let pairs = murk_cli::parse_env(&contents);
 
     if pairs.is_empty() {
-        eprintln!("no secrets found in {file}");
+        eprintln!("{}", format!("no secrets found in {file}").dimmed());
         return;
     }
 
@@ -495,14 +503,14 @@ fn cmd_import(file: &str, vault_path: &str) {
     let imported = murk_cli::import_secrets(&mut vault, &mut current, &pairs);
 
     for key in &imported {
-        eprintln!("  {} {}", "+".green(), key.bold());
+        eprintln!("  {} {}", "◆".magenta(), key.bold());
     }
 
     save_vault(vault_path, &mut vault, &original, &current);
     let count = imported.len();
     eprintln!(
-        "{} {count} secret{}",
-        "imported".green(),
+        "{} imported {count} secret{}",
+        "◆".magenta(),
         if count == 1 { "" } else { "s" }
     );
 }
@@ -515,7 +523,7 @@ fn cmd_rm(key: &str, vault_path: &str) {
     murk_cli::remove_secret(&mut vault, &mut current, key);
 
     save_vault(vault_path, &mut vault, &original, &current);
-    eprintln!("{} {}", "removed".green(), key.bold());
+    eprintln!("{} removed {}", "◆".magenta(), key.bold());
 }
 
 fn cmd_get(key: &str, vault_path: &str) {
@@ -604,24 +612,15 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
 fn cmd_env(vault: &str) {
     match murk_cli::write_envrc(vault) {
         Ok(EnvrcStatus::AlreadyPresent) => {
-            eprintln!(
-                "{} .envrc already contains murk export",
-                "ok:".green().bold()
-            );
+            eprintln!("{} .envrc already contains murk export", "◆".magenta());
         }
         Ok(EnvrcStatus::Appended) => {
-            eprintln!(
-                "{} appended to .envrc. Run: {}",
-                "ok:".green().bold(),
-                "direnv allow".bold()
-            );
+            eprintln!("{} appended to .envrc", "◆".magenta());
+            eprintln!("  {}", "run: direnv allow".dimmed());
         }
         Ok(EnvrcStatus::Created) => {
-            eprintln!(
-                "{} created .envrc. Run: {}",
-                "ok:".green().bold(),
-                "direnv allow".bold()
-            );
+            eprintln!("{} created .envrc", "◆".magenta());
+            eprintln!("  {}", "run: direnv allow".dimmed());
         }
         Err(e) => die(&e, 1),
     }
@@ -640,8 +639,8 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
 
     if !output.meta_regenerated {
         eprintln!(
-            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix.",
-            "warning:".yellow().bold()
+            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix",
+            "⚠".yellow()
         );
     }
 
@@ -650,12 +649,12 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
         .unwrap_or_else(|e| die(&format_args!("writing merged vault: {e}"), 2));
 
     if output.result.conflicts.is_empty() {
-        eprintln!("{} vault merged cleanly", "ok:".green().bold());
+        eprintln!("{} vault merged cleanly", "◆".magenta());
         process::exit(0);
     } else {
         eprintln!(
             "{} {} conflict{}:",
-            "conflict:".red().bold(),
+            "✕".red(),
             output.result.conflicts.len(),
             if output.result.conflicts.len() == 1 {
                 ""
@@ -664,7 +663,7 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
             }
         );
         for c in &output.result.conflicts {
-            eprintln!("  {} {} — {}", "-".red(), c.field.bold(), c.reason);
+            eprintln!("  {} {} — {}", "✕".red(), c.field.bold(), c.reason);
         }
         process::exit(1);
     }
@@ -678,24 +677,24 @@ fn cmd_setup_merge_driver() {
             MergeDriverSetupStep::GitattributesAlreadyExists => {
                 eprintln!(
                     "{} .gitattributes already contains merge driver entry",
-                    "ok:".green().bold()
+                    "◆".magenta()
                 );
             }
             MergeDriverSetupStep::GitattributesAppended => {
-                eprintln!("{} appended to .gitattributes", "ok:".green().bold());
+                eprintln!("{} appended to .gitattributes", "◆".magenta());
             }
             MergeDriverSetupStep::GitattributesCreated => {
-                eprintln!("{} created .gitattributes", "ok:".green().bold());
+                eprintln!("{} created .gitattributes", "◆".magenta());
             }
             MergeDriverSetupStep::GitConfigured => {
-                eprintln!("{} git merge driver configured", "ok:".green().bold());
+                eprintln!("{} git merge driver configured", "◆".magenta());
             }
         }
     }
 
     eprintln!(
-        "{}",
-        "Commit .gitattributes so all collaborators use the merge driver.".dimmed()
+        "  {}",
+        "commit .gitattributes so all collaborators use the merge driver".dimmed()
     );
 }
 
@@ -719,7 +718,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
                     {
                         eprintln!(
                             "{} cannot decrypt vault at {git_ref} — you may not have been a recipient",
-                            "warning:".yellow().bold()
+                            "⚠".yellow()
                         );
                     }
                 }
@@ -817,7 +816,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         if added == 0 {
             eprintln!(
                 "{} all {} SSH keys for {}@github are already authorized",
-                "ok:".green().bold(),
+                "◆".magenta(),
                 keys.len(),
                 username
             );
@@ -835,8 +834,8 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         let summary = parts.join(", ");
 
         eprintln!(
-            "{} {} ({} key{})",
-            "authorized".green(),
+            "{} authorized {} ({} key{})",
+            "◆".magenta(),
             display_name.bold(),
             summary,
             if added == 1 { "" } else { "s" }
@@ -853,7 +852,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
         save_vault(vault_path, &mut vault, &original, &current);
 
         let display = name.unwrap_or(pubkey);
-        eprintln!("{} {}", "authorized".green(), display.bold());
+        eprintln!("{} authorized {}", "◆".magenta(), display.bold());
     }
 }
 
@@ -872,25 +871,25 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
 
     let display = result.display_name.as_deref().unwrap_or(recipient);
     eprintln!(
-        "{} {} from recipients. Vault re-encrypted.",
-        "removed".green(),
+        "{} removed {} from recipients",
+        "◆".magenta(),
         display.bold(),
     );
 
     if !result.exposed_keys.is_empty() {
         eprintln!();
         eprintln!(
-            "{} {display} had access to these secrets (rotate them):",
-            "warning:".yellow().bold()
+            "{} {display} had access to these secrets — rotate them:",
+            "⚠".yellow()
         );
         for key in &result.exposed_keys {
-            eprintln!("  {} {}", "-".dimmed(), key.bold());
+            eprintln!("  {} {}", "▸".dimmed(), key.bold());
         }
     }
     eprintln!();
     eprintln!(
-        "{}",
-        "This recipient can still decrypt previous versions from git history.".dimmed()
+        "  {}",
+        "this recipient can still decrypt previous versions from git history".dimmed()
     );
 }
 

@@ -128,7 +128,7 @@ fn init_existing_vault_no_key() {
         .success()
         .stderr(
             predicate::str::contains("already exists")
-                .and(predicate::str::contains("Generating keypair"))
+                .and(predicate::str::contains("generating keypair"))
                 .and(predicate::str::contains("RECOVERY WORDS"))
                 .and(predicate::str::contains("not authorized"))
                 .and(predicate::str::contains("age1")),
