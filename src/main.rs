@@ -967,25 +967,26 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         secret_key.as_deref(),
     ));
 
-    // Display vault header.
-    println!("{}: {}", "vault".dimmed(), info.vault_name.bold());
-    println!("{}: {}", "codename".dimmed(), info.codename.bold());
-    if !info.repo.is_empty() {
-        println!("{}: {}", "repo".dimmed(), info.repo);
-    }
-    println!("{}: {}", "created".dimmed(), info.created);
-    println!(
-        "{}: {} recipient{}",
-        "recipients".dimmed(),
-        info.recipient_count,
-        if info.recipient_count == 1 { "" } else { "s" }
+    // Nameplate: ░▓ vault_name
+    eprintln!(
+        "{} {}",
+        "▓░".dimmed(),
+        info.vault_name.truecolor(135, 95, 255).bold()
     );
-    println!();
+    eprintln!("   {}    {}", "codename".dimmed(), info.codename);
+    if !info.repo.is_empty() {
+        eprintln!("   {}        {}", "repo".dimmed(), info.repo);
+    }
+    eprintln!("   {}     {}", "created".dimmed(), info.created);
+    eprintln!("   {}  {}", "recipients".dimmed(), info.recipient_count);
 
     if info.entries.is_empty() {
-        println!("{}", "no keys in vault".dimmed());
+        eprintln!();
+        eprintln!("   {}", "no keys in vault".dimmed());
         return;
     }
+
+    eprintln!();
 
     // Compute column widths for aligned output.
     let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
@@ -1007,20 +1008,24 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         .max()
         .unwrap_or(0);
 
-    let tag_width = info
-        .entries
-        .iter()
-        .map(|e| {
-            if e.tags.is_empty() {
-                0
-            } else {
-                format!("[{}]", e.tags.join(", ")).len()
-            }
-        })
-        .max()
-        .unwrap_or(0);
-
     let has_meta = secret_key.is_some();
+
+    // Tag and scoped columns only when unlocked.
+    let tag_width = if has_meta {
+        info.entries
+            .iter()
+            .map(|e| {
+                if e.tags.is_empty() {
+                    0
+                } else {
+                    format!("[{}]", e.tags.join(", ")).len()
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
 
     for entry in &info.entries {
         let example_str = entry
@@ -1029,39 +1034,39 @@ fn cmd_info(tags: &[String], vault_path: &str) {
             .map(|ex| format!("(e.g. {ex})"))
             .unwrap_or_default();
 
-        let tag_str = if entry.tags.is_empty() {
-            String::new()
-        } else {
-            format!("[{}]", entry.tags.join(", "))
-        };
-
         // Pad plain strings for alignment, then apply colors.
         let key_padded = format!("{:<key_width$}", entry.key);
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
-        let tag_padded = format!("{tag_str:<tag_width$}");
 
         if has_meta {
+            let tag_str = if entry.tags.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", entry.tags.join(", "))
+            };
+            let tag_padded = format!("{tag_str:<tag_width$}");
+
             let scoped_str = if entry.scoped_recipients.is_empty() {
                 String::new()
             } else {
-                format!("[{}]", entry.scoped_recipients.join(", "))
+                format!("✦ {}", entry.scoped_recipients.join(", "))
             };
-            println!(
-                "{}  {}  {}  {}  {}",
-                key_padded.bold(),
+
+            eprintln!(
+                "   {}  {}  {}  {}  {}",
+                key_padded.magenta().dimmed().bold(),
                 desc_padded,
                 ex_padded.dimmed(),
-                tag_padded.cyan(),
+                tag_padded.yellow(),
                 scoped_str.dimmed()
             );
         } else {
-            println!(
-                "{}  {}  {}  {}",
-                key_padded.bold(),
+            eprintln!(
+                "   {}  {}  {}",
+                key_padded.magenta().dimmed().bold(),
                 desc_padded,
-                ex_padded.dimmed(),
-                tag_padded.cyan()
+                ex_padded.dimmed()
             );
         }
     }

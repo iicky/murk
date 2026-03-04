@@ -347,7 +347,7 @@ fn describe_adds_description() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(
+        .stderr(
             predicate::str::contains("PostgreSQL connection string")
                 .and(predicate::str::contains("postgres://user:pass@host/db")),
         );
@@ -374,7 +374,7 @@ fn info_works_without_murk_key() {
         .env_remove("MURK_KEY")
         .assert()
         .success()
-        .stdout(predicate::str::contains("TOKEN"));
+        .stderr(predicate::str::contains("TOKEN"));
 }
 
 // ── export ──
@@ -840,7 +840,7 @@ fn add_with_tag() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[db]"));
+        .stderr(predicate::str::contains("[db]"));
 }
 
 #[test]
@@ -867,7 +867,7 @@ fn add_with_multiple_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[db, backend]"));
+        .stderr(predicate::str::contains("[db, backend]"));
 }
 
 #[test]
@@ -892,7 +892,7 @@ fn add_merges_tags_on_existing_key() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[db, backend]"));
+        .stderr(predicate::str::contains("[db, backend]"));
 }
 
 #[test]
@@ -923,7 +923,7 @@ fn describe_sets_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[auth]"));
+        .stderr(predicate::str::contains("[auth]"));
 }
 
 #[test]
@@ -954,7 +954,7 @@ fn describe_replaces_tags() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("[new]").and(predicate::str::contains("[old]").not()));
+        .stderr(predicate::str::contains("[new]").and(predicate::str::contains("[old]").not()));
 }
 
 #[test]
@@ -1066,7 +1066,7 @@ fn info_filters_by_tag() {
         .args(["info", "--tag", "api", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("API_KEY").and(predicate::str::contains("DB_URL").not()));
+        .stderr(predicate::str::contains("API_KEY").and(predicate::str::contains("DB_URL").not()));
 }
 
 // ── end-to-end workflow ──
@@ -1542,7 +1542,7 @@ fn info_displays_codename() {
         .args(["info", "--vault", "test.murk"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("codename"));
+        .stderr(predicate::str::contains("codename"));
 }
 
 #[test]
@@ -1560,7 +1560,7 @@ fn codename_changes_when_vault_changes() {
         .args(["info", "--vault", "test.murk"])
         .output()
         .unwrap();
-    let info1 = String::from_utf8(out1.stdout).unwrap();
+    let info1 = String::from_utf8(out1.stderr).unwrap();
 
     // Get info output after adding second secret.
     murk(&dir, &key)
@@ -1572,7 +1572,7 @@ fn codename_changes_when_vault_changes() {
         .args(["info", "--vault", "test.murk"])
         .output()
         .unwrap();
-    let info2 = String::from_utf8(out2.stdout).unwrap();
+    let info2 = String::from_utf8(out2.stderr).unwrap();
 
     // Extract codename lines.
     let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
@@ -1603,8 +1603,8 @@ fn codename_is_deterministic() {
         .output()
         .unwrap();
 
-    let info1 = String::from_utf8(out1.stdout).unwrap();
-    let info2 = String::from_utf8(out2.stdout).unwrap();
+    let info1 = String::from_utf8(out1.stderr).unwrap();
+    let info2 = String::from_utf8(out2.stderr).unwrap();
 
     let cn1 = info1.lines().find(|l| l.contains("codename")).unwrap();
     let cn2 = info2.lines().find(|l| l.contains("codename")).unwrap();
@@ -1666,5 +1666,5 @@ fn old_vault_without_repo_parses() {
         .env_remove("MURK_KEY")
         .assert()
         .success()
-        .stdout(predicate::str::contains("codename"));
+        .stderr(predicate::str::contains("codename"));
 }
