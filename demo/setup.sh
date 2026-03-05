@@ -14,14 +14,24 @@ murk_pubkey() {
 }
 
 # Create temp dirs for a multi-persona demo.
+# Starts a local git daemon so push/pull output shows clean URLs.
 # Usage: demo_init_dirs alice bob [carol ...]
-# Sets: DEMO_BASE, REMOTE, ALICE_DIR, BOB_DIR, etc.
+# Sets: DEMO_BASE, REMOTE_URL, ALICE_DIR, BOB_DIR, etc.
 demo_init_dirs() {
     export DEMO_BASE="$(mktemp -d)"
-    export REMOTE="$DEMO_BASE/remote"
+    local bare="$DEMO_BASE/app.git"
 
-    git init --bare "$REMOTE" >/dev/null 2>&1
-    git -C "$REMOTE" symbolic-ref HEAD refs/heads/main
+    git init --bare "$bare" >/dev/null 2>&1
+    git -C "$bare" symbolic-ref HEAD refs/heads/main
+
+    # Start git daemon for clean push/pull URLs.
+    local port=$((10000 + RANDOM % 50000))
+    git daemon --reuseaddr --base-path="$DEMO_BASE" \
+        --export-all --enable=receive-pack \
+        --port="$port" &
+    export DAEMON_PID=$!
+    export REMOTE_URL="git://localhost:$port/app.git"
+    sleep 0.2
 
     export GIT_AUTHOR_NAME="demo"
     export GIT_AUTHOR_EMAIL="demo@murk"
@@ -52,7 +62,7 @@ demo_alice_vault() {
     git init -b main >/dev/null 2>&1
     git add .murk
     git commit -m "init vault" >/dev/null 2>&1
-    git remote add origin "$REMOTE"
+    git remote add origin "$REMOTE_URL"
     git push -u origin main >/dev/null 2>&1
 }
 
@@ -67,7 +77,7 @@ demo_onboard() {
 
     cd "${!dir_var}" || return 1
     unset MURK_KEY
-    git clone "$REMOTE" . >/dev/null 2>&1
+    git clone "$REMOTE_URL" . >/dev/null 2>&1
     murk init >/dev/null 2>&1
     eval "$(cat .env)"
     export "${upper}_KEY=$MURK_KEY"
@@ -127,7 +137,11 @@ demo_pull() {
     git pull >/dev/null 2>&1
 }
 
-# Remove all temp dirs.
+# Stop daemon and remove all temp dirs.
 demo_cleanup() {
+    if [ -n "$DAEMON_PID" ]; then
+        kill "$DAEMON_PID" 2>/dev/null
+        wait "$DAEMON_PID" 2>/dev/null || true
+    fi
     [ -n "$DEMO_BASE" ] && rm -rf "$DEMO_BASE"
 }

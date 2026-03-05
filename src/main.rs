@@ -1,4 +1,7 @@
-use murk_cli::{DiffKind, EnvrcStatus, MergeDriverSetupStep, MurkIdentity, recovery, types, vault};
+use murk_cli::{
+    DiffKind, EnvrcStatus, MergeDriverSetupStep, MurkIdentity, is_valid_key_name, recovery, types,
+    vault,
+};
 
 use std::collections::HashMap;
 use std::env;
@@ -43,10 +46,7 @@ enum Command {
     Recover,
 
     /// Restore MURK_KEY from a BIP39 recovery phrase
-    Restore {
-        /// 24-word recovery phrase (prompted if not given)
-        phrase: Option<String>,
-    },
+    Restore,
 
     /// Import secrets from a .env file
     Import {
@@ -454,6 +454,16 @@ fn cmd_add(
     tags: &[String],
     vault_path: &str,
 ) {
+    if !is_valid_key_name(key) {
+        die(
+            &format_args!(
+                "invalid key name: {}. Keys must start with a letter or underscore and contain only [A-Za-z0-9_]",
+                key.bold()
+            ),
+            1,
+        );
+    }
+
     let (mut vault, murk, identity) = load_vault(vault_path);
     let original = murk.clone();
     let mut current = murk;
@@ -489,7 +499,36 @@ fn cmd_import(file: &str, vault_path: &str) {
     let contents = fs::read_to_string(file)
         .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1));
 
-    let pairs = murk_cli::parse_env(&contents);
+    // Warn about MURK_* keys that will be skipped during import.
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        if let Some((key, _)) = line.split_once('=') {
+            let key = key.trim();
+            if key.starts_with("MURK_") {
+                eprintln!(
+                    "{} skipping {}: murk variables cannot be imported",
+                    "⚠".yellow(),
+                    key.bold()
+                );
+            }
+        }
+    }
+
+    let all_pairs = murk_cli::parse_env(&contents);
+
+    // Filter out keys that aren't valid shell identifiers.
+    let mut pairs = Vec::new();
+    for (key, value) in &all_pairs {
+        if is_valid_key_name(key) {
+            pairs.push((key.clone(), value.clone()));
+        } else {
+            eprintln!("{} skipping invalid key name: {}", "⚠".yellow(), key.bold());
+        }
+    }
 
     if pairs.is_empty() {
         eprintln!("{}", format!("no secrets found in {file}").dimmed());
@@ -576,6 +615,10 @@ fn cmd_export(tags: &[String], vault_path: &str) {
 
     let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
     for (k, escaped) in &exports {
+        if !is_valid_key_name(k) {
+            eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
+            continue;
+        }
         println!("export {k}='{escaped}'");
     }
 }
@@ -1000,10 +1043,8 @@ fn cmd_recipients(vault_path: &str) {
     }
 }
 
-fn cmd_restore(phrase: Option<&str>) {
-    let phrase = if let Some(p) = phrase {
-        p.to_string()
-    } else if io::stdin().is_terminal() {
+fn cmd_restore() {
+    let phrase = if io::stdin().is_terminal() {
         eprint!("Enter 24-word recovery phrase: ");
         io::stderr().flush().ok();
         let password = rpassword::read_password().unwrap_or_else(|e| {
@@ -1164,7 +1205,7 @@ fn main() {
     match cli.command {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
-        Command::Restore { phrase } => cmd_restore(phrase.as_deref()),
+        Command::Restore => cmd_restore(),
         Command::Import { file, vault } => cmd_import(&file, &vault),
         Command::Add {
             key,

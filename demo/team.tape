@@ -29,7 +29,7 @@ Sleep 3s
 # Bob: clone the repo (before being authorized)
 Type `cd "$BOB_DIR" && unset MURK_KEY`
 Enter
-Type `git clone "$REMOTE" .`
+Type `git clone "$REMOTE_URL" .`
 Enter
 Sleep 300ms
 

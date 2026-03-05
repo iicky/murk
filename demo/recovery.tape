@@ -47,7 +47,7 @@ Type `PHRASE=$(murk recover)`
 Enter
 Sleep 1s
 
-Type `murk restore "$PHRASE"`
+Type `echo "$PHRASE" | murk restore`
 Enter
 Sleep 2s
 
