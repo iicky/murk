@@ -156,7 +156,7 @@ murk restore
 | `murk circle` | List recipients |
 | `murk circle authorize PUBKEY [--name NAME]` | Add a recipient |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
-| `murk restore [PHRASE]` | Recover key from BIP39 phrase |
+| `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
 
 ## Design

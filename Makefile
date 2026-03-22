@@ -106,7 +106,7 @@ test-recovery: build
 	eval $$(cat .env) && \
 	ORIGINAL=$$MURK_KEY && \
 	PHRASE=$$($(MURK) recover 2>/dev/null) && \
-	RESTORED=$$($(MURK) restore "$$PHRASE" 2>/dev/null) && \
+	RESTORED=$$(echo "$$PHRASE" | $(MURK) restore 2>/dev/null) && \
 	test "$$ORIGINAL" = "$$RESTORED" && \
 	echo "ok"
 

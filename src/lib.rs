@@ -58,6 +58,14 @@ pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_key
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+/// Check whether a key name is a valid shell identifier (safe for `export KEY=...`).
+/// Must start with a letter or underscore, and contain only `[A-Za-z0-9_]`.
+pub fn is_valid_key_name(key: &str) -> bool {
+    !key.is_empty()
+        && key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 use age::secrecy::ExposeSecret;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
@@ -157,11 +165,11 @@ pub fn load_vault(
         if meta.mac.is_empty() {
             return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
         }
-        let expected = compute_mac(&vault);
-        if meta.mac != expected {
+        if !verify_mac(&vault, &meta.mac) {
+            let expected = compute_mac(&vault);
             return Err(format!(
-                "integrity check failed: vault may have been tampered with (expected {}, got {})",
-                meta.mac, expected
+                "integrity check failed: vault may have been tampered with (expected {expected}, got {})",
+                meta.mac
             ));
         }
         meta.recipients
@@ -258,26 +266,32 @@ pub fn save_vault(
     vault::write(Path::new(vault_path), vault).map_err(|e| e.to_string())
 }
 
-/// Compute an integrity MAC over the vault's secrets and schema.
-/// Covers: sorted key names, encrypted shared values, recipient pubkeys.
+/// Compute an integrity hash over the vault's secrets, scoped entries, and recipients.
+/// Covers: sorted key names, encrypted shared values, scoped entries, recipient pubkeys.
+///
+/// The `sha256v2:` prefix distinguishes this from the legacy `sha256:` scheme
+/// which did not cover scoped entries. On load, both prefixes are accepted;
+/// on save, only `sha256v2:` is written.
 pub(crate) fn compute_mac(vault: &types::Vault) -> String {
+    compute_mac_v2(vault)
+}
+
+/// Legacy MAC: covers key names, shared ciphertext, and recipients (no scoped).
+fn compute_mac_v1(vault: &types::Vault) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
 
-    // Hash sorted key names.
     for key in vault.secrets.keys() {
         hasher.update(key.as_bytes());
         hasher.update(b"\x00");
     }
 
-    // Hash encrypted shared values (as stored).
     for entry in vault.secrets.values() {
         hasher.update(entry.shared.as_bytes());
         hasher.update(b"\x00");
     }
 
-    // Hash sorted recipient pubkeys.
     let mut pks = vault.recipients.clone();
     pks.sort();
     for pk in &pks {
@@ -296,6 +310,64 @@ pub(crate) fn compute_mac(vault: &types::Vault) -> String {
     )
 }
 
+/// V2 MAC: covers key names, shared ciphertext, scoped entries, and recipients.
+fn compute_mac_v2(vault: &types::Vault) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+
+    // Hash sorted key names.
+    for key in vault.secrets.keys() {
+        hasher.update(key.as_bytes());
+        hasher.update(b"\x00");
+    }
+
+    // Hash encrypted shared values (as stored).
+    for entry in vault.secrets.values() {
+        hasher.update(entry.shared.as_bytes());
+        hasher.update(b"\x00");
+
+        // Hash scoped entries (sorted by pubkey for determinism).
+        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        scoped_pks.sort();
+        for pk in scoped_pks {
+            hasher.update(pk.as_bytes());
+            hasher.update(b"\x01");
+            hasher.update(entry.scoped[pk].as_bytes());
+            hasher.update(b"\x00");
+        }
+    }
+
+    // Hash sorted recipient pubkeys.
+    let mut pks = vault.recipients.clone();
+    pks.sort();
+    for pk in &pks {
+        hasher.update(pk.as_bytes());
+        hasher.update(b"\x00");
+    }
+
+    let digest = hasher.finalize();
+    format!(
+        "sha256v2:{}",
+        digest.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+    )
+}
+
+/// Verify a stored MAC against the vault, accepting both v1 and v2 schemes.
+pub(crate) fn verify_mac(vault: &types::Vault, stored_mac: &str) -> bool {
+    if stored_mac.starts_with("sha256v2:") {
+        stored_mac == compute_mac_v2(vault)
+    } else if stored_mac.starts_with("sha256:") {
+        stored_mac == compute_mac_v1(vault)
+    } else {
+        false
+    }
+}
+
 /// Generate an ISO-8601 UTC timestamp.
 pub(crate) fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -307,6 +379,10 @@ mod tests {
     use crate::testutil::*;
     use std::collections::BTreeMap;
     use std::fs;
+    use std::sync::Mutex;
+
+    /// Tests that mutate MURK_KEY env var must hold this lock.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn encrypt_decrypt_value_roundtrip() {
@@ -372,7 +448,7 @@ mod tests {
         let mac1 = compute_mac(&vault);
         let mac2 = compute_mac(&vault);
         assert_eq!(mac1, mac2);
-        assert!(mac1.starts_with("sha256:"));
+        assert!(mac1.starts_with("sha256v2:"));
     }
 
     #[test]
@@ -704,11 +780,14 @@ mod tests {
 
     #[test]
     fn load_vault_validates_mac() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
-        let identity = make_identity(&secret);
+        let _identity = make_identity(&secret);
 
         let dir = std::env::temp_dir().join("murk_test_load_mac");
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
@@ -739,6 +818,9 @@ mod tests {
             scoped: HashMap::new(),
         };
 
+        // save_vault needs MURK_KEY set to encrypt meta.
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
 
         // Now tamper: change the ciphertext in the saved vault file.
@@ -749,8 +831,6 @@ mod tests {
         fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
 
         // Load should fail MAC validation.
-        unsafe { std::env::set_var("MURK_KEY", secret) };
-        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
@@ -765,10 +845,13 @@ mod tests {
 
     #[test]
     fn load_vault_succeeds_with_valid_mac() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
 
         let dir = std::env::temp_dir().join("murk_test_load_valid_mac");
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
@@ -798,11 +881,11 @@ mod tests {
             scoped: HashMap::new(),
         };
 
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
 
         // Load should succeed.
-        unsafe { std::env::set_var("MURK_KEY", secret) };
-        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
@@ -815,7 +898,9 @@ mod tests {
 
     #[test]
     fn load_vault_not_a_recipient() {
-        let (secret, pubkey) = generate_keypair();
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let (secret, _pubkey) = generate_keypair();
         let (other_secret, other_pubkey) = generate_keypair();
         let other_recipient = make_recipient(&other_pubkey);
 
@@ -875,6 +960,8 @@ mod tests {
 
     #[test]
     fn load_vault_zero_secrets() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
         let (secret, pubkey) = generate_keypair();
 
         let dir = std::env::temp_dir().join("murk_test_load_zero_secrets");
@@ -902,10 +989,10 @@ mod tests {
             scoped: HashMap::new(),
         };
 
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
 
-        unsafe { std::env::set_var("MURK_KEY", secret) };
-        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
@@ -919,6 +1006,8 @@ mod tests {
 
     #[test]
     fn load_vault_stripped_meta_with_secrets_fails() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
 
@@ -954,6 +1043,8 @@ mod tests {
             scoped: HashMap::new(),
         };
 
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
 
         // Tamper: strip meta field entirely.
@@ -963,8 +1054,6 @@ mod tests {
         fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
 
         // Load should fail: secrets present but no meta.
-        unsafe { std::env::set_var("MURK_KEY", &secret) };
-        unsafe { std::env::remove_var("MURK_KEY_FILE") };
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
@@ -979,6 +1068,8 @@ mod tests {
 
     #[test]
     fn load_vault_empty_mac_with_secrets_fails() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
 
@@ -1032,6 +1123,79 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn compute_mac_changes_with_scoped_entries() {
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+
+        vault.secrets.insert(
+            "KEY".into(),
+            types::SecretEntry {
+                shared: "ciphertext".into(),
+                scoped: BTreeMap::new(),
+            },
+        );
+
+        let mac_no_scoped = compute_mac(&vault);
+
+        vault
+            .secrets
+            .get_mut("KEY")
+            .unwrap()
+            .scoped
+            .insert("age1bob".into(), "scoped-ct".into());
+
+        let mac_with_scoped = compute_mac(&vault);
+        assert_ne!(mac_no_scoped, mac_with_scoped);
+    }
+
+    #[test]
+    fn verify_mac_accepts_v1_prefix() {
+        let vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+
+        let v1_mac = compute_mac_v1(&vault);
+        let v2_mac = compute_mac_v2(&vault);
+        assert!(verify_mac(&vault, &v1_mac));
+        assert!(verify_mac(&vault, &v2_mac));
+        assert!(!verify_mac(&vault, "sha256:bogus"));
+        assert!(!verify_mac(&vault, "unknown:prefix"));
+    }
+
+    #[test]
+    fn valid_key_names() {
+        assert!(is_valid_key_name("DATABASE_URL"));
+        assert!(is_valid_key_name("_PRIVATE"));
+        assert!(is_valid_key_name("A"));
+        assert!(is_valid_key_name("key123"));
+    }
+
+    #[test]
+    fn invalid_key_names() {
+        assert!(!is_valid_key_name(""));
+        assert!(!is_valid_key_name("123_START"));
+        assert!(!is_valid_key_name("KEY-NAME"));
+        assert!(!is_valid_key_name("KEY NAME"));
+        assert!(!is_valid_key_name("FOO$(bar)"));
+        assert!(!is_valid_key_name("KEY=VAL"));
     }
 
     #[test]
