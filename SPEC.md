@@ -180,6 +180,14 @@ Generates a cryptographically random value and stores it as a shared secret. Def
 
 ---
 
+### `murk rotate KEY [--generate] [--length N] [--hex] [--vault NAME]`
+
+Replaces a secret value. Prompts for the new value interactively, or generates a random one with `--generate`. Use after revoking a recipient to ensure they can no longer use the old value.
+
+`murk rotate --all` rotates every secret in the vault, prompting for each in sequence. `--generate` is not allowed with `--all` — external credentials (database passwords, API keys from third-party services) require manual rotation at the source.
+
+---
+
 ### `murk rm KEY [--vault NAME]`
 
 Removes a key from the vault (shared value, schema entry, and all scoped entries). No confirmation prompt — git is your safety net.

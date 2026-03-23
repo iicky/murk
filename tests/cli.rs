@@ -370,6 +370,145 @@ fn generate_overwrites_existing() {
     );
 }
 
+// ── rotate ──
+
+#[test]
+fn rotate_single_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_secret\n")
+        .assert()
+        .success();
+
+    let before = murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    murk(&dir, &key)
+        .args(["rotate", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("new_secret\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rotated TOKEN"));
+
+    let after = murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_ne!(before, after);
+    assert!(String::from_utf8(after).unwrap().contains("new_secret"));
+}
+
+#[test]
+fn rotate_generate() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_secret\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["rotate", "TOKEN", "--generate", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rotated TOKEN"));
+
+    let after = murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let value = String::from_utf8(after).unwrap();
+    assert!(!value.contains("old_secret"));
+    assert!(!value.trim().is_empty());
+}
+
+#[test]
+fn rotate_all_single_secret() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_val\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["rotate", "--all", "--vault", "test.murk"])
+        .write_stdin("new_val\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rotated TOKEN"));
+
+    let after = String::from_utf8(
+        murk(&dir, &key)
+            .args(["get", "TOKEN", "--vault", "test.murk"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    assert!(after.contains("new_val"));
+}
+
+#[test]
+fn rotate_all_generate_rejected() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["rotate", "--all", "--generate", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--generate cannot be used with --all",
+        ));
+}
+
+#[test]
+fn rotate_missing_key_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["rotate", "NONEXISTENT", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn rotate_no_key_no_all_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["rotate", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("specify a key name or use --all"));
+}
+
 // ── scoped (mote) secrets ──
 
 #[test]
