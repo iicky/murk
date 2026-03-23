@@ -97,6 +97,27 @@ enum Command {
         vault: String,
     },
 
+    /// Rotate secrets with new values
+    Rotate {
+        /// Secret key name (omit for --all)
+        key: Option<String>,
+        /// Rotate all secrets in the vault
+        #[arg(long)]
+        all: bool,
+        /// Generate random values instead of prompting
+        #[arg(long)]
+        generate: bool,
+        /// Length in bytes for generated values (default 32)
+        #[arg(long, default_value = "32")]
+        length: usize,
+        /// Output generated values as hex instead of base64
+        #[arg(long)]
+        hex: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
     /// Remove a secret
     Rm {
         /// Secret key name
@@ -627,6 +648,91 @@ fn cmd_generate(
     save_vault(vault_path, &mut vault, &original, &current);
 }
 
+fn cmd_rotate(
+    key: Option<&str>,
+    all: bool,
+    generate: bool,
+    length: usize,
+    hex: bool,
+    vault_path: &str,
+) {
+    use base64::Engine;
+
+    if key.is_none() && !all {
+        die(&"specify a key name or use --all", 1);
+    }
+    if key.is_some() && all {
+        die(&"cannot specify both a key name and --all", 1);
+    }
+    if all && generate {
+        die(
+            &"--generate cannot be used with --all — external secrets need manual rotation",
+            1,
+        );
+    }
+
+    let (mut vault, murk, identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
+
+    let keys_to_rotate: Vec<String> = if all {
+        vault.secrets.keys().cloned().collect()
+    } else {
+        let k = key.unwrap();
+        if !vault.secrets.contains_key(k) {
+            die(&format_args!("key {} not found in vault", k.bold()), 1);
+        }
+        vec![k.to_string()]
+    };
+
+    if keys_to_rotate.is_empty() {
+        eprintln!("{}", "no secrets to rotate".dimmed());
+        return;
+    }
+
+    let mut rotated = 0;
+    for k in &keys_to_rotate {
+        let new_value = if generate {
+            let bytes: Vec<u8> = (0..length).map(|_| rand::random()).collect();
+            if hex {
+                bytes.iter().fold(String::new(), |mut s, b| {
+                    use std::fmt::Write;
+                    let _ = write!(s, "{b:02x}");
+                    s
+                })
+            } else {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
+            }
+        } else {
+            resolve_value(k)
+        };
+
+        murk_cli::add_secret(
+            &mut vault,
+            &mut current,
+            k,
+            &new_value,
+            None,
+            false,
+            &[],
+            &identity,
+        );
+        rotated += 1;
+        eprintln!("{} rotated {}", "◆".magenta(), k.bold());
+    }
+
+    save_vault(vault_path, &mut vault, &original, &current);
+
+    if rotated > 1 {
+        eprintln!();
+        eprintln!(
+            "{} rotated {} secrets",
+            "✓".green(),
+            rotated.to_string().bold()
+        );
+    }
+}
+
 fn cmd_rm(key: &str, vault_path: &str) {
     let (mut vault, murk, _identity) = load_vault(vault_path);
     let original = murk.clone();
@@ -995,12 +1101,23 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
     if !result.exposed_keys.is_empty() {
         eprintln!();
         eprintln!(
-            "{} {display} had access to these secrets — rotate them:",
-            "⚠".yellow()
+            "{} {display} had access to {} secret{} — rotate them:",
+            "⚠".yellow(),
+            result.exposed_keys.len(),
+            if result.exposed_keys.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         );
         for key in &result.exposed_keys {
             eprintln!("  {} {}", "▸".dimmed(), key.bold());
         }
+        eprintln!();
+        eprintln!(
+            "  {}",
+            "run `murk rotate --all` to rotate each secret".dimmed()
+        );
     }
     eprintln!();
     eprintln!(
@@ -1259,6 +1376,14 @@ fn main() {
             tag,
             vault,
         } => cmd_generate(&key, length, hex, desc.as_deref(), &tag, &vault),
+        Command::Rotate {
+            key,
+            all,
+            generate,
+            length,
+            hex,
+            vault,
+        } => cmd_rotate(key.as_deref(), all, generate, length, hex, &vault),
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
         Command::Ls { tag, vault } => cmd_ls(&tag, &vault),

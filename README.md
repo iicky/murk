@@ -136,9 +136,15 @@ When someone leaves, revoke their access and rotate the secrets:
 
 ```bash
 murk circle revoke carol
-murk add DATABASE_URL    # prompts for new value
-murk add API_KEY
+murk rotate --all         # prompts for each secret
 git commit -am "revoke carol, rotate secrets" && git push
+```
+
+If you already have new values in a file, import them directly:
+
+```bash
+murk circle revoke carol
+murk import .env.rotated  # bulk-update from a file
 ```
 
 <p align="center">
@@ -176,6 +182,8 @@ murk restore
 | `murk init` | Generate keypair and create vault |
 | `murk add KEY [--scoped]` | Add or update a secret (prompts for value) |
 | `murk generate KEY [--hex] [--length N]` | Generate a random secret and store it |
+| `murk rotate KEY [--generate]` | Rotate a secret with a new value |
+| `murk rotate --all` | Rotate all secrets (prompts for each) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |
