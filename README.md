@@ -24,16 +24,22 @@ murk is simple: one key in your `.env`, one encrypted file in your repo, done.
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
+```
+
+Or via Homebrew:
+
+```bash
 brew tap iicky/murk && brew install murk
 ```
 
-Or via Cargo:
+Or via Cargo (requires [Rust toolchain](https://rustup.rs)):
 
 ```bash
 cargo install murk-cli
 ```
 
-Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`.
+Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`.
 
 ## Quick start
 
