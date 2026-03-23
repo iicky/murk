@@ -8,6 +8,20 @@ If you find a vulnerability in the underlying cryptographic primitives, please r
 
 For a detailed analysis of what murk protects and what it doesn't, see [THREAT_MODEL.md](THREAT_MODEL.md).
 
+## Supply Chain
+
+Release binaries are built in GitHub Actions and include [Sigstore artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations). Verify a downloaded binary:
+
+```bash
+gh attestation verify murk-v*.tar.gz --owner iicky
+```
+
+Release tags are signed with SSH. Verify a tag:
+
+```bash
+git verify-tag v0.3.0
+```
+
 ## Supported Versions
 
 | Version | Supported |
