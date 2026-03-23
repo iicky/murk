@@ -21,13 +21,28 @@ Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault 
 
 murk is simple: one key in your `.env`, one encrypted file in your repo, done.
 
+## How murk compares
+
+| | murk | SOPS | Vault | dotenvx | git-crypt |
+|---|---|---|---|---|---|
+| Encrypted values, readable keys | Yes | Yes | N/A | Yes | No (whole file) |
+| Per-recipient encryption | Yes | Yes | ACL-based | No (shared key) | Yes (GPG) |
+| Scoped per-user overrides | Yes | No | No | No | No |
+| Requires a server | No | No | Yes | No | No |
+| Cloud KMS required | No | Optional | Typically | No | No |
+| Single binary, no runtime | Yes | Yes | No | Yes | Yes |
+| Built-in direnv integration | Yes | No | No | Yes | No |
+| Recovery phrase | Yes (BIP39) | No | No | No | No |
+
+**SOPS** is the closest alternative. Both encrypt values in-place and support age. murk differs in having scoped (per-user) secrets, a single-file vault model, built-in team management (`murk circle`), and BIP39 key recovery. SOPS has broader KMS backend support and a larger ecosystem.
+
+**Vault** solves a different problem — it's centralized infrastructure for secret storage, rotation, and dynamic credentials. If you need a secrets server, use Vault. If you want encrypted secrets in your repo, use murk.
+
+**dotenvx** encrypts `.env` files but uses a single shared key for the whole team. There's no per-recipient encryption — if someone leaves, everyone needs a new key.
+
+**git-crypt** encrypts entire files via git filters. Diffs are opaque, and revoking a team member is effectively impractical without re-encrypting git history.
+
 ## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
-```
-
-Or via Homebrew:
 
 ```bash
 brew tap iicky/murk && brew install murk
@@ -37,6 +52,12 @@ Or via Cargo (requires [Rust toolchain](https://rustup.rs)):
 
 ```bash
 cargo install murk-cli
+```
+
+Or download a pre-built binary:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
 ```
 
 Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`.
@@ -154,6 +175,7 @@ murk restore
 |---------|-------------|
 | `murk init` | Generate keypair and create vault |
 | `murk add KEY [--scoped]` | Add or update a secret (prompts for value) |
+| `murk generate KEY [--hex] [--length N]` | Generate a random secret and store it |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |
@@ -199,6 +221,8 @@ See [SPEC.md](SPEC.md) for the full specification.
 **Shell history** — `murk add` and `murk restore` prompt interactively with hidden input. Prefer these over passing secrets as arguments or via `echo`, which can leak to shell history. When piping from scripts, use commands that don't record to history (e.g. `pbpaste | murk add KEY` or reading from a file).
 
 **Key names are plaintext** — the `.murk` header exposes key names (e.g. `STRIPE_SECRET_KEY`, `DATABASE_URL`) so that `murk info` works without a key and git diffs stay readable. Only values are encrypted. If your threat model requires hiding what services you use, this is a trade-off to be aware of.
+
+**Key stored in `.env`** — your `MURK_KEY` lives in a `.env` file with `chmod 600` permissions (owner read/write only). This file is gitignored. The key is equivalent to a password — anyone with access to the file or the `MURK_KEY` environment variable can decrypt shared secrets. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
 
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 
