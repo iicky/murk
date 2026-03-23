@@ -10,7 +10,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Secrets in transit via git.** Since values are encrypted before they enter git, pushing/pulling over any transport (HTTPS, SSH, unencrypted) does not expose secret values.
 
-**Cross-value integrity.** A SHA-256 MAC inside the encrypted meta blob covers all key names, encrypted values, and recipient public keys. This prevents an attacker from rearranging, adding, or removing ciphertexts between key names without detection. The MAC is mandatory whenever the vault contains secrets.
+**Cross-value integrity.** A BLAKE3 keyed MAC inside the encrypted meta blob covers all key names, encrypted values, and recipient public keys. The MAC key is a random 32-byte value stored alongside the MAC in the encrypted meta, so only authorized recipients can compute or verify it. This prevents an attacker from rearranging, adding, or removing ciphertexts — or recomputing a valid MAC after tampering. The MAC is mandatory whenever the vault contains secrets.
 
 **Per-recipient secrets.** Scoped secrets (motes) are encrypted to a single recipient's public key. Other authorized recipients cannot decrypt them.
 
@@ -89,7 +89,7 @@ murk delegates all cryptography to age. It does not implement any custom cryptog
 - **Encryption:** age v1 (X25519 key agreement, ChaCha20-Poly1305 payload encryption)
 - **Per-value encryption:** each secret value is encrypted independently with a fresh age file key
 - **Recipient types:** age x25519 keys (`age1...`) and SSH keys (`ssh-ed25519`, `ssh-rsa`) — age handles both natively
-- **Integrity:** SHA-256 MAC over sorted key names + encrypted shared values + sorted recipient public keys, stored inside an age-encrypted meta blob
+- **Integrity:** BLAKE3 keyed MAC over sorted key names + encrypted shared values + sorted recipient public keys, stored inside an age-encrypted meta blob (legacy SHA-256 accepted on load)
 - **Key derivation:** BIP39 mnemonic (256 bits of entropy) → SHA-256 → age identity (age keys only; SSH keys use their native format)
 
 The MAC binds independent age ciphertexts together. Without it, an attacker could swap ciphertexts between key names (age authenticates individual ciphertexts but has no cross-value binding).
