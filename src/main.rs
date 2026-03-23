@@ -1101,12 +1101,23 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
     if !result.exposed_keys.is_empty() {
         eprintln!();
         eprintln!(
-            "{} {display} had access to these secrets — rotate them:",
-            "⚠".yellow()
+            "{} {display} had access to {} secret{} — rotate them:",
+            "⚠".yellow(),
+            result.exposed_keys.len(),
+            if result.exposed_keys.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
         );
         for key in &result.exposed_keys {
             eprintln!("  {} {}", "▸".dimmed(), key.bold());
         }
+        eprintln!();
+        eprintln!(
+            "  {}",
+            "run `murk rotate --all` to rotate each secret".dimmed()
+        );
     }
     eprintln!();
     eprintln!(
