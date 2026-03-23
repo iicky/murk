@@ -25,17 +25,33 @@ const SECRET_FILE_MODE: u32 = 0o600;
 #[cfg(unix)]
 const WORLD_READABLE_MASK: u32 = 0o077;
 
-/// Resolve the secret key from `MURK_KEY` or `MURK_KEY_FILE`.
-/// `MURK_KEY` takes priority; `MURK_KEY_FILE` reads the key from a file.
+/// Resolve the secret key, checking in order:
+/// 1. `MURK_KEY` env var (explicit key)
+/// 2. `MURK_KEY_FILE` env var (path to key file)
+/// 3. `~/.config/murk/keys/<vault-hash>` (automatic lookup for default vault)
+/// 4. `.env` file in cwd (backward compat)
+///
 /// Returns the key wrapped in `SecretString` so it is zeroized on drop.
 pub fn resolve_key() -> Result<SecretString, String> {
+    // 1. Direct env var.
     if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
         return Ok(SecretString::from(k));
     }
+    // 2. Key file env var.
     if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
         return fs::read_to_string(&path)
             .map(|contents| SecretString::from(contents.trim().to_string()))
             .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));
+    }
+    // 3. Default key file path for the default vault.
+    if let Some(path) = key_file_path(".murk").ok().filter(|p| p.exists()) {
+        return fs::read_to_string(&path)
+            .map(|contents| SecretString::from(contents.trim().to_string()))
+            .map_err(|e| format!("cannot read key file: {e}"));
+    }
+    // 4. Backward compat: read from .env file.
+    if let Some(key) = read_key_from_dotenv() {
+        return Ok(SecretString::from(key));
     }
     Err(
         "MURK_KEY not set — run `murk init` to generate a key, or ask a recipient to authorize you"

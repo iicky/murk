@@ -32,7 +32,7 @@ Enter
 Sleep 500ms
 
 # Eve: copy .murk, no key
-Type `cd "$(mktemp -d)" && cp "$ALICE_DIR/.murk" . && unset MURK_KEY`
+Type `cd "$(mktemp -d)" && cp "$ALICE_DIR/.murk" . && unset MURK_KEY MURK_KEY_FILE`
 Enter
 Type `export PS1="\n\[\e[31m\]eve \$\[\e[0m\] "`
 Enter

@@ -856,10 +856,13 @@ fn recover_shows_phrase() {
 
 #[test]
 fn recover_without_key_fails() {
+    let dir = TempDir::new().unwrap();
     Command::cargo_bin("murk")
         .unwrap()
         .args(["recover"])
+        .current_dir(dir.path())
         .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1057,12 +1060,16 @@ fn add_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
 
+    // Remove .env so backward-compat key resolution can't find the key.
+    fs::remove_file(dir.path().join(".env")).ok();
+
     Command::cargo_bin("murk")
         .unwrap()
         .args(["add", "X", "--vault", "test.murk"])
         .write_stdin("Y\n")
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1072,12 +1079,14 @@ fn add_without_key_fails() {
 fn get_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
+    fs::remove_file(dir.path().join(".env")).ok();
 
     Command::cargo_bin("murk")
         .unwrap()
         .args(["get", "X", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1087,12 +1096,14 @@ fn get_without_key_fails() {
 fn export_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
+    fs::remove_file(dir.path().join(".env")).ok();
 
     Command::cargo_bin("murk")
         .unwrap()
         .args(["export", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));

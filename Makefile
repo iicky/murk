@@ -89,7 +89,7 @@ test-eve: build
 	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
 	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
 	cp .murk $$eve/ && \
-	cd $$eve && unset MURK_KEY && \
+	cd $$eve && unset MURK_KEY MURK_KEY_FILE && \
 	$(MURK) ls 2>/dev/null | grep -q "DATABASE_URL" && \
 	$(MURK) info 2>/dev/null | grep -q "DATABASE_URL" && \
 	! $(MURK) get DATABASE_URL >/dev/null 2>&1 && \
@@ -104,7 +104,7 @@ test-recovery: build
 	cd $$dir && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
 	eval $$(cat .env) && \
-	ORIGINAL=$$MURK_KEY && \
+	ORIGINAL=$$(cat "$$MURK_KEY_FILE" 2>/dev/null || echo "$$MURK_KEY") && \
 	PHRASE=$$($(MURK) recover 2>/dev/null) && \
 	RESTORED=$$(echo "$$PHRASE" | $(MURK) restore 2>/dev/null) && \
 	test "$$ORIGINAL" = "$$RESTORED" && \
