@@ -47,7 +47,7 @@ pub use export::{
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
 pub use github::{GitHubError, fetch_keys};
-pub use info::{InfoEntry, VaultInfo, vault_info};
+pub use info::{InfoEntry, VaultInfo, format_info_lines, vault_info};
 pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
 pub use recipients::{

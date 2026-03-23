@@ -101,6 +101,97 @@ pub fn vault_info(
     })
 }
 
+/// Format vault info as plain-text lines (no ANSI colors).
+/// `has_meta` indicates whether scoped/tag columns should be shown.
+pub fn format_info_lines(info: &VaultInfo, has_meta: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    lines.push(format!("▓░ {}", info.vault_name));
+    lines.push(format!("   codename    {}", info.codename));
+    if !info.repo.is_empty() {
+        lines.push(format!("   repo        {}", info.repo));
+    }
+    lines.push(format!("   created     {}", info.created));
+    lines.push(format!("   recipients  {}", info.recipient_count));
+
+    if info.entries.is_empty() {
+        lines.push(String::new());
+        lines.push("   no keys in vault".into());
+        return lines;
+    }
+
+    lines.push(String::new());
+
+    let key_width = info.entries.iter().map(|e| e.key.len()).max().unwrap_or(0);
+    let desc_width = info
+        .entries
+        .iter()
+        .map(|e| e.description.len())
+        .max()
+        .unwrap_or(0);
+    let example_width = info
+        .entries
+        .iter()
+        .map(|e| {
+            e.example
+                .as_ref()
+                .map_or(0, |ex| format!("(e.g. {ex})").len())
+        })
+        .max()
+        .unwrap_or(0);
+
+    let tag_width = if has_meta {
+        info.entries
+            .iter()
+            .map(|e| {
+                if e.tags.is_empty() {
+                    0
+                } else {
+                    format!("[{}]", e.tags.join(", ")).len()
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    for entry in &info.entries {
+        let example_str = entry
+            .example
+            .as_ref()
+            .map(|ex| format!("(e.g. {ex})"))
+            .unwrap_or_default();
+
+        let key_padded = format!("{:<key_width$}", entry.key);
+        let desc_padded = format!("{:<desc_width$}", entry.description);
+        let ex_padded = format!("{example_str:<example_width$}");
+
+        if has_meta {
+            let tag_str = if entry.tags.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", entry.tags.join(", "))
+            };
+            let tag_padded = format!("{tag_str:<tag_width$}");
+
+            let scoped_str = if entry.scoped_recipients.is_empty() {
+                String::new()
+            } else {
+                format!("✦ {}", entry.scoped_recipients.join(", "))
+            };
+
+            lines.push(format!(
+                "   {key_padded}  {desc_padded}  {ex_padded}  {tag_padded}  {scoped_str}"
+            ));
+        } else {
+            lines.push(format!("   {key_padded}  {desc_padded}  {ex_padded}"));
+        }
+    }
+
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +279,77 @@ mod tests {
         // Valid JSON but not a vault — should fail deserialization.
         let result = vault_info(b"{\"foo\": \"bar\"}", &[], None);
         assert!(result.is_err());
+    }
+
+    // ── format_info_lines tests ──
+
+    #[test]
+    fn format_info_empty_vault() {
+        let info = VaultInfo {
+            vault_name: "test.murk".into(),
+            codename: "bright-fox-dawn".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            entries: vec![],
+        };
+        let lines = format_info_lines(&info, false);
+        assert!(lines[0].contains("test.murk"));
+        assert!(lines[1].contains("bright-fox-dawn"));
+        assert!(lines.iter().any(|l| l.contains("no keys in vault")));
+    }
+
+    #[test]
+    fn format_info_with_entries() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: "https://github.com/test/repo".into(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 2,
+            entries: vec![
+                InfoEntry {
+                    key: "DATABASE_URL".into(),
+                    description: "Production DB".into(),
+                    example: Some("postgres://...".into()),
+                    tags: vec![],
+                    scoped_recipients: vec![],
+                },
+                InfoEntry {
+                    key: "API_KEY".into(),
+                    description: "OpenAI key".into(),
+                    example: None,
+                    tags: vec![],
+                    scoped_recipients: vec![],
+                },
+            ],
+        };
+        let lines = format_info_lines(&info, false);
+        assert!(lines.iter().any(|l| l.contains("repo")));
+        assert!(lines.iter().any(|l| l.contains("DATABASE_URL")));
+        assert!(lines.iter().any(|l| l.contains("API_KEY")));
+        assert!(lines.iter().any(|l| l.contains("(e.g. postgres://...)")));
+    }
+
+    #[test]
+    fn format_info_with_tags_and_scoped() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 2,
+            entries: vec![InfoEntry {
+                key: "DB_URL".into(),
+                description: "Database".into(),
+                example: None,
+                tags: vec!["prod".into()],
+                scoped_recipients: vec!["alice".into()],
+            }],
+        };
+        let lines = format_info_lines(&info, true);
+        let entry_line = lines.iter().find(|l| l.contains("DB_URL")).unwrap();
+        assert!(entry_line.contains("[prod]"));
+        assert!(entry_line.contains("✦ alice"));
     }
 }
