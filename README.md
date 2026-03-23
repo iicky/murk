@@ -140,6 +140,13 @@ murk rotate --all         # prompts for each secret
 git commit -am "revoke carol, rotate secrets" && git push
 ```
 
+If you already have new values in a file, import them directly:
+
+```bash
+murk circle revoke carol
+murk import .env.rotated  # bulk-update from a file
+```
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/iicky/murk/demo/offboard.gif" alt="murk offboarding demo" width="900">
 </p>
