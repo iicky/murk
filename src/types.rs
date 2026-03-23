@@ -54,6 +54,9 @@ pub struct Meta {
     pub recipients: HashMap<String, String>,
     /// Integrity MAC over secrets + schema.
     pub mac: String,
+    /// BLAKE3 keyed MAC key (hex-encoded, 32 bytes). Generated at init, stored encrypted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hmac_key: Option<String>,
 }
 
 // -- Murk (decrypted in-memory state) --

@@ -538,6 +538,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     let default_meta = || crate::types::Meta {
         recipients: HashMap::new(),
         mac: String::new(),
+        hmac_key: None,
     };
 
     let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
@@ -552,10 +553,13 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     // Only keep names for recipients still in the merged vault.
     names.retain(|pk, _| merged.recipients.contains(pk));
 
-    let mac = compute_mac(merged);
+    let hmac_key_hex = crate::generate_hmac_key();
+    let hmac_key = crate::decode_hmac_key(&hmac_key_hex).unwrap();
+    let mac = compute_mac(merged, Some(&hmac_key));
     let meta = crate::types::Meta {
         recipients: names,
         mac,
+        hmac_key: Some(hmac_key_hex),
     };
 
     let recipients = parse_recipients(&merged.recipients).ok()?;
