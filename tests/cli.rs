@@ -321,6 +321,55 @@ fn generate_with_desc_and_tag() {
         .stdout(predicate::str::contains("API_TOKEN"));
 }
 
+#[test]
+fn generate_invalid_key_name_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["generate", "invalid-key!", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid key name"));
+}
+
+#[test]
+fn generate_overwrites_existing() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["generate", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    let first = murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    murk(&dir, &key)
+        .args(["generate", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    let second = murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_ne!(
+        first, second,
+        "regenerating should produce a different value"
+    );
+}
+
 // ── scoped (mote) secrets ──
 
 #[test]
