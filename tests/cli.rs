@@ -214,6 +214,113 @@ fn add_overwrites_existing_value() {
         .stdout(predicate::str::contains("new_value"));
 }
 
+// ── generate ──
+
+#[test]
+fn generate_creates_secret() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["generate", "SESSION_SECRET", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("generated SESSION_SECRET"));
+
+    // Verify the secret exists and has a non-empty value.
+    murk(&dir, &key)
+        .args(["get", "SESSION_SECRET", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty().not());
+}
+
+#[test]
+fn generate_hex_output() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "generate",
+            "HEX_KEY",
+            "--hex",
+            "--length",
+            "16",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args(["get", "HEX_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = String::from_utf8(output).unwrap();
+    // 16 bytes = 32 hex chars
+    assert_eq!(value.trim().len(), 32);
+    assert!(value.trim().chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+#[test]
+fn generate_custom_length() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "generate",
+            "LONG_KEY",
+            "--length",
+            "64",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args(["get", "LONG_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value = String::from_utf8(output).unwrap();
+    // 64 bytes base64url no pad = 86 chars
+    assert_eq!(value.trim().len(), 86);
+}
+
+#[test]
+fn generate_with_desc_and_tag() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "generate",
+            "API_TOKEN",
+            "--desc",
+            "Auto-generated token",
+            "--tag",
+            "api",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["ls", "--tag", "api", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("API_TOKEN"));
+}
+
 // ── scoped (mote) secrets ──
 
 #[test]
