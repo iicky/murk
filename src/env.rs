@@ -7,8 +7,15 @@ use std::path::Path;
 
 use age::secrecy::SecretString;
 
+/// Environment variable for the secret key.
+pub const ENV_MURK_KEY: &str = "MURK_KEY";
+/// Environment variable for the secret key file path.
+pub const ENV_MURK_KEY_FILE: &str = "MURK_KEY_FILE";
+/// Environment variable for the vault filename.
+pub const ENV_MURK_VAULT: &str = "MURK_VAULT";
+
 /// Keys to skip when importing from a .env file.
-const IMPORT_SKIP: &[&str] = &["MURK_KEY", "MURK_KEY_FILE", "MURK_VAULT"];
+const IMPORT_SKIP: &[&str] = &[ENV_MURK_KEY, ENV_MURK_KEY_FILE, ENV_MURK_VAULT];
 
 /// File mode for `.env`: owner read/write only.
 #[cfg(unix)]
@@ -22,10 +29,10 @@ const WORLD_READABLE_MASK: u32 = 0o077;
 /// `MURK_KEY` takes priority; `MURK_KEY_FILE` reads the key from a file.
 /// Returns the key wrapped in `SecretString` so it is zeroized on drop.
 pub fn resolve_key() -> Result<SecretString, String> {
-    if let Some(k) = env::var("MURK_KEY").ok().filter(|k| !k.is_empty()) {
+    if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
         return Ok(SecretString::from(k));
     }
-    if let Ok(path) = env::var("MURK_KEY_FILE") {
+    if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
         return fs::read_to_string(&path)
             .map(|contents| SecretString::from(contents.trim().to_string()))
             .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));

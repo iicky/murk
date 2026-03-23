@@ -76,6 +76,27 @@ enum Command {
         vault: String,
     },
 
+    /// Generate a random secret and store it
+    Generate {
+        /// Secret key name
+        key: String,
+        /// Length in bytes (default 32)
+        #[arg(long, default_value = "32")]
+        length: usize,
+        /// Output as hex instead of base64
+        #[arg(long)]
+        hex: bool,
+        /// Description for this key
+        #[arg(long)]
+        desc: Option<String>,
+        /// Tag for grouping (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
     /// Remove a secret
     Rm {
         /// Secret key name
@@ -552,6 +573,58 @@ fn cmd_import(file: &str, vault_path: &str) {
         "◆".magenta(),
         if count == 1 { "" } else { "s" }
     );
+}
+
+fn cmd_generate(
+    key: &str,
+    length: usize,
+    hex: bool,
+    desc: Option<&str>,
+    tags: &[String],
+    vault_path: &str,
+) {
+    use base64::Engine;
+
+    if !is_valid_key_name(key) {
+        die(
+            &format_args!(
+                "invalid key name: {}. Keys must start with a letter or underscore and contain only [A-Za-z0-9_]",
+                key.bold()
+            ),
+            1,
+        );
+    }
+
+    let bytes: Vec<u8> = (0..length).map(|_| rand::random()).collect();
+
+    let value = if hex {
+        bytes.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+    } else {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
+    };
+
+    let (mut vault, murk, identity) = load_vault(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
+
+    murk_cli::add_secret(
+        &mut vault,
+        &mut current,
+        key,
+        &value,
+        desc,
+        false,
+        tags,
+        &identity,
+    );
+
+    eprintln!("{} generated {}", "◆".magenta(), key.bold());
+
+    save_vault(vault_path, &mut vault, &original, &current);
 }
 
 fn cmd_rm(key: &str, vault_path: &str) {
@@ -1217,6 +1290,14 @@ fn main() {
             let resolved = resolve_value(&key);
             cmd_add(&key, &resolved, desc.as_deref(), scoped, &tag, &vault);
         }
+        Command::Generate {
+            key,
+            length,
+            hex,
+            desc,
+            tag,
+            vault,
+        } => cmd_generate(&key, length, hex, desc.as_deref(), &tag, &vault),
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
         Command::Ls { tag, vault } => cmd_ls(&tag, &vault),

@@ -1264,6 +1264,51 @@ mod tests {
     }
 
     #[test]
+    fn hmac_key_roundtrip() {
+        let hex = generate_hmac_key();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+
+        let key = decode_hmac_key(&hex).expect("valid hex should decode");
+        // Re-encode and compare.
+        let rehex = key.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+        assert_eq!(hex, rehex);
+    }
+
+    #[test]
+    fn decode_hmac_key_rejects_bad_input() {
+        assert!(decode_hmac_key("").is_none());
+        assert!(decode_hmac_key("tooshort").is_none());
+        assert!(decode_hmac_key(&"zz".repeat(32)).is_none()); // invalid hex
+        assert!(decode_hmac_key(&"aa".repeat(31)).is_none()); // 31 bytes
+        assert!(decode_hmac_key(&"aa".repeat(33)).is_none()); // 33 bytes
+    }
+
+    #[test]
+    fn blake3_mac_different_key_different_mac() {
+        let vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+
+        let key1 = [0u8; 32];
+        let key2 = [1u8; 32];
+        let mac1 = compute_mac(&vault, Some(&key1));
+        let mac2 = compute_mac(&vault, Some(&key2));
+        assert_ne!(mac1, mac2);
+    }
+
+    #[test]
     fn valid_key_names() {
         assert!(is_valid_key_name("DATABASE_URL"));
         assert!(is_valid_key_name("_PRIVATE"));

@@ -174,6 +174,12 @@ Key names are validated as shell identifiers. Invalid names are rejected.
 
 ---
 
+### `murk generate KEY [--length N] [--hex] [--desc DESC] [--tag TAG] [--vault NAME]`
+
+Generates a cryptographically random value and stores it as a shared secret. Default length is 32 bytes, output as URL-safe base64 (no padding). Use `--hex` for hexadecimal output. Uses the same RNG as key generation.
+
+---
+
 ### `murk rm KEY [--vault NAME]`
 
 Removes a key from the vault (shared value, schema entry, and all scoped entries). No confirmation prompt — git is your safety net.

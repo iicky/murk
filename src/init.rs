@@ -16,7 +16,7 @@ pub struct DiscoveredKey {
 /// Try to find an existing age key: checks `MURK_KEY` env var first,
 /// then falls back to `.env` file. Returns `None` if neither is set.
 pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
-    let raw = env::var("MURK_KEY")
+    let raw = env::var(crate::env::ENV_MURK_KEY)
         .ok()
         .filter(|k| !k.is_empty())
         .or_else(crate::read_key_from_dotenv);
