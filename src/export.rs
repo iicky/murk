@@ -151,6 +151,43 @@ pub fn diff_secrets(
     entries
 }
 
+/// Format diff entries as display lines.
+/// Returns plain-text lines (no ANSI colors) suitable for testing.
+pub fn format_diff_lines(entries: &[DiffEntry], show_values: bool) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let symbol = match entry.kind {
+                DiffKind::Added => "+",
+                DiffKind::Removed => "-",
+                DiffKind::Changed => "~",
+            };
+            if show_values {
+                match entry.kind {
+                    DiffKind::Added => format!(
+                        "{symbol} {} = {}",
+                        entry.key,
+                        entry.new_value.as_deref().unwrap_or("")
+                    ),
+                    DiffKind::Removed => format!(
+                        "{symbol} {} = {}",
+                        entry.key,
+                        entry.old_value.as_deref().unwrap_or("")
+                    ),
+                    DiffKind::Changed => format!(
+                        "{symbol} {} {} → {}",
+                        entry.key,
+                        entry.old_value.as_deref().unwrap_or(""),
+                        entry.new_value.as_deref().unwrap_or("")
+                    ),
+                }
+            } else {
+                format!("{symbol} {}", entry.key)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +355,61 @@ mod tests {
         let entries = diff_secrets(&old, &new);
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, vec!["A", "M", "Z"]);
+    }
+
+    // ── format_diff_lines tests ──
+
+    #[test]
+    fn format_diff_lines_without_values() {
+        let entries = vec![
+            DiffEntry {
+                key: "NEW_KEY".into(),
+                kind: DiffKind::Added,
+                old_value: None,
+                new_value: Some("secret".into()),
+            },
+            DiffEntry {
+                key: "OLD_KEY".into(),
+                kind: DiffKind::Removed,
+                old_value: Some("old".into()),
+                new_value: None,
+            },
+            DiffEntry {
+                key: "MOD_KEY".into(),
+                kind: DiffKind::Changed,
+                old_value: Some("v1".into()),
+                new_value: Some("v2".into()),
+            },
+        ];
+        let lines = format_diff_lines(&entries, false);
+        assert_eq!(lines, vec!["+ NEW_KEY", "- OLD_KEY", "~ MOD_KEY"]);
+    }
+
+    #[test]
+    fn format_diff_lines_with_values() {
+        let entries = vec![
+            DiffEntry {
+                key: "KEY".into(),
+                kind: DiffKind::Added,
+                old_value: None,
+                new_value: Some("new_val".into()),
+            },
+            DiffEntry {
+                key: "KEY2".into(),
+                kind: DiffKind::Changed,
+                old_value: Some("old".into()),
+                new_value: Some("new".into()),
+            },
+        ];
+        let lines = format_diff_lines(&entries, true);
+        assert_eq!(lines[0], "+ KEY = new_val");
+        assert_eq!(lines[1], "~ KEY2 old → new");
+    }
+
+    #[test]
+    fn format_diff_lines_empty() {
+        let lines = format_diff_lines(&[], false);
+        assert!(lines.is_empty());
     }
 
     // ── resolve_secrets tests ──

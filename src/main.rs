@@ -1010,45 +1010,6 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
 }
 
 /// Truncate a pubkey for display: first 8 chars + "…" + last 4 chars.
-fn truncate_pubkey(pk: &str) -> String {
-    // SSH keys: "ssh-ed25519 AAAA..." — truncate the base64 portion.
-    if let Some(key_data) = pk.strip_prefix("ssh-ed25519 ") {
-        return truncate_raw(key_data);
-    }
-    if let Some(key_data) = pk.strip_prefix("ssh-rsa ") {
-        return truncate_raw(key_data);
-    }
-    // age keys: "age1..."
-    truncate_raw(pk)
-}
-
-fn truncate_raw(s: &str) -> String {
-    if s.len() <= 13 {
-        return s.to_string();
-    }
-    let start: String = s.chars().take(8).collect();
-    let end: String = s
-        .chars()
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{start}…{end}")
-}
-
-/// Return the key type label for a pubkey.
-fn key_type_label(pk: &str) -> &'static str {
-    if pk.starts_with("ssh-ed25519 ") {
-        "ed25519"
-    } else if pk.starts_with("ssh-rsa ") {
-        "rsa"
-    } else {
-        "age"
-    }
-}
-
 fn cmd_recipients(vault_path: &str) {
     let path = Path::new(vault_path);
     let vault = try_or_die(vault::read(path));
@@ -1093,9 +1054,9 @@ fn cmd_recipients(vault_path: &str) {
         let label = name.unwrap_or("");
         let label_padded = format!("{label:<name_width$}");
 
-        let key_type = key_type_label(&group[0].pubkey);
+        let key_type = murk_cli::key_type_label(&group[0].pubkey);
         let key_info = if group.len() == 1 {
-            truncate_pubkey(&group[0].pubkey)
+            murk_cli::truncate_pubkey(&group[0].pubkey)
         } else {
             format!("({} keys)", group.len())
         };
