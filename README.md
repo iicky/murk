@@ -33,6 +33,8 @@ Or via Cargo:
 cargo install murk-cli
 ```
 
+Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`.
+
 ## Quick start
 
 ```bash
