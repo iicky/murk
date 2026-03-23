@@ -403,18 +403,21 @@ pub(crate) fn verify_mac(
     stored_mac: &str,
     hmac_key: Option<&[u8; 32]>,
 ) -> bool {
-    if stored_mac.starts_with("blake3:") {
+    use constant_time_eq::constant_time_eq;
+
+    let expected = if stored_mac.starts_with("blake3:") {
         match hmac_key {
-            Some(key) => stored_mac == compute_mac_v3(vault, key),
-            None => false,
+            Some(key) => compute_mac_v3(vault, key),
+            None => return false,
         }
     } else if stored_mac.starts_with("sha256v2:") {
-        stored_mac == compute_mac_v2(vault)
+        compute_mac_v2(vault)
     } else if stored_mac.starts_with("sha256:") {
-        stored_mac == compute_mac_v1(vault)
+        compute_mac_v1(vault)
     } else {
-        false
-    }
+        return false;
+    };
+    constant_time_eq(stored_mac.as_bytes(), expected.as_bytes())
 }
 
 /// Generate a random 32-byte BLAKE3 MAC key, returned as hex.
