@@ -19,7 +19,7 @@ murk stores encrypted secrets in a single `.murk` file that's safe to commit to 
 
 Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault exist but they're complex, require cloud setup, or pull in runtimes you don't want.
 
-murk is simple: one key in your `.env`, one encrypted file in your repo, done.
+murk is simple: one key on your machine, one encrypted file in your repo, done.
 
 ## How murk compares
 
@@ -68,8 +68,7 @@ Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_
 # Initialize — generates your key and recovery phrase
 murk init
 
-# Keep your key out of git
-echo ".env" >> .gitignore
+# Your key is stored in ~/.config/murk/keys/ — .env just references it
 
 # Add secrets (prompts for value, hidden input)
 murk add DATABASE_URL
@@ -235,7 +234,7 @@ See [SPEC.md](SPEC.md) for the full specification.
 
 **Key names are plaintext** — the `.murk` header exposes key names (e.g. `STRIPE_SECRET_KEY`, `DATABASE_URL`) so that `murk info` works without a key and git diffs stay readable. Only values are encrypted. If your threat model requires hiding what services you use, this is a trade-off to be aware of.
 
-**Key stored in `.env`** — your `MURK_KEY` lives in a `.env` file with `chmod 600` permissions (owner read/write only). This file is gitignored. The key is equivalent to a password — anyone with access to the file or the `MURK_KEY` environment variable can decrypt shared secrets. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
+**Key storage** — your secret key lives in `~/.config/murk/keys/` with `chmod 600` permissions, outside your repository. The `.env` file in your project contains only a `MURK_KEY_FILE` reference to this path, not the key itself. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
 
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 

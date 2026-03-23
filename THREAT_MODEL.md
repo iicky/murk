@@ -16,7 +16,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 ## What murk does not protect
 
-**Compromised machines.** If an attacker has access to a machine where `MURK_KEY` is present (in `.env`, in memory, or in environment variables), they can decrypt all shared secrets and any scoped secrets belonging to that key.
+**Compromised machines.** If an attacker has access to a machine where the secret key is present (`~/.config/murk/keys/`, in memory, or in environment variables), they can decrypt all shared secrets and any scoped secrets belonging to that key.
 
 **Key names are public.** The `.murk` header stores key names, descriptions, and examples in plaintext. An attacker with repo access knows you have `STRIPE_SECRET_KEY`, `DATABASE_URL`, etc. This is a design trade-off that enables `murk info` to work without a key and keeps git diffs readable. If your threat model requires hiding what services you use, murk does not address this.
 
@@ -32,7 +32,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 ┌─────────────────────────────────────┐
 │         Developer machine           │
 │                                     │
-│  .env (MURK_KEY) ── secret key      │  ← Trust boundary: local machine
+│  ~/.config/murk/keys/ ── secret key  │  ← Trust boundary: local machine
 │  MURK_KEY in memory ── during ops   │
 │                                     │
 └──────────────┬──────────────────────┘
