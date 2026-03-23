@@ -174,6 +174,24 @@ murk restore
 - **Header is public, values are private** — key names are visible, values are not
 - **Explicit over magic** — never silently overwrites or destroys data
 
+The `.murk` file is safe to commit — key names are readable, values are individually encrypted:
+
+```json
+{
+  "version": "2.0",
+  "recipients": ["age1abc..."],
+  "schema": {
+    "DATABASE_URL": { "description": "Production database" },
+    "STRIPE_SECRET": { "description": "Stripe secret key" }
+  },
+  "secrets": {
+    "DATABASE_URL": { "shared": "age-encryption.org/v1\n..." },
+    "STRIPE_SECRET": { "shared": "age-encryption.org/v1\n..." }
+  },
+  "meta": "age-encryption.org/v1\n..."
+}
+```
+
 See [SPEC.md](SPEC.md) for the full specification.
 
 ## Security notes
