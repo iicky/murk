@@ -165,8 +165,9 @@ pub fn load_vault(
         if meta.mac.is_empty() {
             return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
         }
-        if !verify_mac(&vault, &meta.mac) {
-            let expected = compute_mac(&vault);
+        let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
+        if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
+            let expected = compute_mac(&vault, hmac_key.as_ref());
             return Err(format!(
                 "integrity check failed: vault may have been tampered with (expected {expected}, got {})",
                 meta.mac
@@ -254,11 +255,14 @@ pub fn save_vault(
 
     vault.secrets = new_secrets;
 
-    // Update meta.
-    let mac = compute_mac(vault);
+    // Update meta — always generate a fresh BLAKE3 key on save.
+    let hmac_key_hex = generate_hmac_key();
+    let hmac_key = decode_hmac_key(&hmac_key_hex).unwrap();
+    let mac = compute_mac(vault, Some(&hmac_key));
     let meta = types::Meta {
         recipients: current.recipients.clone(),
         mac,
+        hmac_key: Some(hmac_key_hex),
     };
     let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
     vault.meta = encrypt_value(&meta_json, &recipients)?;
@@ -266,14 +270,15 @@ pub fn save_vault(
     vault::write(Path::new(vault_path), vault).map_err(|e| e.to_string())
 }
 
-/// Compute an integrity hash over the vault's secrets, scoped entries, and recipients.
-/// Covers: sorted key names, encrypted shared values, scoped entries, recipient pubkeys.
+/// Compute an integrity MAC over the vault's secrets, scoped entries, and recipients.
 ///
-/// The `sha256v2:` prefix distinguishes this from the legacy `sha256:` scheme
-/// which did not cover scoped entries. On load, both prefixes are accepted;
-/// on save, only `sha256v2:` is written.
-pub(crate) fn compute_mac(vault: &types::Vault) -> String {
-    compute_mac_v2(vault)
+/// If an HMAC key is provided, uses BLAKE3 keyed hash (written as `blake3:`).
+/// Otherwise falls back to unkeyed SHA-256 v2 for legacy compatibility.
+pub(crate) fn compute_mac(vault: &types::Vault, hmac_key: Option<&[u8; 32]>) -> String {
+    match hmac_key {
+        Some(key) => compute_mac_v3(vault, key),
+        None => compute_mac_v2(vault),
+    }
 }
 
 /// Legacy MAC: covers key names, shared ciphertext, and recipients (no scoped).
@@ -357,15 +362,80 @@ fn compute_mac_v2(vault: &types::Vault) -> String {
     )
 }
 
-/// Verify a stored MAC against the vault, accepting both v1 and v2 schemes.
-pub(crate) fn verify_mac(vault: &types::Vault, stored_mac: &str) -> bool {
-    if stored_mac.starts_with("sha256v2:") {
+/// V3 MAC: BLAKE3 keyed hash over the same inputs as v2.
+fn compute_mac_v3(vault: &types::Vault, key: &[u8; 32]) -> String {
+    let mut data = Vec::new();
+
+    for key_name in vault.secrets.keys() {
+        data.extend_from_slice(key_name.as_bytes());
+        data.push(0x00);
+    }
+
+    for entry in vault.secrets.values() {
+        data.extend_from_slice(entry.shared.as_bytes());
+        data.push(0x00);
+
+        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        scoped_pks.sort();
+        for pk in scoped_pks {
+            data.extend_from_slice(pk.as_bytes());
+            data.push(0x01);
+            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.push(0x00);
+        }
+    }
+
+    let mut pks = vault.recipients.clone();
+    pks.sort();
+    for pk in &pks {
+        data.extend_from_slice(pk.as_bytes());
+        data.push(0x00);
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3:{hash}")
+}
+
+/// Verify a stored MAC against the vault, accepting v1, v2, and blake3 schemes.
+pub(crate) fn verify_mac(
+    vault: &types::Vault,
+    stored_mac: &str,
+    hmac_key: Option<&[u8; 32]>,
+) -> bool {
+    if stored_mac.starts_with("blake3:") {
+        match hmac_key {
+            Some(key) => stored_mac == compute_mac_v3(vault, key),
+            None => false,
+        }
+    } else if stored_mac.starts_with("sha256v2:") {
         stored_mac == compute_mac_v2(vault)
     } else if stored_mac.starts_with("sha256:") {
         stored_mac == compute_mac_v1(vault)
     } else {
         false
     }
+}
+
+/// Generate a random 32-byte BLAKE3 MAC key, returned as hex.
+pub(crate) fn generate_hmac_key() -> String {
+    let key: [u8; 32] = rand::random();
+    key.iter().fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// Decode a hex-encoded 32-byte key.
+pub(crate) fn decode_hmac_key(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        key[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+    }
+    Some(key)
 }
 
 /// Generate an ISO-8601 UTC timestamp.
@@ -445,10 +515,15 @@ mod tests {
             meta: String::new(),
         };
 
-        let mac1 = compute_mac(&vault);
-        let mac2 = compute_mac(&vault);
+        let key = [0u8; 32];
+        let mac1 = compute_mac(&vault, Some(&key));
+        let mac2 = compute_mac(&vault, Some(&key));
         assert_eq!(mac1, mac2);
-        assert!(mac1.starts_with("sha256v2:"));
+        assert!(mac1.starts_with("blake3:"));
+
+        // Without key, falls back to sha256v2
+        let mac_legacy = compute_mac(&vault, None);
+        assert!(mac_legacy.starts_with("sha256v2:"));
     }
 
     #[test]
@@ -464,7 +539,8 @@ mod tests {
             meta: String::new(),
         };
 
-        let mac_empty = compute_mac(&vault);
+        let key = [0u8; 32];
+        let mac_empty = compute_mac(&vault, Some(&key));
 
         vault.secrets.insert(
             "KEY".into(),
@@ -474,7 +550,7 @@ mod tests {
             },
         );
 
-        let mac_with_secret = compute_mac(&vault);
+        let mac_with_secret = compute_mac(&vault, Some(&key));
         assert_ne!(mac_empty, mac_with_secret);
     }
 
@@ -491,9 +567,10 @@ mod tests {
             meta: String::new(),
         };
 
-        let mac1 = compute_mac(&vault);
+        let key = [0u8; 32];
+        let mac1 = compute_mac(&vault, Some(&key));
         vault.recipients.push("age1xyz".into());
-        let mac2 = compute_mac(&vault);
+        let mac2 = compute_mac(&vault, Some(&key));
         assert_ne!(mac1, mac2);
     }
 
@@ -1103,6 +1180,7 @@ mod tests {
         let meta = types::Meta {
             recipients: recipients_map,
             mac: String::new(),
+            hmac_key: None,
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         vault.meta = encrypt_value(&meta_json, &[recipient]).unwrap();
@@ -1146,7 +1224,8 @@ mod tests {
             },
         );
 
-        let mac_no_scoped = compute_mac(&vault);
+        let key = [0u8; 32];
+        let mac_no_scoped = compute_mac(&vault, Some(&key));
 
         vault
             .secrets
@@ -1155,7 +1234,7 @@ mod tests {
             .scoped
             .insert("age1bob".into(), "scoped-ct".into());
 
-        let mac_with_scoped = compute_mac(&vault);
+        let mac_with_scoped = compute_mac(&vault, Some(&key));
         assert_ne!(mac_no_scoped, mac_with_scoped);
     }
 
@@ -1172,12 +1251,16 @@ mod tests {
             meta: String::new(),
         };
 
+        let key = [0u8; 32];
         let v1_mac = compute_mac_v1(&vault);
         let v2_mac = compute_mac_v2(&vault);
-        assert!(verify_mac(&vault, &v1_mac));
-        assert!(verify_mac(&vault, &v2_mac));
-        assert!(!verify_mac(&vault, "sha256:bogus"));
-        assert!(!verify_mac(&vault, "unknown:prefix"));
+        let v3_mac = compute_mac_v3(&vault, &key);
+        assert!(verify_mac(&vault, &v1_mac, None));
+        assert!(verify_mac(&vault, &v2_mac, None));
+        assert!(verify_mac(&vault, &v3_mac, Some(&key)));
+        assert!(!verify_mac(&vault, "sha256:bogus", None));
+        assert!(!verify_mac(&vault, "blake3:bogus", Some(&key)));
+        assert!(!verify_mac(&vault, "unknown:prefix", None));
     }
 
     #[test]

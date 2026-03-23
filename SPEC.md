@@ -122,17 +122,20 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "mac": "sha256v2:abc123..."
+  "mac": "blake3:abc123...",
+  "hmac_key": "0a1b2c3d..."
 }
 ```
 
 `recipients` maps public keys to display names. This is the only place names are stored.
 
-`mac` is an integrity hash over the vault's encrypted content (see Integrity below).
+`mac` is a keyed integrity hash over the vault's encrypted content (see Integrity below).
+
+`hmac_key` is a hex-encoded 32-byte random key used for BLAKE3 keyed hashing. Generated fresh on each save.
 
 ### Integrity
 
-The MAC is a SHA-256 hash covering, in order:
+The MAC is a BLAKE3 keyed hash covering, in order:
 
 1. **Key names** — iterated in sorted order (BTreeMap), each followed by `\x00`
 2. **Per-key encrypted values** — for each key (sorted):
@@ -140,11 +143,11 @@ The MAC is a SHA-256 hash covering, in order:
    - For each scoped entry (sorted by pubkey): the pubkey followed by `\x01`, the scoped ciphertext followed by `\x00`
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
 
-The resulting digest is prefixed with `sha256v2:` and stored as the `mac` field in meta.
+The resulting digest is prefixed with `blake3:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Both `sha256:` (v1, no scoped coverage) and `sha256v2:` (v2, full coverage) prefixes are accepted for backward compatibility. On save, murk always writes `sha256v2:`.
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage) and `sha256v2:` (v2, unkeyed) are accepted for backward compatibility. On save, murk always writes `blake3:` with a fresh key.
 
-The MAC is parasitic — its security depends on being stored inside the encrypted meta blob. It detects accidental corruption and naive tampering, but is not a keyed HMAC.
+Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
 ---
 
@@ -299,7 +302,8 @@ murk is appropriate for dev tooling and small teams. It is not designed for regu
 - `bip39` — recovery phrase generation
 - `serde` / `serde_json` — serialization
 - `clap` — CLI argument parsing
-- `sha2` — integrity hashing
+- `blake3` — keyed integrity hashing
+- `sha2` — legacy integrity hashing (backward compatibility)
 - `chrono` — timestamps
 - `colored` — terminal output
 - `rpassword` — hidden input prompting

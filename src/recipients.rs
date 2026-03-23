@@ -339,6 +339,7 @@ mod tests {
         let meta = types::Meta {
             recipients: names,
             mac: String::new(),
+            hmac_key: None,
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let r2 = make_recipient(&pk2);
@@ -380,6 +381,7 @@ mod tests {
         let meta = types::Meta {
             recipients: std::collections::HashMap::from([(pubkey.clone(), "Alice".into())]),
             mac: String::new(),
+            hmac_key: None,
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let meta_enc = crate::encrypt_value(&meta_json, &[recipient]).unwrap();
