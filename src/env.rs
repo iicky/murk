@@ -109,11 +109,20 @@ pub fn read_key_from_dotenv() -> Option<String> {
     let contents = fs::read_to_string(".env").ok()?;
     for line in contents.lines() {
         let trimmed = line.trim();
+        // Direct key: MURK_KEY=AGE-SECRET-KEY-...
         if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
             return Some(key.to_string());
         }
         if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
             return Some(key.to_string());
+        }
+        // Key file reference: MURK_KEY_FILE=~/.config/murk/keys/...
+        if let Some(contents) = trimmed
+            .strip_prefix("export MURK_KEY_FILE=")
+            .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
+            .and_then(|p| fs::read_to_string(p.trim()).ok())
+        {
+            return Some(contents.trim().to_string());
         }
     }
     None
@@ -126,9 +135,12 @@ pub fn dotenv_has_murk_key() -> bool {
         return false;
     }
     let contents = fs::read_to_string(env_path).unwrap_or_default();
-    contents
-        .lines()
-        .any(|l| l.starts_with("MURK_KEY=") || l.starts_with("export MURK_KEY="))
+    contents.lines().any(|l| {
+        l.starts_with("MURK_KEY=")
+            || l.starts_with("export MURK_KEY=")
+            || l.starts_with("MURK_KEY_FILE=")
+            || l.starts_with("export MURK_KEY_FILE=")
+    })
 }
 
 /// Write a MURK_KEY to `.env`, removing any existing MURK_KEY lines.
@@ -167,6 +179,120 @@ pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
             .map_err(|e| format!("writing .env: {e}"))?;
     }
 
+    #[cfg(not(unix))]
+    {
+        fs::write(env_path, &full_content).map_err(|e| format!("writing .env: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Compute the key file path for a vault: `~/.config/murk/keys/<hash>`.
+/// The hash is a truncated SHA-256 of the absolute vault path.
+pub fn key_file_path(vault_path: &str) -> Result<std::path::PathBuf, String> {
+    use sha2::{Digest, Sha256};
+
+    let abs_path = std::path::Path::new(vault_path)
+        .canonicalize()
+        .or_else(|_| {
+            // Vault may not exist yet (init). Use cwd + vault_path.
+            std::env::current_dir().map(|cwd| cwd.join(vault_path))
+        })
+        .map_err(|e| format!("cannot resolve vault path: {e}"))?;
+
+    let hash = Sha256::digest(abs_path.to_string_lossy().as_bytes());
+    let short_hash: String = hash.iter().take(8).fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    let config_dir = dirs_path()?;
+    Ok(config_dir.join(&short_hash))
+}
+
+/// Return `~/.config/murk/keys/`, creating it if needed.
+fn dirs_path() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "cannot determine home directory")?;
+    let dir = std::path::Path::new(&home)
+        .join(".config")
+        .join("murk")
+        .join("keys");
+    fs::create_dir_all(&dir).map_err(|e| format!("creating key directory: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = dir.parent().unwrap(); // ~/.config/murk
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).ok();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).ok();
+    }
+
+    Ok(dir)
+}
+
+/// Write a secret key to a file with restricted permissions.
+pub fn write_key_to_file(path: &std::path::Path, secret_key: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(SECRET_FILE_MODE)
+            .open(path)
+            .map_err(|e| format!("writing key file: {e}"))?;
+        file.write_all(secret_key.as_bytes())
+            .map_err(|e| format!("writing key file: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, secret_key).map_err(|e| format!("writing key file: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Write a MURK_KEY_FILE reference to `.env`, removing any existing MURK_KEY/MURK_KEY_FILE lines.
+pub fn write_key_ref_to_dotenv(key_file_path: &std::path::Path) -> Result<(), String> {
+    let env_path = Path::new(".env");
+
+    let existing = if env_path.exists() {
+        let contents = fs::read_to_string(env_path).map_err(|e| format!("reading .env: {e}"))?;
+        let filtered: Vec<&str> = contents
+            .lines()
+            .filter(|l| {
+                !l.starts_with("MURK_KEY=")
+                    && !l.starts_with("export MURK_KEY=")
+                    && !l.starts_with("MURK_KEY_FILE=")
+                    && !l.starts_with("export MURK_KEY_FILE=")
+            })
+            .collect();
+        filtered.join("\n") + "\n"
+    } else {
+        String::new()
+    };
+
+    let full_content = format!(
+        "{existing}export MURK_KEY_FILE={}\n",
+        key_file_path.display()
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(SECRET_FILE_MODE)
+            .open(env_path)
+            .map_err(|e| format!("opening .env: {e}"))?;
+        file.write_all(full_content.as_bytes())
+            .map_err(|e| format!("writing .env: {e}"))?;
+    }
     #[cfg(not(unix))]
     {
         fs::write(env_path, &full_content).map_err(|e| format!("writing .env: {e}"))?;

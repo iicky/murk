@@ -38,8 +38,9 @@ pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{
-    EnvrcStatus, dotenv_has_murk_key, parse_env, read_key_from_dotenv, resolve_key,
-    warn_env_permissions, write_envrc, write_key_to_dotenv,
+    EnvrcStatus, dotenv_has_murk_key, key_file_path, parse_env, read_key_from_dotenv, resolve_key,
+    warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
+    write_key_to_file,
 };
 pub use export::{
     DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, format_diff_lines,

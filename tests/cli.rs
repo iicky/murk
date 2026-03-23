@@ -4,8 +4,8 @@ use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
 
-/// Helper: run `murk init` in a temp dir and return (dir, murk_key, pubkey).
-/// Captures the recovery phrase from stdout and the MURK_KEY from .env.
+/// Helper: run `murk init` in a temp dir and return (murk_key, pubkey).
+/// Reads the key from the key file referenced in .env.
 fn init_vault(dir: &TempDir) -> (String, String) {
     Command::cargo_bin("murk")
         .unwrap()
@@ -16,15 +16,23 @@ fn init_vault(dir: &TempDir) -> (String, String) {
         .success();
 
     let env_contents = fs::read_to_string(dir.path().join(".env")).unwrap();
-    let murk_key = env_contents
-        .lines()
-        .find(|l| l.contains("MURK_KEY="))
-        .unwrap()
-        .trim_start_matches("export ")
-        .trim_start_matches("MURK_KEY=")
-        .to_string();
 
-    // Derive pubkey by parsing the key (we check it starts with AGE-SECRET-KEY).
+    // .env now contains MURK_KEY_FILE=<path> — read the key from that file.
+    let murk_key = if let Some(path) = env_contents.lines().find_map(|l| {
+        l.strip_prefix("export MURK_KEY_FILE=")
+            .or_else(|| l.strip_prefix("MURK_KEY_FILE="))
+    }) {
+        fs::read_to_string(path.trim()).unwrap().trim().to_string()
+    } else if let Some(key) = env_contents.lines().find_map(|l| {
+        l.strip_prefix("export MURK_KEY=")
+            .or_else(|| l.strip_prefix("MURK_KEY="))
+    }) {
+        // Backward compat: direct key in .env
+        key.to_string()
+    } else {
+        panic!("no MURK_KEY or MURK_KEY_FILE found in .env");
+    };
+
     assert!(murk_key.starts_with("AGE-SECRET-KEY-"));
 
     let pubkey = {
@@ -64,7 +72,18 @@ fn init_creates_vault_and_env() {
     assert!(dir.path().join(".env").exists());
 
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
-    assert!(env.contains("export MURK_KEY=AGE-SECRET-KEY-"));
+    assert!(
+        env.contains("export MURK_KEY_FILE="),
+        ".env should contain MURK_KEY_FILE reference, got: {env}"
+    );
+
+    // Key file should exist and contain a valid age key.
+    let key_path = env
+        .lines()
+        .find_map(|l| l.strip_prefix("export MURK_KEY_FILE="))
+        .unwrap();
+    let key = fs::read_to_string(key_path.trim()).unwrap();
+    assert!(key.trim().starts_with("AGE-SECRET-KEY-"));
 }
 
 #[test]
@@ -134,9 +153,9 @@ fn init_existing_vault_no_key() {
                 .and(predicate::str::contains("age1")),
         );
 
-    // .env should now contain a new MURK_KEY.
+    // .env should now contain a MURK_KEY_FILE reference.
     let env = fs::read_to_string(dir.path().join(".env")).unwrap();
-    assert!(env.contains("export MURK_KEY=AGE-SECRET-KEY-"));
+    assert!(env.contains("export MURK_KEY_FILE="));
 }
 
 #[test]
