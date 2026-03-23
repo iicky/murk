@@ -134,6 +134,104 @@ pub fn revoke_recipient(
     })
 }
 
+/// Truncate a pubkey for display, keeping start and end.
+pub fn truncate_pubkey(pk: &str) -> String {
+    if let Some(key_data) = pk.strip_prefix("ssh-ed25519 ") {
+        return truncate_raw(key_data);
+    }
+    if let Some(key_data) = pk.strip_prefix("ssh-rsa ") {
+        return truncate_raw(key_data);
+    }
+    truncate_raw(pk)
+}
+
+fn truncate_raw(s: &str) -> String {
+    if s.len() <= 13 {
+        return s.to_string();
+    }
+    let start: String = s.chars().take(8).collect();
+    let end: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{start}…{end}")
+}
+
+/// Return the key type label for a pubkey string.
+pub fn key_type_label(pk: &str) -> &'static str {
+    if pk.starts_with("ssh-ed25519 ") {
+        "ed25519"
+    } else if pk.starts_with("ssh-rsa ") {
+        "rsa"
+    } else {
+        "age"
+    }
+}
+
+/// A group of recipients sharing a display name.
+pub struct RecipientGroup<'a> {
+    pub name: Option<&'a str>,
+    pub entries: Vec<&'a RecipientEntry>,
+    pub is_self: bool,
+}
+
+/// Group recipient entries by display name and format for display.
+/// Returns plain-text lines (no ANSI colors).
+pub fn format_recipient_lines(entries: &[RecipientEntry]) -> Vec<String> {
+    let has_names = entries.iter().any(|e| e.display_name.is_some());
+    if !has_names {
+        return entries.iter().map(|e| e.pubkey.clone()).collect();
+    }
+
+    let groups = group_recipients(entries);
+
+    let name_width = groups
+        .iter()
+        .map(|g| g.name.map_or(0, str::len))
+        .max()
+        .unwrap_or(0);
+
+    groups
+        .iter()
+        .map(|g| {
+            let marker = if g.is_self { "◆" } else { " " };
+            let label = g.name.unwrap_or("");
+            let label_padded = format!("{label:<name_width$}");
+            let key_type = key_type_label(&g.entries[0].pubkey);
+            let key_info = if g.entries.len() == 1 {
+                truncate_pubkey(&g.entries[0].pubkey)
+            } else {
+                format!("({} keys)", g.entries.len())
+            };
+            format!("{marker} {label_padded}  {key_info}  {key_type}")
+        })
+        .collect()
+}
+
+fn group_recipients(entries: &[RecipientEntry]) -> Vec<RecipientGroup<'_>> {
+    let mut groups: Vec<RecipientGroup<'_>> = Vec::new();
+    for entry in entries {
+        let name = entry.display_name.as_deref();
+        if let Some(group) = groups.iter_mut().find(|g| g.name == name && name.is_some()) {
+            group.entries.push(entry);
+            if entry.is_self {
+                group.is_self = true;
+            }
+        } else {
+            groups.push(RecipientGroup {
+                name,
+                entries: vec![entry],
+                is_self: entry.is_self,
+            });
+        }
+    }
+    groups
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,5 +550,95 @@ mod tests {
         let result = revoke_recipient(&mut vault, &mut murk, "alice@github");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot revoke last recipient"));
+    }
+
+    // ── formatting tests ──
+
+    #[test]
+    fn truncate_age_key() {
+        let pk = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
+        let truncated = truncate_pubkey(pk);
+        assert!(truncated.len() < pk.len());
+        assert!(truncated.starts_with("age1ql3z"));
+        assert!(truncated.contains('…'));
+    }
+
+    #[test]
+    fn truncate_ssh_key() {
+        let pk = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVsample";
+        let truncated = truncate_pubkey(pk);
+        assert!(!truncated.starts_with("ssh-ed25519"));
+        assert!(truncated.contains('…'));
+    }
+
+    #[test]
+    fn truncate_short_key_unchanged() {
+        assert_eq!(truncate_pubkey("age1short"), "age1short");
+    }
+
+    #[test]
+    fn key_type_labels() {
+        assert_eq!(key_type_label("age1abc"), "age");
+        assert_eq!(key_type_label("ssh-ed25519 AAAA"), "ed25519");
+        assert_eq!(key_type_label("ssh-rsa AAAA"), "rsa");
+    }
+
+    #[test]
+    fn format_recipients_no_names() {
+        let entries = vec![
+            RecipientEntry {
+                pubkey: "age1abc".into(),
+                display_name: None,
+                is_self: false,
+            },
+            RecipientEntry {
+                pubkey: "age1xyz".into(),
+                display_name: None,
+                is_self: false,
+            },
+        ];
+        let lines = format_recipient_lines(&entries);
+        assert_eq!(lines, vec!["age1abc", "age1xyz"]);
+    }
+
+    #[test]
+    fn format_recipients_with_names() {
+        let entries = vec![
+            RecipientEntry {
+                pubkey: "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p".into(),
+                display_name: Some("alice".into()),
+                is_self: true,
+            },
+            RecipientEntry {
+                pubkey: "age1xyz7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p".into(),
+                display_name: Some("bob".into()),
+                is_self: false,
+            },
+        ];
+        let lines = format_recipient_lines(&entries);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("◆"));
+        assert!(lines[0].contains("alice"));
+        assert!(lines[1].starts_with(" "));
+        assert!(lines[1].contains("bob"));
+    }
+
+    #[test]
+    fn format_recipients_groups_multi_key() {
+        let entries = vec![
+            RecipientEntry {
+                pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVkey1sample".into(),
+                display_name: Some("alice@github".into()),
+                is_self: false,
+            },
+            RecipientEntry {
+                pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVkey2sample".into(),
+                display_name: Some("alice@github".into()),
+                is_self: false,
+            },
+        ];
+        let lines = format_recipient_lines(&entries);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("(2 keys)"));
     }
 }
