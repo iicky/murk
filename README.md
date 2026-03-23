@@ -68,14 +68,21 @@ Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_
 # Initialize — generates your key and recovery phrase
 murk init
 
-# Your key is stored in ~/.config/murk/keys/ — .env just references it
-
 # Add secrets (prompts for value, hidden input)
 murk add DATABASE_URL
 murk add OPENAI_KEY
 
-# Use with direnv
-echo 'eval $(murk export)' > .envrc
+# Use with direnv — source .env for the key, then decrypt
+echo -e 'dotenv\neval $(murk export)' > .envrc
+direnv allow
+```
+
+Your key is stored in `~/.config/murk/keys/` with restricted permissions. The `.env` file in your project just contains a `MURK_KEY_FILE` reference — no secrets in the repo directory.
+
+Without direnv, use `murk exec`:
+
+```bash
+murk exec ./deploy.sh    # runs with all secrets in the environment
 ```
 
 ## How it works
