@@ -188,6 +188,8 @@ murk restore
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
+| `murk exec CMD...` | Run a command with secrets in the environment |
+| `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
