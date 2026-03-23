@@ -20,6 +20,8 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Key names are public.** The `.murk` header stores key names, descriptions, and examples in plaintext. An attacker with repo access knows you have `STRIPE_SECRET_KEY`, `DATABASE_URL`, etc. This is a design trade-off that enables `murk info` to work without a key and keeps git diffs readable. If your threat model requires hiding what services you use, murk does not address this.
 
+**In-memory secret exposure.** Decrypted secret values are held as plain `String` in memory during `export`, `exec`, and `get` operations. They are not zeroized on drop. In long-running processes, core dumps, or swap files, decrypted values may be recoverable. The secret key itself uses `SecretString` with zeroize-on-drop, but the values it decrypts do not. This is a known limitation — mitigating it would require threading `SecretString` through all value paths, which is not practical with the current age API.
+
 **Historical access after revocation.** Revoking a recipient re-encrypts the vault going forward, but old `.murk` versions remain in git history. The revoked recipient can still decrypt any version they previously had access to. Always rotate credentials after revocation. murk warns about this at revocation time.
 
 **Fine-grained access control.** All authorized recipients can decrypt all shared secrets. Per-key access metadata is stored but not enforced cryptographically in v1. If a recipient's public key is in the recipient list, they can read everything in the shared layer.
