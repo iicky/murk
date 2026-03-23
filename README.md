@@ -68,6 +68,9 @@ Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_
 # Initialize — generates your key and recovery phrase
 murk init
 
+# Keep your key out of git
+echo ".env" >> .gitignore
+
 # Add secrets (prompts for value, hidden input)
 murk add DATABASE_URL
 murk add OPENAI_KEY
