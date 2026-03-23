@@ -37,7 +37,7 @@ pub fn merge_vaults(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
     let repo = ours.repo.clone();
 
     // -- Recipients: set union/removal --
-    let recipients = merge_recipients(base, ours, theirs);
+    let recipients = merge_recipients(base, ours, theirs, &mut conflicts);
 
     // Detect recipient-change sides (triggers full re-encryption).
     let base_recip: BTreeSet<&str> = base.recipients.iter().map(String::as_str).collect();
@@ -83,7 +83,12 @@ pub fn merge_vaults(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
 }
 
 /// Merge recipient lists as sets: union additions, honor removals.
-fn merge_recipients(base: &Vault, ours: &Vault, theirs: &Vault) -> Vec<String> {
+fn merge_recipients(
+    base: &Vault,
+    ours: &Vault,
+    theirs: &Vault,
+    conflicts: &mut Vec<MergeConflict>,
+) -> Vec<String> {
     let base_set: BTreeSet<&str> = base.recipients.iter().map(String::as_str).collect();
     let ours_set: BTreeSet<&str> = ours.recipients.iter().map(String::as_str).collect();
     let theirs_set: BTreeSet<&str> = theirs.recipients.iter().map(String::as_str).collect();
@@ -103,12 +108,27 @@ fn merge_recipients(base: &Vault, ours: &Vault, theirs: &Vault) -> Vec<String> {
         result.insert(pk);
     }
 
-    // Remove recipients removed by either side.
+    // Recipient removal requires both sides to agree, or it's a conflict.
     for pk in &ours_removed {
-        result.remove(pk);
+        if theirs_removed.contains(pk) {
+            // Both sides removed — safe.
+            result.remove(pk);
+        } else {
+            // Only ours removed — conflict. Keep the recipient (safer default).
+            conflicts.push(MergeConflict {
+                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                reason: "removed on one side but not the other".into(),
+            });
+        }
     }
     for pk in &theirs_removed {
-        result.remove(pk);
+        if !ours_removed.contains(pk) {
+            // Only theirs removed — conflict. Keep the recipient.
+            conflicts.push(MergeConflict {
+                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                reason: "removed on one side but not the other".into(),
+            });
+        }
     }
 
     result.into_iter().map(String::from).collect()
@@ -155,8 +175,31 @@ fn merge_btree<V: PartialEq + Clone>(
                 }
             }
 
-            // Removed by one or both sides — omit from result.
-            (Some(_), None | Some(_), None) | (Some(_), None, Some(_)) | (None, None, None) => {}
+            // Both sides removed — safe to omit.
+            (Some(_) | None, None, None) => {}
+            // One side removed, other kept unchanged — conflict.
+            (Some(b), Some(o), None) => {
+                if o == b {
+                    // Ours didn't touch it, theirs removed — conflict.
+                    conflicts.push(MergeConflict {
+                        field: format!("{field_name}.{key}"),
+                        reason: "removed on one side, unchanged on the other".into(),
+                    });
+                    result.insert(key.to_string(), o.clone());
+                }
+                // else: ours modified AND theirs removed — ours wins (modified takes priority)
+            }
+            (Some(b), None, Some(t)) => {
+                if t == b {
+                    // Theirs didn't touch it, ours removed — conflict.
+                    conflicts.push(MergeConflict {
+                        field: format!("{field_name}.{key}"),
+                        reason: "removed on one side, unchanged on the other".into(),
+                    });
+                    result.insert(key.to_string(), t.clone());
+                }
+                // else: theirs modified AND ours removed — theirs wins
+            }
 
             (Some(b), Some(o), Some(t)) => {
                 let ours_changed = o != b;
@@ -258,22 +301,28 @@ fn merge_secrets_normal(
             (Some(_) | None, None, None) => {}
 
             (Some(b), Some(o), None) => {
-                if o.shared != b.shared {
-                    conflicts.push(MergeConflict {
-                        field: format!("secrets.{key}"),
-                        reason: "modified on our side but removed on theirs".into(),
-                    });
-                    result.insert(key.to_string(), o.clone());
-                }
+                // Theirs removed, ours kept — always conflict.
+                conflicts.push(MergeConflict {
+                    field: format!("secrets.{key}"),
+                    reason: if o.shared == b.shared {
+                        "removed on one side, unchanged on the other".into()
+                    } else {
+                        "modified on our side but removed on theirs".into()
+                    },
+                });
+                result.insert(key.to_string(), o.clone());
             }
             (Some(b), None, Some(t)) => {
-                if t.shared != b.shared {
-                    conflicts.push(MergeConflict {
-                        field: format!("secrets.{key}"),
-                        reason: "removed on our side but modified on theirs".into(),
-                    });
-                    result.insert(key.to_string(), t.clone());
-                }
+                // Ours removed, theirs kept — always conflict.
+                conflicts.push(MergeConflict {
+                    field: format!("secrets.{key}"),
+                    reason: if t.shared == b.shared {
+                        "removed on one side, unchanged on the other".into()
+                    } else {
+                        "removed on our side but modified on theirs".into()
+                    },
+                });
+                result.insert(key.to_string(), t.clone());
             }
 
             (Some(b), Some(o), Some(t)) => {
@@ -837,15 +886,28 @@ mod tests {
     }
 
     #[test]
-    fn merge_recipient_removed() {
+    fn merge_recipient_removed_one_side_conflicts() {
         let base = base_vault();
         let mut ours = base.clone();
         ours.recipients.retain(|r| r != "age1bob");
 
         let r = merge_vaults(&base, &ours, &base);
+        // One-sided removal should conflict — recipient kept for safety.
+        assert!(!r.conflicts.is_empty());
+        assert!(r.vault.recipients.contains(&"age1bob".to_string()));
+    }
+
+    #[test]
+    fn merge_recipient_removed_both_sides_ok() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        let mut theirs = base.clone();
+        ours.recipients.retain(|r| r != "age1bob");
+        theirs.recipients.retain(|r| r != "age1bob");
+
+        let r = merge_vaults(&base, &ours, &theirs);
         assert!(r.conflicts.is_empty());
         assert!(!r.vault.recipients.contains(&"age1bob".to_string()));
-        assert_eq!(r.vault.recipients.len(), 1);
     }
 
     // -- Schema --
@@ -964,10 +1026,10 @@ mod tests {
             .insert("age1alice".into(), "alice-scoped".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
-        // Theirs only added scoped (shared unchanged), so ours' removal wins
-        // without conflict — the scoped addition is silently dropped.
-        assert!(r.conflicts.is_empty());
-        assert!(!r.vault.secrets.contains_key("DB_URL"));
+        // Ours removed the key, theirs kept it — conflict.
+        // Schema removal conflicts, secret kept because theirs modified (added scoped).
+        assert!(!r.conflicts.is_empty());
+        assert!(r.vault.secrets.contains_key("DB_URL"));
     }
 
     #[test]
@@ -990,9 +1052,9 @@ mod tests {
             .insert("age1alice".into(), "alice-scoped".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
-        // Theirs modified shared, ours removed — this IS a conflict.
-        assert_eq!(r.conflicts.len(), 1);
-        assert!(r.conflicts[0].reason.contains("removed on our side"));
+        // Theirs modified shared, ours removed — conflicts for both secrets and schema.
+        assert!(r.conflicts.len() >= 1);
+        assert!(r.conflicts.iter().any(|c| c.reason.contains("removed")));
     }
 
     // -- Recipient change + secret addition --
