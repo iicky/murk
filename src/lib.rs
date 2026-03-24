@@ -154,28 +154,32 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let recipients = if vault.secrets.is_empty() {
-        // Fresh vault with no secrets — allow missing/empty meta since there's nothing to protect.
-        decrypt_meta(&vault, &identity)
-            .map(|m| m.recipients)
-            .unwrap_or_default()
-    } else {
-        // Vault has secrets — MAC is mandatory.
-        let meta = decrypt_meta(&vault, &identity).ok_or(
-            "integrity check failed: vault has secrets but no meta — vault may have been tampered with"
-        )?;
-        if meta.mac.is_empty() {
+    let recipients = match decrypt_meta(&vault, &identity) {
+        Some(meta) if !meta.mac.is_empty() => {
+            let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
+            if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
+                let expected = compute_mac(&vault, hmac_key.as_ref());
+                return Err(format!(
+                    "integrity check failed: vault may have been tampered with (expected {expected}, got {})",
+                    meta.mac
+                ));
+            }
+            meta.recipients
+        }
+        Some(meta) if vault.secrets.is_empty() => {
+            // Fresh vault with no secrets and no MAC yet.
+            meta.recipients
+        }
+        Some(_) => {
             return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
         }
-        let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
-        if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
-            let expected = compute_mac(&vault, hmac_key.as_ref());
-            return Err(format!(
-                "integrity check failed: vault may have been tampered with (expected {expected}, got {})",
-                meta.mac
-            ));
+        None if vault.secrets.is_empty() && vault.meta.is_empty() => {
+            // Brand new vault with no meta at all.
+            HashMap::new()
         }
-        meta.recipients
+        None => {
+            return Err("integrity check failed: vault has secrets but no meta — vault may have been tampered with".into());
+        }
     };
 
     let murk = types::Murk {
