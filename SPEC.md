@@ -7,7 +7,7 @@
 Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (dotenvx requires Node), or don't support teams cleanly. murk is a minimal Rust binary that:
 
 - Stores encrypted secrets in a single `.murk` file safe to commit to git
-- Uses one key (`MURK_KEY`) to unlock everything, stored in `~/.config/murk/keys/`
+- Uses one key (`MURK_KEY`) in `.env` to unlock everything
 - Integrates naturally with `direnv`
 - Supports multiple users and per-identity scoped secrets
 - Documents itself via `murk info` — no key required
@@ -35,22 +35,20 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 
 | Variable       | Required | Description                                             |
 | -------------- | -------- | ------------------------------------------------------- |
-| `MURK_KEY`     | No       | Your age private key. Inline alternative to `MURK_KEY_FILE`. Takes priority if both are set. |
-| `MURK_KEY_FILE`| Yes      | Path to a file containing your age private key. Set by `murk init`. |
+| `MURK_KEY`     | Yes      | Your age private key. Written to `.env` by `murk init`. |
+| `MURK_KEY_FILE`| No       | Path to a file containing your age private key. `MURK_KEY` takes priority. |
 | `MURK_VAULT`   | No       | Vault filename. Defaults to `.murk`.                    |
 
-Your identity is your key. murk derives your public key from `MURK_KEY` or `MURK_KEY_FILE` to determine which scoped secrets are yours and to identify you in the recipient list.
+Your identity is your key. murk derives your public key from `MURK_KEY` to determine which scoped secrets are yours and to identify you in the recipient list.
 
-### Key storage
-
-`murk init` writes the secret key to `~/.config/murk/keys/<vault-hash>` (chmod 600) and writes a `MURK_KEY_FILE` reference to `.env`:
+### `.env` example
 
 ```
-export MURK_KEY_FILE=/home/alice/.config/murk/keys/a1b2c3d4e5f6a7b8
+export MURK_KEY=AGE-SECRET-KEY-1...
 MURK_VAULT=prod.murk  # optional
 ```
 
-The key never appears in the project directory. `.murk` should always be committed.
+`.env` should always be in `.gitignore`. `.murk` should always be committed.
 
 ---
 
@@ -160,10 +158,9 @@ Because both the MAC and its key live inside the encrypted meta blob, only autho
 Interactive setup. Prompts for a display name. Then:
 
 1. Generates an age keypair via BIP39 (24-word mnemonic encodes the key directly)
-2. Writes the secret key to `~/.config/murk/keys/<vault-hash>` with mode 0600
-3. Writes `export MURK_KEY_FILE=<path>` to `.env` (creates if missing, warns if key already present)
-4. Creates empty `.murk` vault with user's pubkey as first recipient
-5. Prints BIP39 24-word recovery phrase to stderr
+2. Writes `export MURK_KEY=...` to `.env` with mode 0600 (creates if missing, warns if `MURK_KEY` already present)
+3. Creates empty `.murk` vault with user's pubkey as first recipient
+4. Prints BIP39 24-word recovery phrase to stderr
 
 ---
 

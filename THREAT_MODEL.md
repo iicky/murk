@@ -16,11 +16,9 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 ## What murk does not protect
 
-**Compromised machines.** If an attacker has access to a machine where the secret key is present (`~/.config/murk/keys/`, in memory, or in environment variables), they can decrypt all shared secrets and any scoped secrets belonging to that key.
+**Compromised machines.** If an attacker has access to a machine where `MURK_KEY` is present (in `.env`, in memory, or in environment variables), they can decrypt all shared secrets and any scoped secrets belonging to that key.
 
 **Key names are public.** The `.murk` header stores key names, descriptions, and examples in plaintext. An attacker with repo access knows you have `STRIPE_SECRET_KEY`, `DATABASE_URL`, etc. This is a design trade-off that enables `murk info` to work without a key and keeps git diffs readable. If your threat model requires hiding what services you use, murk does not address this.
-
-**In-memory secret exposure.** Decrypted secret values are held as plain `String` in memory during `export`, `exec`, and `get` operations. They are not zeroized on drop. In long-running processes, core dumps, or swap files, decrypted values may be recoverable. The secret key itself uses `SecretString` with zeroize-on-drop, but the values it decrypts do not. This is a known limitation — mitigating it would require threading `SecretString` through all value paths, which is not practical with the current age API.
 
 **Historical access after revocation.** Revoking a recipient re-encrypts the vault going forward, but old `.murk` versions remain in git history. The revoked recipient can still decrypt any version they previously had access to. Always rotate credentials after revocation. murk warns about this at revocation time.
 
@@ -34,7 +32,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 ┌─────────────────────────────────────┐
 │         Developer machine           │
 │                                     │
-│  ~/.config/murk/keys/ ── secret key  │  ← Trust boundary: local machine
+│  .env (MURK_KEY) ── secret key      │  ← Trust boundary: local machine
 │  MURK_KEY in memory ── during ops   │
 │                                     │
 └──────────────┬──────────────────────┘

@@ -81,17 +81,25 @@ Type "murk circle revoke carol"
 Enter
 Sleep 3s
 
-Type "# Rotate all secrets she had access to"
+Type "# Rotate the secrets she had access to"
 Enter
 Sleep 500ms
 
-Type `murk rotate --all`
+Type `murk add DATABASE_URL`
 Enter
 Sleep 1s
 Type "postgres://prod:rotated@db.example.com/app"
 Enter
+Sleep 2s
+
+Type `murk add API_KEY`
+Enter
 Sleep 1s
 Type "sk-proj-rotated789xyz"
+Enter
+Sleep 2s
+
+Type `murk add STRIPE_SECRET`
 Enter
 Sleep 1s
 Type "sk_live_rotated456"

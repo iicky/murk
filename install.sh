@@ -47,28 +47,6 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
 curl -fsSL "$url" -o "$tmpdir/$archive"
-
-# Verify checksum.
-checksums_url="https://github.com/$REPO/releases/download/$tag/SHA256SUMS"
-curl -fsSL "$checksums_url" -o "$tmpdir/SHA256SUMS"
-expected=$(grep "$archive" "$tmpdir/SHA256SUMS" | cut -d' ' -f1)
-if [ -z "$expected" ]; then
-    echo "error: checksum not found for $archive" >&2
-    exit 1
-fi
-if command -v sha256sum >/dev/null 2>&1; then
-    actual=$(sha256sum "$tmpdir/$archive" | cut -d' ' -f1)
-elif command -v shasum >/dev/null 2>&1; then
-    actual=$(shasum -a 256 "$tmpdir/$archive" | cut -d' ' -f1)
-else
-    echo "warning: no sha256sum or shasum found, skipping verification" >&2
-    actual="$expected"
-fi
-if [ "$actual" != "$expected" ]; then
-    echo "error: checksum mismatch — expected $expected, got $actual" >&2
-    exit 1
-fi
-
 tar xzf "$tmpdir/$archive" -C "$tmpdir"
 
 if [ -w "$INSTALL_DIR" ]; then

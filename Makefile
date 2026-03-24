@@ -64,9 +64,9 @@ test-offboard: build
 	cd $$BOB_DIR && export MURK_KEY=$$BOB_KEY && \
 	murk circle 2>/dev/null | grep -q "carol" && \
 	murk circle revoke carol >/dev/null 2>&1 && \
-	echo "rotated1" | murk rotate DATABASE_URL >/dev/null 2>&1 && \
-	echo "rotated2" | murk rotate API_KEY >/dev/null 2>&1 && \
-	echo "rotated3" | murk rotate STRIPE_SECRET >/dev/null 2>&1 && \
+	echo "rotated1" | murk add DATABASE_URL >/dev/null 2>&1 && \
+	echo "rotated2" | murk add API_KEY >/dev/null 2>&1 && \
+	echo "rotated3" | murk add STRIPE_SECRET >/dev/null 2>&1 && \
 	! murk circle 2>/dev/null | grep -q "carol" && \
 	git add .murk && git commit -m "revoke carol" >/dev/null 2>&1 && \
 	git push >/dev/null 2>&1 && \
@@ -89,7 +89,7 @@ test-eve: build
 	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
 	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
 	cp .murk $$eve/ && \
-	cd $$eve && unset MURK_KEY MURK_KEY_FILE && \
+	cd $$eve && unset MURK_KEY && \
 	$(MURK) ls 2>/dev/null | grep -q "DATABASE_URL" && \
 	$(MURK) info 2>/dev/null | grep -q "DATABASE_URL" && \
 	! $(MURK) get DATABASE_URL >/dev/null 2>&1 && \
@@ -104,7 +104,7 @@ test-recovery: build
 	cd $$dir && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
 	eval $$(cat .env) && \
-	ORIGINAL=$$(cat "$$MURK_KEY_FILE" 2>/dev/null || echo "$$MURK_KEY") && \
+	ORIGINAL=$$MURK_KEY && \
 	PHRASE=$$($(MURK) recover 2>/dev/null) && \
 	RESTORED=$$(echo "$$PHRASE" | $(MURK) restore 2>/dev/null) && \
 	test "$$ORIGINAL" = "$$RESTORED" && \

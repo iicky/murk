@@ -23,11 +23,11 @@ Enter
 Sleep 300ms
 Show
 
-Type "# Your key is stored securely outside the repo"
+Type "# Your key lives in MURK_KEY"
 Enter
 Sleep 500ms
 
-Type `echo $MURK_KEY_FILE`
+Type `echo $MURK_KEY`
 Enter
 Sleep 2s
 

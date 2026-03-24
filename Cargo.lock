@@ -1278,7 +1278,6 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "constant_time_eq",
  "predicates",
  "rand 0.10.0",
  "rpassword",

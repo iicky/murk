@@ -19,7 +19,7 @@ murk stores encrypted secrets in a single `.murk` file that's safe to commit to 
 
 Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault exist but they're complex, require cloud setup, or pull in runtimes you don't want.
 
-murk is simple: one key on your machine, one encrypted file in your repo, done.
+murk is simple: one key in your `.env`, one encrypted file in your repo, done.
 
 ## How murk compares
 
@@ -72,17 +72,8 @@ murk init
 murk add DATABASE_URL
 murk add OPENAI_KEY
 
-# Use with direnv — source .env for the key, then decrypt
-echo -e 'dotenv\neval $(murk export)' > .envrc
-direnv allow
-```
-
-Your key is stored in `~/.config/murk/keys/` with restricted permissions. The `.env` file in your project just contains a `MURK_KEY_FILE` reference — no secrets in the repo directory.
-
-Without direnv, use `murk exec`:
-
-```bash
-murk exec ./deploy.sh    # runs with all secrets in the environment
+# Use with direnv
+echo 'eval $(murk export)' > .envrc
 ```
 
 ## How it works
@@ -197,8 +188,6 @@ murk restore
 | `murk get KEY` | Print a single decrypted value |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
-| `murk exec CMD...` | Run a command with secrets in the environment |
-| `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
@@ -241,7 +230,7 @@ See [SPEC.md](SPEC.md) for the full specification.
 
 **Key names are plaintext** — the `.murk` header exposes key names (e.g. `STRIPE_SECRET_KEY`, `DATABASE_URL`) so that `murk info` works without a key and git diffs stay readable. Only values are encrypted. If your threat model requires hiding what services you use, this is a trade-off to be aware of.
 
-**Key storage** — your secret key lives in `~/.config/murk/keys/` with `chmod 600` permissions, outside your repository. The `.env` file in your project contains only a `MURK_KEY_FILE` reference to this path, not the key itself. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
+**Key stored in `.env`** — your `MURK_KEY` lives in a `.env` file with `chmod 600` permissions (owner read/write only). This file is gitignored. The key is equivalent to a password — anyone with access to the file or the `MURK_KEY` environment variable can decrypt shared secrets. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
 
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 

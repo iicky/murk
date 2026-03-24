@@ -75,3 +75,7 @@ Sleep 500ms
 Type "murk export"
 Enter
 Sleep 3s
+
+Type "# Use with direnv: eval $(murk export)"
+Enter
+Sleep 2s

@@ -27,7 +27,7 @@ Enter
 Sleep 3s
 
 # Bob: clone the repo (before being authorized)
-Type `cd "$BOB_DIR" && unset MURK_KEY MURK_KEY_FILE`
+Type `cd "$BOB_DIR" && unset MURK_KEY`
 Enter
 Type `git clone "$REMOTE_URL" .`
 Enter
@@ -80,7 +80,7 @@ Sleep 1s
 
 # Switch to Bob — do NOT set MURK_KEY (he doesn't have one yet)
 Hide
-Type `cd "$BOB_DIR" && unset MURK_KEY MURK_KEY_FILE`
+Type `cd "$BOB_DIR" && unset MURK_KEY`
 Enter
 Type `export PS1="\n\[\e[33m\]bob \$\[\e[0m\] "`
 Enter
