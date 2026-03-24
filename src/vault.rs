@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use crate::types::Vault;
@@ -58,10 +59,20 @@ pub fn read(path: &Path) -> Result<Vault, VaultError> {
 }
 
 /// Write a vault to a .murk file as pretty-printed JSON.
+///
+/// Uses write-to-tempfile + rename for atomic writes — if the process is
+/// killed mid-write, the original file remains intact.
 pub fn write(path: &Path, vault: &Vault) -> Result<(), VaultError> {
     let json = serde_json::to_string_pretty(vault)
         .map_err(|e| VaultError::Parse(format!("failed to serialize vault: {e}")))?;
-    fs::write(path, json + "\n")?;
+
+    // Write to a sibling temp file, fsync, then atomically rename.
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(json.as_bytes())?;
+    tmp.write_all(b"\n")?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
 

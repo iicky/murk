@@ -2052,3 +2052,93 @@ fn import_warns_on_murk_keys() {
                 .and(predicate::str::contains("KEEP_THIS")),
         );
 }
+
+// --- Security hardening tests ---
+
+#[test]
+fn exec_strips_murk_key_from_child_env() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "MY_SECRET", "--vault", "test.murk"])
+        .write_stdin("hunter2\n")
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args(["exec", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("MURK_KEY="),
+        "MURK_KEY should be stripped from exec child env"
+    );
+    assert!(
+        !stdout.contains("MURK_KEY_FILE="),
+        "MURK_KEY_FILE should be stripped from exec child env"
+    );
+    assert!(stdout.contains("MY_SECRET=hunter2"));
+}
+
+#[test]
+fn authorize_github_rejects_invalid_username() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            "github:../../etc/passwd",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid GitHub username"));
+}
+
+#[test]
+fn vault_write_is_atomic() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    for i in 0..5 {
+        murk(&dir, &key)
+            .args(["add", &format!("SECRET_{i}"), "--vault", "test.murk"])
+            .write_stdin(format!("value_{i}\n"))
+            .assert()
+            .success();
+    }
+
+    let contents = fs::read_to_string(dir.path().join("test.murk")).unwrap();
+    assert!(contents.ends_with('\n'));
+    assert!(serde_json::from_str::<serde_json::Value>(&contents).is_ok());
+}
+
+#[test]
+fn empty_vault_with_tampered_recipients_fails_integrity() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    let vault_path = dir.path().join("test.murk");
+    let mut vault: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&vault_path).unwrap()).unwrap();
+
+    vault["recipients"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(
+            "age1fakerecipient000000000000000000000000000000000000000000fake".into(),
+        ));
+    fs::write(&vault_path, serde_json::to_string_pretty(&vault).unwrap()).unwrap();
+
+    murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("integrity check failed"));
+}
