@@ -32,6 +32,17 @@ impl std::fmt::Display for GitHubError {
 /// Filters to supported types only (ed25519 and rsa). Unsupported key
 /// types (ecdsa, sk-ssh-*) are silently skipped.
 pub fn fetch_keys(username: &str) -> Result<Vec<(MurkRecipient, String)>, GitHubError> {
+    // GitHub usernames: alphanumeric + hyphens, no path traversal.
+    if !username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        || username.is_empty()
+    {
+        return Err(GitHubError::Fetch(format!(
+            "invalid GitHub username: {username}"
+        )));
+    }
+
     let url = format!("https://github.com/{username}.keys");
 
     let body = ureq::get(&url)
