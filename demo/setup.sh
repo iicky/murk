@@ -8,6 +8,15 @@ strip_ansi() {
     sed "s/${esc}\[[0-9;]*m//g"
 }
 
+# Resolve the secret key from MURK_KEY or MURK_KEY_FILE.
+resolve_murk_key() {
+    if [ -n "$MURK_KEY" ]; then
+        echo "$MURK_KEY"
+    elif [ -n "$MURK_KEY_FILE" ]; then
+        cat "$MURK_KEY_FILE"
+    fi
+}
+
 # Print the public key from `murk init` output (strips ANSI codes).
 murk_pubkey() {
     murk init 2>&1 | strip_ansi | grep -o "age1[a-z0-9]*"
@@ -53,7 +62,7 @@ demo_alice_vault() {
     cd "$ALICE_DIR" || return 1
     echo "alice" | murk init >/dev/null 2>&1
     eval "$(cat .env)"
-    export ALICE_KEY="$MURK_KEY"
+    export ALICE_KEY="$(resolve_murk_key)"
 
     echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" >/dev/null 2>&1
     echo "sk-proj-abc123def456" | murk add API_KEY --desc "OpenAI API key" >/dev/null 2>&1
@@ -76,11 +85,11 @@ demo_onboard() {
     local dir_var="${upper}_DIR"
 
     cd "${!dir_var}" || return 1
-    unset MURK_KEY
+    unset MURK_KEY MURK_KEY_FILE
     git clone "$REMOTE_URL" . >/dev/null 2>&1
     murk init >/dev/null 2>&1
     eval "$(cat .env)"
-    export "${upper}_KEY=$MURK_KEY"
+    export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }
 
@@ -95,7 +104,7 @@ demo_capture_key() {
 
     cd "${!dir_var}" || return 1
     eval "$(cat .env)"
-    export "${upper}_KEY=$MURK_KEY"
+    export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }
 

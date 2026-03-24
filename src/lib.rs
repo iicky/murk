@@ -38,8 +38,9 @@ pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{
-    EnvrcStatus, dotenv_has_murk_key, parse_env, read_key_from_dotenv, resolve_key,
-    warn_env_permissions, write_envrc, write_key_to_dotenv,
+    EnvrcStatus, dotenv_has_murk_key, key_file_path, parse_env, read_key_from_dotenv, resolve_key,
+    warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
+    write_key_to_file,
 };
 pub use export::{
     DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, format_diff_lines,
@@ -403,18 +404,21 @@ pub(crate) fn verify_mac(
     stored_mac: &str,
     hmac_key: Option<&[u8; 32]>,
 ) -> bool {
-    if stored_mac.starts_with("blake3:") {
+    use constant_time_eq::constant_time_eq;
+
+    let expected = if stored_mac.starts_with("blake3:") {
         match hmac_key {
-            Some(key) => stored_mac == compute_mac_v3(vault, key),
-            None => false,
+            Some(key) => compute_mac_v3(vault, key),
+            None => return false,
         }
     } else if stored_mac.starts_with("sha256v2:") {
-        stored_mac == compute_mac_v2(vault)
+        compute_mac_v2(vault)
     } else if stored_mac.starts_with("sha256:") {
-        stored_mac == compute_mac_v1(vault)
+        compute_mac_v1(vault)
     } else {
-        false
-    }
+        return false;
+    };
+    constant_time_eq(stored_mac.as_bytes(), expected.as_bytes())
 }
 
 /// Generate a random 32-byte BLAKE3 MAC key, returned as hex.

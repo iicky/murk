@@ -313,9 +313,9 @@ fn prompt(label: &str, default: Option<&str>) -> String {
     }
 }
 
-/// Generate a BIP39 keypair, write to .env, print recovery phrase.
+/// Generate a BIP39 keypair, write key to ~/.config/murk/keys/, reference in .env.
 /// Returns (secret_key, pubkey).
-fn generate_and_write_key() -> (String, String) {
+fn generate_and_write_key(vault_name: &str) -> (String, String) {
     eprintln!("{} generating keypair...", "◆".magenta());
     let (phrase, secret_key, pubkey) = try_or_die(recovery::generate());
 
@@ -331,9 +331,15 @@ fn generate_and_write_key() -> (String, String) {
         }
     }
 
-    // Write MURK_KEY to .env (replaces existing, sets chmod 600).
-    eprintln!("{} writing MURK_KEY to .env...", "◆".magenta());
-    try_or_die(murk_cli::write_key_to_dotenv(&secret_key));
+    // Write key to ~/.config/murk/keys/<hash> and reference in .env.
+    let key_path = try_or_die(murk_cli::key_file_path(vault_name));
+    try_or_die(murk_cli::write_key_to_file(&key_path, &secret_key));
+    try_or_die(murk_cli::write_key_ref_to_dotenv(&key_path));
+    eprintln!(
+        "{} key saved to {}",
+        "◆".magenta(),
+        key_path.display().to_string().dimmed()
+    );
 
     // Print recovery phrase.
     eprintln!();
@@ -347,11 +353,9 @@ fn generate_and_write_key() -> (String, String) {
     eprintln!("  {}", phrase.bold());
     eprintln!();
     eprintln!(
-        "{} {}",
-        "⚠".yellow(),
-        "MURK_KEY saved to .env — do not commit this file"
-            .yellow()
-            .bold()
+        "  {}",
+        ".env contains a reference to your key — it is safe to commit, but the key file is not"
+            .dimmed()
     );
 
     (secret_key, pubkey)
@@ -371,7 +375,7 @@ fn cmd_init(vault_name: &str) {
         let (secret_key, pubkey) = match dk {
             Some(dk) => (Some(dk.secret_key), dk.pubkey),
             None => {
-                let (_secret_key, pubkey) = generate_and_write_key();
+                let (_secret_key, pubkey) = generate_and_write_key(vault_name);
                 eprintln!();
                 (None, pubkey)
             }
@@ -425,7 +429,7 @@ fn cmd_init(vault_name: &str) {
         die(&"name is required", 1);
     }
 
-    let (_secret_key, pubkey) = generate_and_write_key();
+    let (_secret_key, pubkey) = generate_and_write_key(vault_name);
 
     let v = try_or_die(murk_cli::create_vault(vault_name, &pubkey, &name));
     try_or_die(vault::write(vault_path, &v));
