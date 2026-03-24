@@ -2142,3 +2142,60 @@ fn empty_vault_with_tampered_recipients_fails_integrity() {
         .failure()
         .stderr(predicate::str::contains("integrity check failed"));
 }
+
+#[test]
+fn verify_passes_on_valid_vault() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["verify", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("vault integrity verified"));
+}
+
+#[test]
+fn verify_fails_on_tampered_vault() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    let vault_path = dir.path().join("test.murk");
+    let mut vault: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&vault_path).unwrap()).unwrap();
+    vault["recipients"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(
+            "age1fake00000000000000000000000000000000000000000000000000000".into(),
+        ));
+    fs::write(&vault_path, serde_json::to_string_pretty(&vault).unwrap()).unwrap();
+
+    murk(&dir, &key)
+        .args(["verify", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("integrity check failed"));
+}
+
+#[test]
+fn completion_generates_output() {
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_murk"));
+}

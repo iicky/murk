@@ -39,5 +39,6 @@ pub fn empty_murk() -> types::Murk {
         values: HashMap::new(),
         recipients: HashMap::new(),
         scoped: HashMap::new(),
+        legacy_mac: false,
     }
 }

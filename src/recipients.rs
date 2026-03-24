@@ -100,6 +100,12 @@ pub fn revoke_recipient(
         if matched.is_empty() {
             return Err(format!("recipient not found: {recipient}"));
         }
+        if matched.len() > 1 {
+            return Err(format!(
+                "ambiguous name \"{recipient}\" matches {} recipients — use a pubkey to revoke",
+                matched.len()
+            ));
+        }
         matched
     };
 
@@ -516,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn revoke_by_name_removes_all_matching_keys() {
+    fn revoke_by_name_rejects_ambiguous_match() {
         let (_, pk_owner) = generate_keypair();
         let (_, pk_ssh1) = generate_keypair();
         let (_, pk_ssh2) = generate_keypair();
@@ -528,28 +534,9 @@ mod tests {
         murk.recipients
             .insert(pk_ssh2.clone(), "alice@github".into());
 
-        let result = revoke_recipient(&mut vault, &mut murk, "alice@github").unwrap();
-        assert_eq!(result.display_name.as_deref(), Some("alice@github"));
-        assert!(!vault.recipients.contains(&pk_ssh1));
-        assert!(!vault.recipients.contains(&pk_ssh2));
-        assert!(vault.recipients.contains(&pk_owner));
-    }
-
-    #[test]
-    fn revoke_all_matching_blocked_if_last() {
-        let (_, pk_ssh1) = generate_keypair();
-        let (_, pk_ssh2) = generate_keypair();
-        let mut vault = empty_vault();
-        vault.recipients = vec![pk_ssh1.clone(), pk_ssh2.clone()];
-        let mut murk = empty_murk();
-        murk.recipients
-            .insert(pk_ssh1.clone(), "alice@github".into());
-        murk.recipients
-            .insert(pk_ssh2.clone(), "alice@github".into());
-
         let result = revoke_recipient(&mut vault, &mut murk, "alice@github");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot revoke last recipient"));
+        assert!(result.unwrap_err().contains("ambiguous name"));
     }
 
     // ── formatting tests ──

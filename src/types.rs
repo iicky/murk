@@ -75,4 +75,6 @@ pub struct Murk {
     /// Scoped overrides: key → { pubkey → decrypted value }.
     /// Only contains entries decryptable by the current identity.
     pub scoped: HashMap<String, HashMap<String, String>>,
+    /// True if the vault uses a legacy unkeyed MAC (sha256/sha256v2).
+    pub legacy_mac: bool,
 }
