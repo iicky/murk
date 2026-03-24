@@ -72,9 +72,9 @@ pub fn decrypt_vault_values(
 ) -> HashMap<String, String> {
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
-        if let Ok(value) = crate::decrypt_value(&entry.shared, identity)
-            .and_then(|pt| String::from_utf8(pt).map_err(|e| e.to_string()))
-        {
+        if let Ok(value) = crate::decrypt_value(&entry.shared, identity).and_then(|pt| {
+            String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
+        }) {
             values.insert(key.clone(), value);
         }
     }
