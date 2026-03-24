@@ -35,6 +35,7 @@ sha2 = "0.10.9"
 blake3 = "1"
 constant_time_eq = "0.4"
 tempfile = "3.27.0"
+clap_complete = "4.6.0"
 
 [dev-dependencies]
 assert_cmd = "2"
