@@ -20,6 +20,7 @@
 pub mod codename;
 pub mod crypto;
 pub mod env;
+pub mod error;
 pub mod export;
 pub mod git;
 pub mod github;
@@ -42,6 +43,7 @@ pub use env::{
     warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
     write_key_to_file,
 };
+pub use error::MurkError;
 pub use export::{
     DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, format_diff_lines,
     parse_and_decrypt_values, resolve_secrets,
@@ -87,10 +89,12 @@ pub(crate) fn decrypt_meta(
 }
 
 /// Parse a list of pubkey strings into recipients (age or SSH).
-pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<crypto::MurkRecipient>, String> {
+pub(crate) fn parse_recipients(
+    pubkeys: &[String],
+) -> Result<Vec<crypto::MurkRecipient>, MurkError> {
     pubkeys
         .iter()
-        .map(|pk| crypto::parse_recipient(pk).map_err(|e| e.to_string()))
+        .map(|pk| crypto::parse_recipient(pk).map_err(MurkError::from))
         .collect()
 }
 
@@ -98,17 +102,17 @@ pub(crate) fn parse_recipients(pubkeys: &[String]) -> Result<Vec<crypto::MurkRec
 pub fn encrypt_value(
     plaintext: &[u8],
     recipients: &[crypto::MurkRecipient],
-) -> Result<String, String> {
-    let ciphertext = crypto::encrypt(plaintext, recipients).map_err(|e| e.to_string())?;
+) -> Result<String, MurkError> {
+    let ciphertext = crypto::encrypt(plaintext, recipients)?;
     Ok(BASE64.encode(&ciphertext))
 }
 
 /// Decrypt a base64-encoded ciphertext and return plaintext bytes.
-pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<Vec<u8>, String> {
-    let ciphertext = BASE64
-        .decode(encoded)
-        .map_err(|e| format!("invalid base64: {e}"))?;
-    crypto::decrypt(&ciphertext, identity).map_err(|e| e.to_string())
+pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<Vec<u8>, MurkError> {
+    let ciphertext = BASE64.decode(encoded).map_err(|e| {
+        MurkError::Crypto(crypto::CryptoError::Decrypt(format!("invalid base64: {e}")))
+    })?;
+    Ok(crypto::decrypt(&ciphertext, identity)?)
 }
 
 /// Load the vault: read JSON, decrypt all values, return working state.
@@ -116,26 +120,29 @@ pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<V
 /// the decrypted murk, and the identity.
 pub fn load_vault(
     vault_path: &str,
-) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), String> {
+) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), MurkError> {
     let path = Path::new(vault_path);
-    let secret_key = resolve_key()?;
+    let secret_key = resolve_key().map_err(MurkError::Key)?;
 
-    let identity =
-        crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
-            format!("invalid key: {e}. For age keys, set MURK_KEY. For SSH keys, set MURK_KEY_FILE=~/.ssh/id_ed25519")
-        })?;
+    let identity = crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
+        MurkError::Key(format!(
+            "{e}. For age keys, set MURK_KEY. For SSH keys, set MURK_KEY_FILE=~/.ssh/id_ed25519"
+        ))
+    })?;
 
-    let vault = vault::read(path).map_err(|e| e.to_string())?;
-    let pubkey = identity.pubkey_string().map_err(|e| e.to_string())?;
+    let vault = vault::read(path)?;
+    let pubkey = identity.pubkey_string()?;
 
     // Decrypt shared values.
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
         let plaintext = decrypt_value(&entry.shared, &identity).map_err(|_| {
-            "decryption failed — you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".to_string()
+            MurkError::Crypto(crypto::CryptoError::Decrypt(
+                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
+            ))
         })?;
         let value = String::from_utf8(plaintext)
-            .map_err(|e| format!("invalid UTF-8 in secret {key}: {e}"))?;
+            .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
         values.insert(key.clone(), value);
     }
 
@@ -144,7 +151,7 @@ pub fn load_vault(
     for (key, entry) in &vault.secrets {
         if let Some(encoded) = entry.scoped.get(&pubkey)
             && let Ok(value) = decrypt_value(encoded, &identity)
-                .and_then(|pt| String::from_utf8(pt).map_err(|e| e.to_string()))
+                .and_then(|pt| String::from_utf8(pt).map_err(|e| MurkError::Secret(e.to_string())))
         {
             scoped
                 .entry(key.clone())
@@ -159,27 +166,25 @@ pub fn load_vault(
             let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
             if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
                 let expected = compute_mac(&vault, hmac_key.as_ref());
-                return Err(format!(
-                    "integrity check failed: vault may have been tampered with (expected {expected}, got {})",
+                return Err(MurkError::Integrity(format!(
+                    "vault may have been tampered with (expected {expected}, got {})",
                     meta.mac
-                ));
+                )));
             }
             let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
             (meta.recipients, legacy)
         }
-        Some(meta) if vault.secrets.is_empty() => {
-            // Fresh vault with no secrets and no MAC yet.
-            (meta.recipients, false)
-        }
+        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false),
         Some(_) => {
-            return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
+            return Err(MurkError::Integrity(
+                "vault has secrets but MAC is empty — vault may have been tampered with".into(),
+            ));
         }
-        None if vault.secrets.is_empty() && vault.meta.is_empty() => {
-            // Brand new vault with no meta at all.
-            (HashMap::new(), false)
-        }
+        None if vault.secrets.is_empty() && vault.meta.is_empty() => (HashMap::new(), false),
         None => {
-            return Err("integrity check failed: vault has secrets but no meta — vault may have been tampered with".into());
+            return Err(MurkError::Integrity(
+                "vault has secrets but no meta — vault may have been tampered with".into(),
+            ));
         }
     };
 
@@ -200,7 +205,7 @@ pub fn save_vault(
     vault: &mut types::Vault,
     original: &types::Murk,
     current: &types::Murk,
-) -> Result<(), String> {
+) -> Result<(), MurkError> {
     let recipients = parse_recipients(&vault.recipients)?;
 
     // Check if recipient list changed — forces full re-encryption of shared values.
@@ -215,9 +220,7 @@ pub fn save_vault(
     let mut new_secrets = BTreeMap::new();
 
     for (key, value) in &current.values {
-        // Determine shared ciphertext.
         let shared = if !recipients_changed && original.values.get(key) == Some(value) {
-            // Value unchanged and recipients unchanged — keep original ciphertext.
             if let Some(existing) = vault.secrets.get(key) {
                 existing.shared.clone()
             } else {
@@ -227,28 +230,24 @@ pub fn save_vault(
             encrypt_value(value.as_bytes(), &recipients)?
         };
 
-        // Handle scoped (mote) entries.
         let mut scoped = vault
             .secrets
             .get(key)
             .map(|e| e.scoped.clone())
             .unwrap_or_default();
 
-        // Update/add/remove entries for recipients in current.scoped.
         if let Some(key_scoped) = current.scoped.get(key) {
             for (pk, val) in key_scoped {
                 let original_val = original.scoped.get(key).and_then(|m| m.get(pk));
                 if original_val == Some(val) {
                     // Unchanged — keep original ciphertext.
                 } else {
-                    // Changed or new — re-encrypt to this recipient only.
-                    let recipient = crypto::parse_recipient(pk).map_err(|e| e.to_string())?;
+                    let recipient = crypto::parse_recipient(pk)?;
                     scoped.insert(pk.clone(), encrypt_value(val.as_bytes(), &[recipient])?);
                 }
             }
         }
 
-        // Remove scoped entries for pubkeys no longer in current.scoped for this key.
         if let Some(orig_key_scoped) = original.scoped.get(key) {
             for pk in orig_key_scoped.keys() {
                 let still_present = current.scoped.get(key).is_some_and(|m| m.contains_key(pk));
@@ -272,10 +271,11 @@ pub fn save_vault(
         mac,
         hmac_key: Some(hmac_key_hex),
     };
-    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    let meta_json =
+        serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
     vault.meta = encrypt_value(&meta_json, &recipients)?;
 
-    vault::write(Path::new(vault_path), vault).map_err(|e| e.to_string())
+    Ok(vault::write(Path::new(vault_path), vault)?)
 }
 
 /// Compute an integrity MAC over the vault's secrets, scoped entries, and recipients.
@@ -483,7 +483,7 @@ mod tests {
 
         let result = decrypt_value("not!valid!base64!!!", &identity);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("invalid base64"));
+        assert!(result.unwrap_err().to_string().contains("invalid base64"));
     }
 
     #[test]
@@ -931,7 +931,7 @@ mod tests {
 
         let err = result.err().expect("expected MAC validation to fail");
         assert!(
-            err.contains("integrity check failed"),
+            err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
         );
 
@@ -1048,7 +1048,7 @@ mod tests {
             Ok(_) => panic!("expected load_vault to fail for non-recipient"),
         };
         assert!(
-            err.contains("decryption failed"),
+            err.to_string().contains("decryption failed"),
             "expected decryption failure, got: {err}"
         );
 
@@ -1158,7 +1158,7 @@ mod tests {
 
         let err = result.err().expect("expected MAC validation to fail");
         assert!(
-            err.contains("integrity check failed"),
+            err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
         );
 
@@ -1218,7 +1218,7 @@ mod tests {
 
         let err = result.err().expect("expected MAC validation to fail");
         assert!(
-            err.contains("integrity check failed"),
+            err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
         );
 

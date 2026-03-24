@@ -73,12 +73,17 @@ pub fn check_init_status(vault: &types::Vault, secret_key: &str) -> Result<InitS
 ///
 /// Detects the git remote URL and builds the initial vault struct.
 /// The caller is responsible for writing the vault to disk via `vault::write`.
-pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types::Vault, String> {
-    // Build meta with the recipient name mapping.
+pub fn create_vault(
+    vault_name: &str,
+    pubkey: &str,
+    name: &str,
+) -> Result<types::Vault, crate::error::MurkError> {
+    use crate::error::MurkError;
+
     let mut recipient_names = HashMap::new();
     recipient_names.insert(pubkey.to_string(), name.to_string());
 
-    let recipient = crypto::parse_recipient(pubkey).map_err(|e| e.to_string())?;
+    let recipient = crypto::parse_recipient(pubkey)?;
 
     // Detect git repo URL.
     let repo = Command::new("git")
@@ -90,7 +95,6 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    // Build the vault first so we can compute a real MAC over it.
     let mut vault = types::Vault {
         version: types::VAULT_VERSION.into(),
         created: now_utc(),
@@ -110,7 +114,8 @@ pub fn create_vault(vault_name: &str, pubkey: &str, name: &str) -> Result<types:
         mac,
         hmac_key: Some(hmac_key_hex),
     };
-    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    let meta_json =
+        serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
     vault.meta = encrypt_value(&meta_json, &[recipient])?;
 
     Ok(vault)

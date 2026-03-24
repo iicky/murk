@@ -48,13 +48,19 @@ pub fn authorize_recipient(
     murk: &mut types::Murk,
     pubkey: &str,
     name: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), crate::error::MurkError> {
+    use crate::error::MurkError;
+
     if crypto::parse_recipient(pubkey).is_err() {
-        return Err(format!("invalid public key: {pubkey}"));
+        return Err(MurkError::Recipient(format!(
+            "invalid public key: {pubkey}"
+        )));
     }
 
     if vault.recipients.contains(&pubkey.to_string()) {
-        return Err(format!("{pubkey} is already a recipient"));
+        return Err(MurkError::Recipient(format!(
+            "{pubkey} is already a recipient"
+        )));
     }
 
     vault.recipients.push(pubkey.into());
@@ -84,13 +90,12 @@ pub fn revoke_recipient(
     vault: &mut types::Vault,
     murk: &mut types::Murk,
     recipient: &str,
-) -> Result<RevokeResult, String> {
-    // Resolve to one or more pubkeys.
+) -> Result<RevokeResult, crate::error::MurkError> {
+    use crate::error::MurkError;
+
     let pubkeys: Vec<String> = if vault.recipients.contains(&recipient.to_string()) {
-        // Exact pubkey match — single key.
         vec![recipient.to_string()]
     } else {
-        // Name match — collect ALL pubkeys with this display name.
         let matched: Vec<String> = murk
             .recipients
             .iter()
@@ -98,21 +103,23 @@ pub fn revoke_recipient(
             .map(|(pk, _)| pk.clone())
             .collect();
         if matched.is_empty() {
-            return Err(format!("recipient not found: {recipient}"));
+            return Err(MurkError::Recipient(format!(
+                "recipient not found: {recipient}"
+            )));
         }
         if matched.len() > 1 {
-            return Err(format!(
+            return Err(MurkError::Recipient(format!(
                 "ambiguous name \"{recipient}\" matches {} recipients — use a pubkey to revoke",
                 matched.len()
-            ));
+            )));
         }
         matched
     };
 
     if vault.recipients.len() <= pubkeys.len() {
-        return Err(
+        return Err(MurkError::Recipient(
             "cannot revoke last recipient — vault would become permanently inaccessible".into(),
-        );
+        ));
     }
 
     let mut display_name = None;
@@ -277,7 +284,12 @@ mod tests {
 
         let result = authorize_recipient(&mut vault, &mut murk, &pubkey, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("already a recipient"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already a recipient")
+        );
     }
 
     #[test]
@@ -287,7 +299,12 @@ mod tests {
 
         let result = authorize_recipient(&mut vault, &mut murk, "not-a-valid-key", None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("invalid public key"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid public key")
+        );
     }
 
     #[test]
@@ -337,7 +354,12 @@ mod tests {
 
         let result = revoke_recipient(&mut vault, &mut murk, &pk);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot revoke last recipient"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot revoke last recipient")
+        );
     }
 
     #[test]
@@ -349,7 +371,12 @@ mod tests {
 
         let result = revoke_recipient(&mut vault, &mut murk, "nobody");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("recipient not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("recipient not found")
+        );
     }
 
     #[test]
@@ -536,7 +563,7 @@ mod tests {
 
         let result = revoke_recipient(&mut vault, &mut murk, "alice@github");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("ambiguous name"));
+        assert!(result.unwrap_err().to_string().contains("ambiguous name"));
     }
 
     // ── formatting tests ──
