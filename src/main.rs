@@ -819,6 +819,8 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
         use std::os::unix::process::CommandExt;
         let err = process::Command::new(program)
             .args(args)
+            .env_remove("MURK_KEY")
+            .env_remove("MURK_KEY_FILE")
             .envs(&secrets)
             .exec();
         die(&err, 1);
@@ -828,6 +830,8 @@ fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
     {
         let status = process::Command::new(program)
             .args(args)
+            .env_remove("MURK_KEY")
+            .env_remove("MURK_KEY_FILE")
             .envs(&secrets)
             .status()
             .unwrap_or_else(|e| die(&e, 1));
