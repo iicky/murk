@@ -154,7 +154,7 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let recipients = match decrypt_meta(&vault, &identity) {
+    let (recipients, legacy_mac) = match decrypt_meta(&vault, &identity) {
         Some(meta) if !meta.mac.is_empty() => {
             let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
             if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
@@ -164,18 +164,19 @@ pub fn load_vault(
                     meta.mac
                 ));
             }
-            meta.recipients
+            let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
+            (meta.recipients, legacy)
         }
         Some(meta) if vault.secrets.is_empty() => {
             // Fresh vault with no secrets and no MAC yet.
-            meta.recipients
+            (meta.recipients, false)
         }
         Some(_) => {
             return Err("integrity check failed: vault has secrets but MAC is empty — vault may have been tampered with".into());
         }
         None if vault.secrets.is_empty() && vault.meta.is_empty() => {
             // Brand new vault with no meta at all.
-            HashMap::new()
+            (HashMap::new(), false)
         }
         None => {
             return Err("integrity check failed: vault has secrets but no meta — vault may have been tampered with".into());
@@ -186,6 +187,7 @@ pub fn load_vault(
         values,
         recipients,
         scoped,
+        legacy_mac,
     };
 
     Ok((vault, murk, identity))
@@ -618,6 +620,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "original".into())]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         let current = original.clone();
@@ -671,6 +674,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         let mut current = original.clone();
@@ -727,6 +731,7 @@ mod tests {
             ]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         let mut current = original.clone();
@@ -775,6 +780,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         let mut current_recipients = HashMap::new();
@@ -784,6 +790,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: current_recipients,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
@@ -832,6 +839,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "shared_val".into())]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         // Add a scoped override.
@@ -902,6 +910,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         // save_vault needs MURK_KEY set to encrypt meta.
@@ -965,6 +974,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1021,6 +1031,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         unsafe { std::env::set_var("MURK_KEY", &other_secret) };
@@ -1073,6 +1084,7 @@ mod tests {
             values: HashMap::new(),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1127,6 +1139,7 @@ mod tests {
             values: HashMap::from([("KEY1".into(), "val1".into())]),
             recipients: recipients_map,
             scoped: HashMap::new(),
+            legacy_mac: false,
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };

@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process;
 
 use age::secrecy::ExposeSecret;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 
 /// Print an error message and exit with the given code.
@@ -264,6 +264,19 @@ enum Command {
     /// Configure git to use murk's merge driver for .murk files
     #[command(name = "setup-merge-driver")]
     SetupMergeDriver,
+
+    /// Verify vault integrity without exporting secrets
+    Verify {
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Generate shell completions
+    Completion {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -449,7 +462,14 @@ fn resolve_key() -> age::secrecy::SecretString {
 
 fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
     murk_cli::warn_env_permissions();
-    try_or_die(murk_cli::load_vault(vault))
+    let result = try_or_die(murk_cli::load_vault(vault));
+    if result.1.legacy_mac {
+        eprintln!(
+            "{} vault uses legacy unkeyed MAC — run any write command to upgrade to BLAKE3",
+            "warn".yellow().bold()
+        );
+    }
+    result
 }
 
 fn save_vault(
@@ -1358,6 +1378,15 @@ fn cmd_info(tags: &[String], vault_path: &str) {
     }
 }
 
+fn cmd_verify(vault_path: &str) {
+    let _ = load_vault(vault_path);
+    eprintln!("{} vault integrity verified", "ok".green().bold());
+}
+
+fn cmd_completion(shell: clap_complete::Shell) {
+    clap_complete::generate(shell, &mut Cli::command(), "murk", &mut io::stdout());
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -1437,5 +1466,7 @@ fn main() {
         } => cmd_diff(&git_ref, show_values, &vault),
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
+        Command::Verify { vault } => cmd_verify(&vault),
+        Command::Completion { shell } => cmd_completion(shell),
     }
 }
