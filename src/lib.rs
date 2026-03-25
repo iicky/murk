@@ -16,20 +16,20 @@
     clippy::implicit_hasher
 )]
 
-// Domain modules
-pub mod codename;
+// Domain modules — pub(crate) unless main.rs needs direct path access.
+pub(crate) mod codename;
 pub mod crypto;
-pub mod env;
+pub(crate) mod env;
 pub mod error;
-pub mod export;
-pub mod git;
+pub(crate) mod export;
+pub(crate) mod git;
 pub mod github;
-pub mod info;
-pub mod init;
-pub mod merge;
-pub mod recipients;
+pub(crate) mod info;
+pub(crate) mod init;
+pub(crate) mod merge;
+pub(crate) mod recipients;
 pub mod recovery;
-pub mod secrets;
+pub(crate) mod secrets;
 pub mod types;
 pub mod vault;
 
