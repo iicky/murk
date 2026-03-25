@@ -1,6 +1,7 @@
 .beads/
 .claude/
 .env
+*.murk.lock
 /target
 AGENTS.md
 CLAUDE.md
