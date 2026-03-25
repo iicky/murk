@@ -1,6 +1,8 @@
-use std::fs;
+use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
 
 use crate::types::Vault;
 
@@ -56,6 +58,41 @@ pub fn parse(contents: &str) -> Result<Vault, VaultError> {
 pub fn read(path: &Path) -> Result<Vault, VaultError> {
     let contents = fs::read_to_string(path)?;
     parse(&contents)
+}
+
+/// An exclusive advisory lock on a vault file.
+///
+/// Holds a `.murk.lock` file with an exclusive flock for the duration of a
+/// read-modify-write cycle. Dropped automatically when the guard goes out of scope.
+pub struct VaultLock {
+    _file: File,
+    _path: PathBuf,
+}
+
+/// Lock path for a given vault path (e.g. `.murk` → `.murk.lock`).
+fn lock_path(vault_path: &Path) -> PathBuf {
+    let mut p = vault_path.as_os_str().to_owned();
+    p.push(".lock");
+    PathBuf::from(p)
+}
+
+/// Acquire an exclusive advisory lock on the vault file.
+///
+/// Returns a guard that releases the lock when dropped. Use this around
+/// read-modify-write cycles to prevent concurrent writes from losing changes.
+pub fn lock(vault_path: &Path) -> Result<VaultLock, VaultError> {
+    let lp = lock_path(vault_path);
+    let file = File::create(&lp)?;
+    file.lock_exclusive().map_err(|e| {
+        VaultError::Io(std::io::Error::new(
+            e.kind(),
+            format!("failed to acquire vault lock: {e}"),
+        ))
+    })?;
+    Ok(VaultLock {
+        _file: file,
+        _path: lp,
+    })
 }
 
 /// Write a vault to a .murk file as pretty-printed JSON.

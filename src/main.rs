@@ -472,6 +472,23 @@ fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
     result
 }
 
+/// Load the vault while holding an exclusive lock for the entire read-modify-write cycle.
+/// Returns the lock guard — hold it until after `save_vault` completes.
+fn load_vault_locked(
+    vault: &str,
+) -> (
+    types::Vault,
+    types::Murk,
+    MurkIdentity,
+    murk_cli::vault::VaultLock,
+) {
+    let lock = try_or_die(
+        murk_cli::vault::lock(std::path::Path::new(vault)).map_err(murk_cli::MurkError::Vault),
+    );
+    let (v, m, i) = load_vault(vault);
+    (v, m, i, lock)
+}
+
 fn save_vault(
     vault_path: &str,
     vault: &mut types::Vault,
@@ -530,7 +547,7 @@ fn cmd_add(
         );
     }
 
-    let (mut vault, murk, identity) = load_vault(vault_path);
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -601,7 +618,7 @@ fn cmd_import(file: &str, vault_path: &str) {
         return;
     }
 
-    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -652,7 +669,7 @@ fn cmd_generate(
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
     };
 
-    let (mut vault, murk, identity) = load_vault(vault_path);
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -695,7 +712,7 @@ fn cmd_rotate(
         );
     }
 
-    let (mut vault, murk, identity) = load_vault(vault_path);
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -758,7 +775,7 @@ fn cmd_rotate(
 }
 
 fn cmd_rm(key: &str, vault_path: &str) {
-    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -802,7 +819,7 @@ fn cmd_describe(
     tags: &[String],
     vault_path: &str,
 ) {
-    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
 
     murk_cli::describe_key(&mut vault, key, description, example, tags);
@@ -1032,7 +1049,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
 }
 
 fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
-    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -1107,7 +1124,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
 }
 
 fn cmd_revoke(recipient: &str, vault_path: &str) {
-    let (mut vault, murk, _identity) = load_vault(vault_path);
+    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 

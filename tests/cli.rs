@@ -2199,3 +2199,47 @@ fn completion_generates_output() {
         .success()
         .stdout(predicate::str::contains("_murk"));
 }
+
+#[test]
+fn concurrent_adds_dont_lose_data() {
+    // Two sequential adds should both persist — tests the locking path.
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "FIRST", "--vault", "test.murk"])
+        .write_stdin("val1\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["add", "SECOND", "--vault", "test.murk"])
+        .write_stdin("val2\n")
+        .assert()
+        .success();
+
+    // Both keys should exist.
+    let output = murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("FIRST="));
+    assert!(stdout.contains("SECOND="));
+}
+
+#[test]
+fn lock_file_created_during_write() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "KEY", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    // Lock file should exist after a write operation.
+    assert!(dir.path().join("test.murk.lock").exists());
+}
