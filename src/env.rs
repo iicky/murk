@@ -39,9 +39,13 @@ pub fn resolve_key() -> Result<SecretString, String> {
     }
     // 2. Key file env var.
     if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
-        return fs::read_to_string(&path)
+        let p = std::path::Path::new(&path);
+        if p.is_symlink() {
+            return Err("MURK_KEY_FILE is a symlink — refusing to follow for security".into());
+        }
+        return fs::read_to_string(p)
             .map(|contents| SecretString::from(contents.trim().to_string()))
-            .map_err(|e| format!("cannot read MURK_KEY_FILE ({path}): {e}"));
+            .map_err(|e| format!("cannot read key file: {e}"));
     }
     // 3. Default key file path for the default vault.
     if let Some(path) = key_file_path(".murk").ok().filter(|p| p.exists()) {

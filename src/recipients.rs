@@ -2,6 +2,9 @@
 
 use crate::{crypto, types};
 
+/// Maximum number of recipients per vault.
+const MAX_RECIPIENTS: usize = 100;
+
 /// A single recipient entry with resolved display info.
 #[derive(Debug)]
 pub struct RecipientEntry {
@@ -60,6 +63,12 @@ pub fn authorize_recipient(
     if vault.recipients.contains(&pubkey.to_string()) {
         return Err(MurkError::Recipient(format!(
             "{pubkey} is already a recipient"
+        )));
+    }
+
+    if vault.recipients.len() >= MAX_RECIPIENTS {
+        return Err(MurkError::Recipient(format!(
+            "vault already has {MAX_RECIPIENTS} recipients — remove unused recipients before adding more"
         )));
     }
 
