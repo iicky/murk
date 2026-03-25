@@ -141,6 +141,9 @@ enum Command {
         /// Filter by tag (repeatable)
         #[arg(long)]
         tag: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -168,6 +171,9 @@ enum Command {
         /// Filter by tag (repeatable)
         #[arg(long)]
         tag: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -178,6 +184,9 @@ enum Command {
         /// Filter by tag (repeatable)
         #[arg(long)]
         tag: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -225,6 +234,9 @@ enum Command {
     Circle {
         #[command(subcommand)]
         sub: Option<CircleCommand>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -245,6 +257,9 @@ enum Command {
         /// Show actual values (not just key names)
         #[arg(long)]
         show_values: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -803,12 +818,17 @@ fn cmd_get(key: &str, vault_path: &str) {
     }
 }
 
-fn cmd_ls(tags: &[String], vault_path: &str) {
+fn cmd_ls(tags: &[String], json: bool, vault_path: &str) {
     let path = Path::new(vault_path);
     let vault = try_or_die(vault::read(path));
 
-    for key in murk_cli::list_keys(&vault, tags) {
-        println!("{key}");
+    let keys = murk_cli::list_keys(&vault, tags);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&keys).unwrap());
+    } else {
+        for key in keys {
+            println!("{key}");
+        }
     }
 }
 
@@ -829,17 +849,25 @@ fn cmd_describe(
     save_vault(vault_path, &mut vault, &original, &murk);
 }
 
-fn cmd_export(tags: &[String], vault_path: &str) {
+fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
-    for (k, escaped) in &exports {
-        if !is_valid_key_name(k) {
-            eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
-            continue;
+    if json {
+        let map: serde_json::Map<String, serde_json::Value> = exports
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&map).unwrap());
+    } else {
+        for (k, escaped) in &exports {
+            if !is_valid_key_name(k) {
+                eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
+                continue;
+            }
+            println!("export {k}='{escaped}'");
         }
-        println!("export {k}='{escaped}'");
     }
 }
 
@@ -965,7 +993,7 @@ fn cmd_setup_merge_driver() {
     );
 }
 
-fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
+fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
     let (_vault, current_murk, identity) = load_vault(vault_path);
 
     // Get the old vault contents from git.
@@ -998,6 +1026,22 @@ fn cmd_diff(git_ref: &str, show_values: bool, vault_path: &str) {
     };
 
     let entries = murk_cli::diff_secrets(&old_values, &current_murk.values);
+
+    if json {
+        let list: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "key": e.key,
+                    "kind": format!("{:?}", e.kind).to_lowercase(),
+                    "old_value": e.old_value,
+                    "new_value": e.new_value,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&list).unwrap());
+        return;
+    }
 
     if entries.is_empty() {
         eprintln!("{}", "no changes".dimmed());
@@ -1172,12 +1216,28 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
 }
 
 /// Truncate a pubkey for display: first 8 chars + "…" + last 4 chars.
-fn cmd_recipients(vault_path: &str) {
+fn cmd_recipients(json: bool, vault_path: &str) {
     let path = Path::new(vault_path);
     let vault = try_or_die(vault::read(path));
 
     let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
     let entries = murk_cli::list_recipients(&vault, secret_key.as_deref());
+
+    if json {
+        let list: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "pubkey": e.pubkey,
+                    "name": e.display_name,
+                    "is_self": e.is_self,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&list).unwrap());
+        return;
+    }
+
     let has_names = entries.iter().any(|e| e.display_name.is_some());
 
     if !has_names {
@@ -1281,7 +1341,7 @@ fn cmd_recover() {
     );
 }
 
-fn cmd_info(tags: &[String], vault_path: &str) {
+fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
     let raw_bytes = fs::read(vault_path).unwrap_or_else(|e| die(&e, 1));
     let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
     let info = try_or_die(murk_cli::vault_info(
@@ -1289,6 +1349,32 @@ fn cmd_info(tags: &[String], vault_path: &str) {
         tags,
         secret_key.as_deref(),
     ));
+
+    if json {
+        let entries: Vec<serde_json::Value> = info
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "key": e.key,
+                    "description": e.description,
+                    "example": e.example,
+                    "tags": e.tags,
+                    "scoped_recipients": e.scoped_recipients,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "vault_name": info.vault_name,
+            "codename": info.codename,
+            "repo": info.repo,
+            "created": info.created,
+            "recipient_count": info.recipient_count,
+            "entries": entries,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        return;
+    }
 
     // Nameplate: ░▓ vault_name
     println!(
@@ -1440,7 +1526,7 @@ fn main() {
         } => cmd_rotate(key.as_deref(), all, generate, length, hex, &vault),
         Command::Rm { key, vault } => cmd_rm(&key, &vault),
         Command::Get { key, vault } => cmd_get(&key, &vault),
-        Command::Ls { tag, vault } => cmd_ls(&tag, &vault),
+        Command::Ls { tag, json, vault } => cmd_ls(&tag, json, &vault),
         Command::Describe {
             key,
             description,
@@ -1448,8 +1534,8 @@ fn main() {
             tag,
             vault,
         } => cmd_describe(&key, &description, example.as_deref(), &tag, &vault),
-        Command::Info { tag, vault } => cmd_info(&tag, &vault),
-        Command::Export { tag, vault } => cmd_export(&tag, &vault),
+        Command::Info { tag, json, vault } => cmd_info(&tag, json, &vault),
+        Command::Export { tag, json, vault } => cmd_export(&tag, json, &vault),
         Command::Exec {
             tag,
             vault,
@@ -1461,7 +1547,11 @@ fn main() {
             vault,
         } => cmd_authorize(&pubkey, name.as_deref(), &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
-        Command::Circle { sub: None, vault } => cmd_recipients(&vault),
+        Command::Circle {
+            sub: None,
+            json,
+            vault,
+        } => cmd_recipients(json, &vault),
         Command::Circle {
             sub:
                 Some(CircleCommand::Authorize {
@@ -1479,8 +1569,9 @@ fn main() {
         Command::Diff {
             git_ref,
             show_values,
+            json,
             vault,
-        } => cmd_diff(&git_ref, show_values, &vault),
+        } => cmd_diff(&git_ref, show_values, json, &vault),
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
         Command::Verify { vault } => cmd_verify(&vault),
