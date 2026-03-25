@@ -512,7 +512,7 @@ mod tests {
         unsafe { env::remove_var("MURK_KEY_FILE") };
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot read MURK_KEY_FILE"));
+        assert!(result.unwrap_err().contains("cannot read key file"));
     }
 
     #[test]
