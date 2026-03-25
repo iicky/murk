@@ -72,6 +72,35 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Acceptable risk profile:** For a team secrets tool, trusting GitHub as a key directory is a reasonable trade-off. You are already trusting your teammates with code access, CI credentials, and production deployments through the same GitHub accounts. The alternative (manual key exchange) has worse security properties in practice because teams resort to sharing keys over Slack or email.
 
+## Merge driver
+
+murk includes a git merge driver (`murk merge-driver`) that performs three-way merges on `.murk` vault files at the ciphertext level — without decryption.
+
+**Trust assumptions:**
+- The merge driver operates without a key. It cannot verify the MAC of any version. Integrity is verified on the next `load_vault` after merge.
+- Recipient additions and removals on only one side produce a merge conflict. Both sides must agree on recipient changes for a clean merge.
+- Secret additions from one side are accepted if the other side did not touch secrets. If both sides modified secrets (e.g. from a re-encryption after recipient change), all overlapping secrets conflict.
+
+**What the merge driver prevents:**
+- Silent recipient removal (one-sided removal → conflict)
+- Silent recipient injection (one-sided addition → conflict)
+- Secret value conflicts from independent edits to the same key
+
+**What the merge driver does not prevent:**
+- An attacker with write access to a branch can add arbitrary ciphertext entries. These will be unreadable without a valid key, but they will be present in the merged vault. The next `load_vault` will fail integrity verification if the MAC doesn't match.
+
+**Recommendation:** Protect your main branch with required reviews. The merge driver is a safety net for concurrent vault edits, not a substitute for branch protection.
+
+## Supply chain
+
+**Binary distribution:** Release binaries are built in GitHub Actions, checksummed (SHA256SUMS), and signed with Sigstore build provenance attestation. Verify with `gh attestation verify`.
+
+**Install script:** `install.sh` downloads the binary archive and SHA256SUMS, then verifies the checksum before extracting. It does not execute downloaded code before verification.
+
+**Dependencies:** murk depends on age (via the `age` crate) for all cryptography, plus standard Rust crates for CLI, serialization, and I/O. `cargo deny` checks for known advisories and license compliance in CI. All CI actions are pinned to full SHA commit hashes.
+
+**Cargo.lock:** Committed and used for reproducible builds (`--locked` in release workflows).
+
 ## Key compromise scenarios
 
 | Scenario | Impact | Mitigation |
