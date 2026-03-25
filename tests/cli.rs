@@ -2243,3 +2243,114 @@ fn lock_file_created_during_write() {
     // Lock file should exist after a write operation.
     assert!(dir.path().join("test.murk.lock").exists());
 }
+
+// --- Merge driver tests ---
+
+#[test]
+fn merge_driver_conflicts_on_one_sided_recipient_addition() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Create base vault with a secret.
+    murk(&dir, &key)
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    let base = fs::read_to_string(dir.path().join("test.murk")).unwrap();
+
+    // "Ours" adds a recipient.
+    let mut ours_vault: serde_json::Value = serde_json::from_str(&base).unwrap();
+    ours_vault["recipients"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::Value::String(
+            "age1newrecipient0000000000000000000000000000000000000000000new00".into(),
+        ));
+    let ours = serde_json::to_string_pretty(&ours_vault).unwrap();
+
+    // "Theirs" is unchanged from base.
+    let theirs = base.clone();
+
+    // Write the three versions.
+    let base_path = dir.path().join("base.murk");
+    let ours_path = dir.path().join("ours.murk");
+    let theirs_path = dir.path().join("theirs.murk");
+    fs::write(&base_path, &base).unwrap();
+    fs::write(&ours_path, &ours).unwrap();
+    fs::write(&theirs_path, &theirs).unwrap();
+
+    // Run the merge driver — should fail with conflict.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args([
+            "merge-driver",
+            base_path.to_str().unwrap(),
+            ours_path.to_str().unwrap(),
+            theirs_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("added on one side"));
+}
+
+// --- Hardening tests ---
+
+#[test]
+fn symlink_key_file_rejected() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    // Create a symlink to the real key file.
+    let env_contents = fs::read_to_string(dir.path().join(".env")).unwrap();
+    let real_path = env_contents
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("export MURK_KEY_FILE=")
+                .or_else(|| l.strip_prefix("MURK_KEY_FILE="))
+        })
+        .unwrap()
+        .trim();
+
+    let symlink_path = dir.path().join("key-symlink");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(real_path, &symlink_path).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(real_path, &symlink_path).unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .env("MURK_KEY_FILE", symlink_path.to_str().unwrap())
+        .env_remove("MURK_KEY")
+        .current_dir(dir.path())
+        .args(["export", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+}
+
+#[test]
+fn github_username_too_long_rejected() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    let long_name = "a".repeat(40);
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &format!("github:{long_name}"),
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid GitHub username"));
+}
