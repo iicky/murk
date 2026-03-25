@@ -40,7 +40,17 @@ demo_init_dirs() {
         --port="$port" &
     export DAEMON_PID=$!
     export REMOTE_URL="git://localhost:$port/app.git"
-    sleep 0.2
+
+    # Wait for daemon to be ready (up to 5s).
+    local attempts=0
+    while ! git ls-remote "$REMOTE_URL" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge 50 ]; then
+            echo "error: git daemon failed to start" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
 
     export GIT_AUTHOR_NAME="demo"
     export GIT_AUTHOR_EMAIL="demo@murk"
