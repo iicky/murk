@@ -115,28 +115,28 @@ pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<V
     Ok(crypto::decrypt(&ciphertext, identity)?)
 }
 
-/// Load the vault: read JSON, decrypt all values, return working state.
-/// Returns the raw vault (for preserving unchanged ciphertext on save),
-/// the decrypted murk, and the identity.
-pub fn load_vault(
-    vault_path: &str,
-) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), MurkError> {
-    let path = Path::new(vault_path);
-    let secret_key = resolve_key().map_err(MurkError::Key)?;
+/// Read a vault file from disk.
+///
+/// This is a thin wrapper around `vault::read` for a convenient string-path API.
+pub fn read_vault(vault_path: &str) -> Result<types::Vault, MurkError> {
+    Ok(vault::read(Path::new(vault_path))?)
+}
 
-    let identity = crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
-        MurkError::Key(format!(
-            "{e}. For age keys, set MURK_KEY. For SSH keys, set MURK_KEY_FILE=~/.ssh/id_ed25519"
-        ))
-    })?;
-
-    let vault = vault::read(path)?;
+/// Decrypt a vault using the given identity. Verifies integrity, decrypts all
+/// shared and scoped values, and returns the working state.
+///
+/// Use this when you already have a key (e.g. from a Python SDK or test harness).
+/// For the common CLI case where the key comes from the environment, use `load_vault`.
+pub fn decrypt_vault(
+    vault: &types::Vault,
+    identity: &crypto::MurkIdentity,
+) -> Result<types::Murk, MurkError> {
     let pubkey = identity.pubkey_string()?;
 
     // Decrypt shared values.
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
-        let plaintext = decrypt_value(&entry.shared, &identity).map_err(|_| {
+        let plaintext = decrypt_value(&entry.shared, identity).map_err(|_| {
             MurkError::Crypto(crypto::CryptoError::Decrypt(
                 "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
             ))
@@ -150,7 +150,7 @@ pub fn load_vault(
     let mut scoped = HashMap::new();
     for (key, entry) in &vault.secrets {
         if let Some(encoded) = entry.scoped.get(&pubkey)
-            && let Ok(value) = decrypt_value(encoded, &identity)
+            && let Ok(value) = decrypt_value(encoded, identity)
                 .and_then(|pt| String::from_utf8(pt).map_err(|e| MurkError::Secret(e.to_string())))
         {
             scoped
@@ -161,11 +161,11 @@ pub fn load_vault(
     }
 
     // Decrypt meta for recipient names and validate integrity MAC.
-    let (recipients, legacy_mac) = match decrypt_meta(&vault, &identity) {
+    let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
         Some(meta) if !meta.mac.is_empty() => {
             let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
-            if !verify_mac(&vault, &meta.mac, hmac_key.as_ref()) {
-                let expected = compute_mac(&vault, hmac_key.as_ref());
+            if !verify_mac(vault, &meta.mac, hmac_key.as_ref()) {
+                let expected = compute_mac(vault, hmac_key.as_ref());
                 return Err(MurkError::Integrity(format!(
                     "vault may have been tampered with (expected {expected}, got {})",
                     meta.mac
@@ -188,12 +188,30 @@ pub fn load_vault(
         }
     };
 
-    let murk = types::Murk {
+    Ok(types::Murk {
         values,
         recipients,
         scoped,
         legacy_mac,
-    };
+    })
+}
+
+/// Resolve the key from the environment, read the vault, and decrypt it.
+///
+/// Convenience wrapper combining `resolve_key` + `read_vault` + `decrypt_vault`.
+pub fn load_vault(
+    vault_path: &str,
+) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), MurkError> {
+    let secret_key = resolve_key().map_err(MurkError::Key)?;
+
+    let identity = crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
+        MurkError::Key(format!(
+            "{e}. For age keys, set MURK_KEY. For SSH keys, set MURK_KEY_FILE=~/.ssh/id_ed25519"
+        ))
+    })?;
+
+    let vault = read_vault(vault_path)?;
+    let murk = decrypt_vault(&vault, &identity)?;
 
     Ok((vault, murk, identity))
 }
