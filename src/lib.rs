@@ -478,10 +478,8 @@ mod tests {
     use crate::testutil::*;
     use std::collections::BTreeMap;
     use std::fs;
-    use std::sync::Mutex;
 
-    /// Tests that mutate MURK_KEY env var must hold this lock.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::testutil::ENV_LOCK;
 
     #[test]
     fn encrypt_decrypt_value_roundtrip() {
@@ -892,7 +890,7 @@ mod tests {
 
     #[test]
     fn load_vault_validates_mac() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -958,7 +956,7 @@ mod tests {
 
     #[test]
     fn load_vault_succeeds_with_valid_mac() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1012,7 +1010,7 @@ mod tests {
 
     #[test]
     fn load_vault_not_a_recipient() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, _pubkey) = generate_keypair();
         let (other_secret, other_pubkey) = generate_keypair();
@@ -1075,7 +1073,7 @@ mod tests {
 
     #[test]
     fn load_vault_zero_secrets() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, pubkey) = generate_keypair();
 
@@ -1122,7 +1120,7 @@ mod tests {
 
     #[test]
     fn load_vault_stripped_meta_with_secrets_fails() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1185,7 +1183,7 @@ mod tests {
 
     #[test]
     fn load_vault_empty_mac_with_secrets_fails() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
