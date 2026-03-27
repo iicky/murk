@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: astral-sh/ruff-action@4c682e8e0d73d3cdb7f3eadee47bd1882cc3f0b5 # v3
+      - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6 # v3
         with:
           src: python/
 
@@ -35,7 +35,7 @@ jobs:
       - name: Build release binary (for test fixture)
         run: cargo build --release
 
-      - uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
       - name: Install and test
         run: |
@@ -71,7 +71,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build wheels
-        uses: PyO3/maturin-action@aef21716a1ba58c9eb73b06af3d4cbbfbb41643d # v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features python
@@ -91,7 +91,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Build sdist
-        uses: PyO3/maturin-action@aef21716a1ba58c9eb73b06af3d4cbbfbb41643d # v1
+        uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1
         with:
           command: sdist
           args: --out dist
@@ -116,6 +116,6 @@ jobs:
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b54f72e44af12044e0e68f2a # v1.12.4
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
         with:
           skip-existing: true
