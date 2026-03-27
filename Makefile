@@ -2,7 +2,7 @@ SHELL := /bin/bash
 MURK := $(CURDIR)/target/release/murk
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-vhs
+.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh test-vhs
 
 build:
 	cargo build --release
@@ -10,7 +10,7 @@ build:
 test:
 	cargo nextest run
 
-test-demos: build test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory
+test-demos: build test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh
 	@echo "\nall demo tests passed"
 
 test-hero: build
@@ -163,11 +163,25 @@ test-mallory: build
 	! $(MURK) export >/dev/null 2>&1 && \
 	echo "ok"
 
+test-ssh: build
+	@printf "  %-12s" "ssh" && \
+	set -e && \
+	export PATH="$(CURDIR)/target/release:$$PATH" && \
+	source demo/setup.sh && \
+	demo_init_dirs alice bob && \
+	trap "demo_cleanup" EXIT && \
+	demo_alice_vault && \
+	ssh-keygen -t ed25519 -f "$$BOB_DIR/id_ed25519" -N "" -q && \
+	cd $$ALICE_DIR && export MURK_KEY=$$ALICE_KEY && \
+	murk circle authorize "ssh:$$BOB_DIR/id_ed25519.pub" --name bob >/dev/null 2>&1 && \
+	murk circle 2>/dev/null | grep -q "bob" && \
+	echo "ok"
+
 test-vhs:
 	@command -v cross >/dev/null 2>&1 || { echo "error: cross not found — install with: cargo install cross --locked"; exit 1; }
 	cross build --release --target $(MUSL_TARGET)
 	@printf 'FROM ghcr.io/charmbracelet/vhs\nRUN apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n' | docker build -t vhs-git -
-	@for tape in hero team offboard eve recovery github direnv mallory; do \
+	@for tape in hero team offboard eve recovery github direnv mallory ssh; do \
 		printf "  %-12s" "$$tape" && \
 		docker run --rm -v $(CURDIR):/vhs -e PATH="/vhs/target/$(MUSL_TARGET)/release:$$PATH" vhs-git demo/$$tape.tape && \
 		echo "ok"; \
