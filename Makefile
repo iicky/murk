@@ -64,9 +64,7 @@ test-offboard: build
 	cd $$BOB_DIR && export MURK_KEY=$$BOB_KEY && \
 	murk circle 2>/dev/null | grep -q "carol" && \
 	murk circle revoke carol >/dev/null 2>&1 && \
-	echo "rotated1" | murk rotate DATABASE_URL >/dev/null 2>&1 && \
-	echo "rotated2" | murk rotate API_KEY >/dev/null 2>&1 && \
-	echo "rotated3" | murk rotate STRIPE_SECRET >/dev/null 2>&1 && \
+	printf "rotated1\nrotated2\nrotated3\n" | murk rotate --all >/dev/null 2>&1 && \
 	! murk circle 2>/dev/null | grep -q "carol" && \
 	git add .murk && git commit -m "revoke carol" >/dev/null 2>&1 && \
 	git push >/dev/null 2>&1 && \
