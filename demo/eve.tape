@@ -19,7 +19,7 @@ Enter
 Type `echo "alice" | murk init 2>/dev/null`
 Enter
 Sleep 2s
-Type `eval $(cat .env)`
+Type `source .env`
 Enter
 Type `echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" 2>/dev/null`
 Enter

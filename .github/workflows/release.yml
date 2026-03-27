@@ -156,6 +156,13 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-      - run: cargo publish || echo "Version already published"
+      - run: |
+          cargo publish 2>&1 | tee /tmp/publish.log || {
+            if grep -q "already uploaded" /tmp/publish.log; then
+              echo "Version already published"
+            else
+              exit 1
+            fi
+          }
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

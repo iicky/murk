@@ -6,7 +6,7 @@ use murk_cli::{
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, IsTerminal, Read, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process;
 
@@ -518,13 +518,14 @@ fn save_vault(
 fn resolve_value(key: &str) -> String {
     let stdin = io::stdin();
     if !stdin.is_terminal() {
-        // Piped input: `echo "secret" | murk add KEY`
-        let mut buf = String::new();
+        // Piped input: read one line so multiple calls can each consume a value
+        // e.g. `printf "v1\nv2\n" | murk rotate --all`
+        let mut line = String::new();
         stdin
             .lock()
-            .read_to_string(&mut buf)
+            .read_line(&mut line)
             .unwrap_or_else(|e| die(&format_args!("reading stdin: {e}"), 1));
-        let trimmed = buf.trim_end_matches('\n').to_string();
+        let trimmed = line.trim_end_matches('\n').to_string();
         if trimmed.is_empty() {
             die(&"empty value from stdin", 1);
         }

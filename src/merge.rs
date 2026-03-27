@@ -100,12 +100,30 @@ fn merge_recipients(
 
     let mut result: BTreeSet<&str> = base_set;
 
-    // Add new recipients from both sides.
-    for pk in ours_added {
-        result.insert(pk);
+    // Recipient addition requires both sides to agree, or it's a conflict.
+    // Blind set-union would let a malicious branch silently grant access.
+    for pk in &ours_added {
+        if theirs_added.contains(pk) {
+            // Both sides added the same recipient — safe.
+            result.insert(pk);
+        } else {
+            // Only ours added — conflict. Include the recipient but flag it.
+            result.insert(pk);
+            conflicts.push(MergeConflict {
+                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                reason: "added on one side but not the other".into(),
+            });
+        }
     }
-    for pk in theirs_added {
-        result.insert(pk);
+    for pk in &theirs_added {
+        if !ours_added.contains(pk) {
+            // Only theirs added — conflict.
+            result.insert(pk);
+            conflicts.push(MergeConflict {
+                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                reason: "added on one side but not the other".into(),
+            });
+        }
     }
 
     // Recipient removal requires both sides to agree, or it's a conflict.
@@ -854,15 +872,16 @@ mod tests {
     // -- Recipients --
 
     #[test]
-    fn merge_recipient_added_ours() {
+    fn merge_recipient_added_one_side_conflicts() {
         let base = base_vault();
         let mut ours = base.clone();
         ours.recipients.push("age1charlie".into());
 
         let r = merge_vaults(&base, &ours, &base);
-        assert!(r.conflicts.is_empty());
+        assert_eq!(r.conflicts.len(), 1);
+        assert!(r.conflicts[0].reason.contains("added on one side"));
+        // Recipient is still included (safer to keep than drop).
         assert!(r.vault.recipients.contains(&"age1charlie".to_string()));
-        assert_eq!(r.vault.recipients.len(), 3);
     }
 
     #[test]
@@ -1076,7 +1095,12 @@ mod tests {
         );
 
         let r = merge_vaults(&base, &ours, &theirs);
-        assert!(r.conflicts.is_empty());
+        // One-sided recipient addition now conflicts.
+        assert!(
+            r.conflicts
+                .iter()
+                .any(|c| c.reason.contains("added on one side"))
+        );
         assert_eq!(r.vault.secrets["DB_URL"].shared, "ours-reencrypted-db");
         assert!(r.vault.secrets.contains_key("NEW_KEY"));
         assert!(r.vault.recipients.contains(&"age1charlie".to_string()));

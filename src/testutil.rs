@@ -1,6 +1,13 @@
 //! Shared test helpers for vault construction and key generation.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+
+/// Process-global lock for tests that mutate env vars (MURK_KEY, MURK_KEY_FILE).
+pub static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// Process-global lock for tests that change the working directory.
+pub static CWD_LOCK: Mutex<()> = Mutex::new(());
 
 use age::secrecy::ExposeSecret;
 
