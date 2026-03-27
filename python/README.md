@@ -2,15 +2,34 @@
 
 Python bindings for [murk](https://github.com/iicky/murk) — an encrypted secrets manager for developers.
 
-murk stores encrypted secrets in a single `.murk` file safe to commit to git. This package lets you read those secrets from Python.
+murk stores encrypted secrets in a single `.murk` file safe to commit to git. This package lets Python apps read those secrets at runtime.
 
-## Install
+## Prerequisites
+
+You need the [murk CLI](https://github.com/iicky/murk) to create and manage vaults. This package only reads them.
+
+```bash
+# Install the CLI first
+brew tap iicky/murk && brew install murk
+
+# Initialize a vault and add secrets
+murk init
+murk add DATABASE_URL
+murk add API_KEY
+```
+
+Then add the Python package to your project:
 
 ```bash
 pip install murk-secrets
 ```
 
 ## Quick start
+
+```bash
+# Load your key (created by murk init)
+source .env
+```
 
 ```python
 import murk
@@ -70,8 +89,9 @@ The easiest setup is `source .env` in your project directory after running `murk
 ## Requirements
 
 - Python >= 3.9
-- A `.murk` vault file (create one with the [murk CLI](https://github.com/iicky/murk))
-- `MURK_KEY` or `MURK_KEY_FILE` in the environment
+- [murk CLI](https://github.com/iicky/murk) installed (to create and manage vaults)
+- A `.murk` vault file in your project (created with `murk init`)
+- `MURK_KEY` or `MURK_KEY_FILE` in the environment (created by `murk init`, loaded via `source .env`)
 
 ## License
 
