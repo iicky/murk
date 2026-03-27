@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "murk-secrets"
+description = "Python bindings for murk — encrypted secrets manager"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+
+[tool.maturin]
+features = ["python"]
+module-name = "murk"
+bindings = "pyo3"
