@@ -40,7 +40,17 @@ demo_init_dirs() {
         --port="$port" &
     export DAEMON_PID=$!
     export REMOTE_URL="git://localhost:$port/app.git"
-    sleep 0.2
+
+    # Wait for daemon to be ready (up to 5s).
+    local attempts=0
+    while ! git ls-remote "$REMOTE_URL" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        if [ $attempts -ge 50 ]; then
+            echo "error: git daemon failed to start" >&2
+            return 1
+        fi
+        sleep 0.1
+    done
 
     export GIT_AUTHOR_NAME="demo"
     export GIT_AUTHOR_EMAIL="demo@murk"
@@ -61,7 +71,7 @@ demo_init_dirs() {
 demo_alice_vault() {
     cd "$ALICE_DIR" || return 1
     echo "alice" | murk init >/dev/null 2>&1
-    eval "$(cat .env)"
+    source .env
     export ALICE_KEY="$(resolve_murk_key)"
 
     echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" >/dev/null 2>&1
@@ -88,7 +98,7 @@ demo_onboard() {
     unset MURK_KEY MURK_KEY_FILE
     git clone "$REMOTE_URL" . >/dev/null 2>&1
     murk init >/dev/null 2>&1
-    eval "$(cat .env)"
+    source .env
     export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }
@@ -103,7 +113,7 @@ demo_capture_key() {
     local dir_var="${upper}_DIR"
 
     cd "${!dir_var}" || return 1
-    eval "$(cat .env)"
+    source .env
     export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }
