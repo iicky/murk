@@ -14,7 +14,7 @@ Enter
 Type `echo "alice" | murk init 2>/dev/null`
 Enter
 Sleep 2s
-Type `eval $(cat .env)`
+Type `source .env`
 Enter
 Type `export PS1="\n\[\e[94m\]alice \$\[\e[0m\] "`
 Enter

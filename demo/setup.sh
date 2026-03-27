@@ -71,7 +71,7 @@ demo_init_dirs() {
 demo_alice_vault() {
     cd "$ALICE_DIR" || return 1
     echo "alice" | murk init >/dev/null 2>&1
-    eval "$(cat .env)"
+    source .env
     export ALICE_KEY="$(resolve_murk_key)"
 
     echo "postgres://prod:secret@db.example.com/app" | murk add DATABASE_URL --desc "Production database" >/dev/null 2>&1
@@ -98,7 +98,7 @@ demo_onboard() {
     unset MURK_KEY MURK_KEY_FILE
     git clone "$REMOTE_URL" . >/dev/null 2>&1
     murk init >/dev/null 2>&1
-    eval "$(cat .env)"
+    source .env
     export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }
@@ -113,7 +113,7 @@ demo_capture_key() {
     local dir_var="${upper}_DIR"
 
     cd "${!dir_var}" || return 1
-    eval "$(cat .env)"
+    source .env
     export "${upper}_KEY=$(resolve_murk_key)"
     export "${upper}_PUBKEY=$(murk_pubkey)"
 }

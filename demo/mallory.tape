@@ -19,7 +19,7 @@ Enter
 Type `echo "alice" | murk init 2>/dev/null`
 Enter
 Sleep 2s
-Type `eval $(cat .env)`
+Type `source .env`
 Enter
 Type `export ALICE_KEY="$MURK_KEY"`
 Enter
@@ -38,7 +38,7 @@ Enter
 Type `echo "mallory" | murk init 2>/dev/null`
 Enter
 Sleep 2s
-Type `eval $(cat .env)`
+Type `source .env`
 Enter
 Type `export MALLORY_KEY="$MURK_KEY"`
 Enter

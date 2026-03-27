@@ -33,12 +33,13 @@ Type "alice"
 Enter
 Sleep 3s
 
-# Load key silently
-Hide
-Type `eval $(cat .env)`
+Type "# Load MURK_KEY_FILE into the environment"
 Enter
-Sleep 200ms
-Show
+Sleep 500ms
+
+Type "source .env"
+Enter
+Sleep 500ms
 
 Type `murk add DATABASE_URL --desc "Production database"`
 Enter

@@ -20,7 +20,7 @@ test-hero: build
 	trap "rm -rf $$dir" EXIT && \
 	cd $$dir && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
 	echo "secret2" | $(MURK) add API_KEY --desc "OpenAI API key" >/dev/null 2>&1 && \
 	echo "secret3" | $(MURK) add STRIPE_SECRET --desc "Stripe secret key" >/dev/null 2>&1 && \
@@ -85,7 +85,7 @@ test-eve: build
 	mkdir -p $$alice $$eve && \
 	cd $$alice && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	echo "secret1" | $(MURK) add DATABASE_URL --desc "Production database" >/dev/null 2>&1 && \
 	echo "secret2" | $(MURK) add API_KEY >/dev/null 2>&1 && \
 	cp .murk $$eve/ && \
@@ -103,7 +103,7 @@ test-recovery: build
 	trap "rm -rf $$dir" EXIT && \
 	cd $$dir && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	ORIGINAL=$$(cat "$$MURK_KEY_FILE" 2>/dev/null || echo "$$MURK_KEY") && \
 	PHRASE=$$($(MURK) recover 2>/dev/null) && \
 	RESTORED=$$(echo "$$PHRASE" | $(MURK) restore 2>/dev/null) && \
@@ -132,7 +132,7 @@ test-direnv: build
 	cd $$dir && \
 	git init >/dev/null 2>&1 && \
 	echo "alice" | murk init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	echo "hunter2" | murk add SECRET_KEY --desc "test" >/dev/null 2>&1 && \
 	murk env >/dev/null 2>&1 && \
 	test -f .envrc && \
@@ -150,14 +150,14 @@ test-mallory: build
 	mkdir -p $$alice $$mallory && \
 	cd $$alice && \
 	echo "alice" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	ALICE_KEY=$$MURK_KEY && \
 	echo "secret1" | $(MURK) add API_KEY --desc "test" >/dev/null 2>&1 && \
 	cp .murk $$mallory/ && \
 	cd $$mallory && \
 	unset MURK_KEY MURK_KEY_FILE && \
 	echo "mallory" | $(MURK) init >/dev/null 2>&1 && \
-	eval $$(cat .env) && \
+	source .env && \
 	! $(MURK) circle authorize "$$($(MURK) init 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'age1[a-z0-9]*')" --name mallory >/dev/null 2>&1 && \
 	python3 -c "import json; v=json.load(open('.murk')); v['recipients'].append('age1fake00000000000000000000000000000000000000000000000000000'); json.dump(v, open('.murk','w'), indent=2)" && \
 	cp .murk $$alice/ && \
