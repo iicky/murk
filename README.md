@@ -1,6 +1,6 @@
 # murk
 
-[![CI](https://github.com/iicky/murk/actions/workflows/ci.yml/badge.svg)](https://github.com/iicky/murk/actions/workflows/ci.yml)
+[![CI](https://github.com/iicky/murk/actions/workflows/ci.yaml/badge.svg)](https://github.com/iicky/murk/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/iicky/murk/graph/badge.svg)](https://codecov.io/gh/iicky/murk)
 [![Crates.io](https://img.shields.io/crates/v/murk-cli)](https://crates.io/crates/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)

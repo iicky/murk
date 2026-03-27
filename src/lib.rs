@@ -33,6 +33,9 @@ pub(crate) mod secrets;
 pub mod types;
 pub mod vault;
 
+#[cfg(feature = "python")]
+mod python;
+
 // Shared test utilities
 #[cfg(test)]
 pub mod testutil;
