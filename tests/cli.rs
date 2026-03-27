@@ -2354,3 +2354,74 @@ fn github_username_too_long_rejected() {
         .failure()
         .stderr(predicate::str::contains("invalid GitHub username"));
 }
+
+#[test]
+fn authorize_ssh_file_adds_recipient() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Write a valid SSH public key file (with comment field).
+    let ssh_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN test@example";
+    let pub_path = dir.path().join("bob.pub");
+    fs::write(&pub_path, format!("{ssh_key}\n")).unwrap();
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &format!("ssh:{}", pub_path.display()),
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("authorized bob"));
+
+    // Verify the key shows up in circle output.
+    murk(&dir, &key)
+        .args(["circle", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bob"));
+}
+
+#[test]
+fn authorize_ssh_file_not_found() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            "ssh:/nonexistent/key.pub",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot read"));
+}
+
+#[test]
+fn authorize_ssh_file_empty() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    let pub_path = dir.path().join("empty.pub");
+    fs::write(&pub_path, "").unwrap();
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &format!("ssh:{}", pub_path.display()),
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("empty key file"));
+}

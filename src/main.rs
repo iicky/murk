@@ -209,7 +209,7 @@ enum Command {
     /// Add a recipient to the vault
     #[command(hide = true)]
     Authorize {
-        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        /// Public key (age1...), ssh:path, ssh: (default ~/.ssh/id_ed25519.pub), or github:username
         pubkey: String,
         /// Display name for this recipient
         #[arg(long)]
@@ -298,7 +298,7 @@ enum Command {
 enum CircleCommand {
     /// Add a recipient to the vault
     Authorize {
-        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        /// Public key (age1...), ssh:path, ssh: (default ~/.ssh/id_ed25519.pub), or github:username
         pubkey: String,
         /// Display name for this recipient
         #[arg(long)]
@@ -1152,6 +1152,52 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
             summary,
             if added == 1 { "" } else { "s" }
         );
+    } else if let Some(path_hint) = pubkey.strip_prefix("ssh:") {
+        // Read SSH public key from a file.
+        let path = if path_hint.is_empty() {
+            // Default: ~/.ssh/id_ed25519.pub
+            let home = std::env::var("HOME").unwrap_or_else(|_| die(&"HOME not set", 1));
+            std::path::PathBuf::from(home).join(".ssh/id_ed25519.pub")
+        } else {
+            if path_hint.starts_with('~') {
+                let home = std::env::var("HOME").unwrap_or_else(|_| die(&"HOME not set", 1));
+                std::path::PathBuf::from(path_hint.replacen('~', &home, 1))
+            } else {
+                std::path::PathBuf::from(path_hint)
+            }
+        };
+
+        let contents = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            die(&format_args!("cannot read {}: {e}", path.display()), 1);
+        });
+        // Take first non-empty line (pub files may have trailing newlines).
+        let key_line = contents
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| die(&format_args!("empty key file: {}", path.display()), 1));
+        // Strip the comment field if present (ssh-type base64 comment).
+        let key_string = {
+            let parts: Vec<&str> = key_line.splitn(3, ' ').collect();
+            if parts.len() >= 2 {
+                format!("{} {}", parts[0], parts[1])
+            } else {
+                key_line.to_string()
+            }
+        };
+
+        try_or_die(murk_cli::authorize_recipient(
+            &mut vault,
+            &mut current,
+            &key_string,
+            name,
+        ));
+
+        save_vault(vault_path, &mut vault, &original, &current);
+
+        let display = name
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        eprintln!("{} authorized {}", "◆".magenta(), display.bold());
     } else {
         // Raw pubkey (age or SSH).
         try_or_die(murk_cli::authorize_recipient(
