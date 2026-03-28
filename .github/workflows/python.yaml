@@ -80,10 +80,13 @@ jobs:
 
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1
+        env:
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features python --find-interpreter
           manylinux: ${{ matrix.manylinux || 'auto' }}
+          docker-options: -e PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
