@@ -1,0 +1,17 @@
+[package]
+name = "murk-napi"
+version = "0.4.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+murk-cli = { path = ".." }
+napi = { version = "2", default-features = false, features = ["napi9"] }
+napi-derive = "2"
+
+[build-dependencies]
+napi-build = "2"
