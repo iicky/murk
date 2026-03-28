@@ -102,7 +102,8 @@ jobs:
           options: --user 0:0 -v ${{ github.workspace }}:/build -w /build/node
           run: |
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            source "$HOME/.cargo/env"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            rustc --version
             npx napi build --platform --release --target ${{ matrix.settings.target }}
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
