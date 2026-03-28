@@ -101,6 +101,7 @@ jobs:
           image: ${{ matrix.settings.docker }}
           options: --user 0:0 -v ${{ github.workspace }}:/build -w /build/node
           run: |
+            apk add --no-cache curl || true
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             export PATH="$HOME/.cargo/bin:$PATH"
             rustc --version
