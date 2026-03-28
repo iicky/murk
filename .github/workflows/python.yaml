@@ -57,6 +57,7 @@ jobs:
             target: x86_64
           - os: ubuntu-latest
             target: aarch64
+            manylinux: manylinux_2_28
           - os: macos-14
             target: x86_64
           - os: macos-latest
@@ -81,7 +82,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features python --find-interpreter
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux || 'auto' }}
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
