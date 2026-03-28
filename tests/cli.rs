@@ -2448,6 +2448,7 @@ fn write_editor_script(dir: &TempDir, name: &str, body: &str, win_body: &str) ->
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_single_key_updates_value() {
     let dir = TempDir::new().unwrap();
@@ -2480,6 +2481,7 @@ fn edit_single_key_updates_value() {
         .stdout(predicate::str::contains("updated"));
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_single_key_no_change() {
     let dir = TempDir::new().unwrap();
@@ -2500,6 +2502,7 @@ fn edit_single_key_no_change() {
         .stderr(predicate::str::contains("no changes"));
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_abort_preserves_value() {
     let dir = TempDir::new().unwrap();
@@ -2526,6 +2529,7 @@ fn edit_abort_preserves_value() {
         .stdout(predicate::str::contains("keep_me"));
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_multi_key_add_update_remove() {
     let dir = TempDir::new().unwrap();
@@ -2581,6 +2585,7 @@ fn edit_multi_key_add_update_remove() {
         .failure();
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_missing_key_fails() {
     let dir = TempDir::new().unwrap();
@@ -2594,6 +2599,7 @@ fn edit_missing_key_fails() {
         .stderr(predicate::str::contains("not found"));
 }
 
+#[cfg(unix)]
 #[test]
 fn edit_tempfile_cleaned_up() {
     let dir = TempDir::new().unwrap();
