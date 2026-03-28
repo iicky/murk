@@ -46,7 +46,7 @@ jobs:
           pytest python/tests -v
 
   wheels:
-    name: Build wheels (${{ matrix.os }})
+    name: Build wheels (${{ matrix.os }}, ${{ matrix.target }})
     needs: [lint, test]
     runs-on: ${{ matrix.os }}
     strategy:
