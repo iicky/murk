@@ -36,7 +36,7 @@ jobs:
       - name: Build release binary (for test fixture)
         run: cargo build --release
 
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
       - name: Install and test
         run: |
@@ -74,7 +74,7 @@ jobs:
 
       - name: Set up QEMU
         if: runner.os == 'Linux' && matrix.target == 'aarch64'
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v3
         with:
           platforms: arm64
 
