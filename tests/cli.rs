@@ -2428,16 +2428,24 @@ fn authorize_ssh_file_empty() {
 
 // ── edit ──
 
-/// Helper: write a shell script that replaces the file content.
-fn write_editor_script(dir: &TempDir, name: &str, body: &str) -> String {
-    let script = dir.path().join(name);
-    fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+/// Helper: write an editor script that replaces the file content.
+/// On Unix, writes a shell script. On Windows, writes a .cmd batch file.
+/// `body` is the shell command (Unix). `win_body` is the batch equivalent.
+fn write_editor_script(dir: &TempDir, name: &str, body: &str, win_body: &str) -> String {
     #[cfg(unix)]
     {
+        let script = dir.path().join(name);
+        fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script.display().to_string()
     }
-    script.display().to_string()
+    #[cfg(windows)]
+    {
+        let script = dir.path().join(format!("{name}.cmd"));
+        fs::write(&script, format!("@echo off\r\n{win_body}\r\n")).unwrap();
+        script.display().to_string()
+    }
 }
 
 #[test]
@@ -2451,7 +2459,12 @@ fn edit_single_key_updates_value() {
         .assert()
         .success();
 
-    let editor = write_editor_script(&dir, "editor.sh", r#"echo "updated" > "$1""#);
+    let editor = write_editor_script(
+        &dir,
+        "editor.sh",
+        r#"echo "updated" > "$1""#,
+        r#"echo updated> %1"#,
+    );
 
     murk(&dir, &key)
         .args(["edit", "SECRET", "--vault", "test.murk"])
@@ -2535,6 +2548,7 @@ fn edit_multi_key_add_update_remove() {
         &dir,
         "editor.sh",
         r#"printf "KEEP=changed\nNEW_KEY=hello\n" > "$1""#,
+        "(\r\necho KEEP=changed\r\necho NEW_KEY=hello\r\n) > %1",
     );
 
     murk(&dir, &key)
@@ -2597,6 +2611,7 @@ fn edit_tempfile_cleaned_up() {
         &dir,
         "editor.sh",
         &format!(r#"cp "$1" "{}" "#, marker.display()),
+        &format!(r#"copy %1 "{}""#, marker.display()),
     );
 
     murk(&dir, &key)
