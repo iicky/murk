@@ -1,5 +1,7 @@
 # murk-secrets
 
+[![PyPI](https://img.shields.io/pypi/v/murk-secrets)](https://pypi.org/project/murk-secrets/)
+
 Python bindings for [murk](https://github.com/iicky/murk) — an encrypted secrets manager for developers.
 
 murk stores encrypted secrets in a single `.murk` file safe to commit to git. This package lets Python apps read those secrets at runtime.
