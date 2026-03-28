@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "node"]
+
 [package]
 name = "murk-cli"
 version = "0.4.1"
