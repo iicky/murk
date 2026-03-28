@@ -10,6 +10,7 @@ on:
       - "pyproject.toml"
       - "murk.pyi"
       - "Cargo.toml"
+      - ".github/workflows/python.yaml"
 
 env:
   PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
