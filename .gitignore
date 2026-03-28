@@ -10,3 +10,7 @@ CLAUDE.md
 __pycache__/
 *.pyc
 .pytest_cache/
+node/*.node
+node/index.js
+node/index.d.ts
+node/node_modules/
