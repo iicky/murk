@@ -192,6 +192,18 @@ enum Command {
         vault: String,
     },
 
+    /// Edit secrets in $EDITOR
+    Edit {
+        /// Edit a single key (omit to edit all)
+        key: Option<String>,
+        /// Edit scoped overrides instead of shared secrets
+        #[arg(long)]
+        scoped: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
     /// Run a command with secrets injected as environment variables
     #[command(trailing_var_arg = true)]
     Exec {
@@ -209,7 +221,7 @@ enum Command {
     /// Add a recipient to the vault
     #[command(hide = true)]
     Authorize {
-        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        /// Public key (age1...), ssh:path, ssh: (default ~/.ssh/id_ed25519.pub), or github:username
         pubkey: String,
         /// Display name for this recipient
         #[arg(long)]
@@ -298,7 +310,7 @@ enum Command {
 enum CircleCommand {
     /// Add a recipient to the vault
     Authorize {
-        /// Public key (age1.../ssh-ed25519.../ssh-rsa...) or github:username
+        /// Public key (age1...), ssh:path, ssh: (default ~/.ssh/id_ed25519.pub), or github:username
         pubkey: String,
         /// Display name for this recipient
         #[arg(long)]
@@ -872,6 +884,292 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     }
 }
 
+fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+
+    // Build the edit buffer.
+    let (header, entries) = if let Some(k) = key {
+        // Single key: just the raw value.
+        let value = if scoped {
+            current.scoped.get(k).and_then(|m| m.get(&pubkey)).cloned()
+        } else {
+            current.values.get(k).cloned()
+        };
+        let value = value.unwrap_or_else(|| {
+            die(
+                &format_args!(
+                    "key {} not found{}",
+                    k.bold(),
+                    if scoped { " (scoped)" } else { "" }
+                ),
+                1,
+            );
+        });
+        (
+            format!(
+                "# Editing {}{}\n# Save and quit to apply. Empty value or exit non-zero to abort.\n",
+                k,
+                if scoped { " (scoped)" } else { "" }
+            ),
+            vec![(k.to_string(), value)],
+        )
+    } else {
+        // All keys: KEY=VALUE format.
+        let mut entries: Vec<(String, String)> = if scoped {
+            current
+                .scoped
+                .iter()
+                .filter_map(|(k, m)| m.get(&pubkey).map(|v| (k.clone(), v.clone())))
+                .collect()
+        } else {
+            current
+                .values
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        };
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let header = format!(
+            "# Edit secrets below. Lines starting with # are ignored.\n\
+             # Format: KEY=VALUE (one per line).\n\
+             # Delete a line to remove that secret. Add KEY=VALUE to create.\n\
+             # Save and quit to apply. Exit non-zero to abort.\n{}\n",
+            if scoped {
+                "# Editing scoped overrides.\n"
+            } else {
+                ""
+            }
+        );
+        (header, entries)
+    };
+
+    let single_key = key.is_some();
+    let buffer = if single_key {
+        format!("{}{}", header, entries[0].1)
+    } else {
+        let mut buf = header;
+        for (k, v) in &entries {
+            buf.push_str(&format!("{k}={v}\n"));
+        }
+        buf
+    };
+
+    // Write to a secure tempfile.
+    let dir = std::env::temp_dir();
+    let mut tmp = tempfile::Builder::new()
+        .prefix("murk-edit-")
+        .suffix(".env")
+        .tempfile_in(&dir)
+        .unwrap_or_else(|e| die(&format_args!("creating tempfile: {e}"), 1));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tmp
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+
+    use std::io::Write;
+    tmp.write_all(buffer.as_bytes())
+        .unwrap_or_else(|e| die(&format_args!("writing tempfile: {e}"), 1));
+    tmp.flush()
+        .unwrap_or_else(|e| die(&format_args!("flushing tempfile: {e}"), 1));
+
+    // Open $EDITOR.
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "vi".into());
+
+    let path = tmp.path().to_path_buf();
+    let status = std::process::Command::new(&editor)
+        .arg(&path)
+        .status()
+        .unwrap_or_else(|e| die(&format_args!("launching {editor}: {e}"), 1));
+
+    if !status.success() {
+        // Securely wipe tempfile before exiting.
+        overwrite_and_remove(&path);
+        die(&"editor exited with error — aborting", 1);
+    }
+
+    // Read back the edited content.
+    let edited = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| die(&format_args!("reading tempfile: {e}"), 1));
+
+    // Securely wipe the tempfile (overwrite with zeros before unlinking).
+    overwrite_and_remove(&path);
+
+    // Parse and apply changes.
+    if single_key {
+        let k = key.unwrap();
+        // Strip comment header, trim trailing newline.
+        let new_value: String = edited
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new_value = new_value.trim_end_matches('\n');
+
+        if new_value.is_empty() {
+            eprintln!("{} empty value — no changes", "◆".magenta());
+            return;
+        }
+
+        let old_value = if scoped {
+            current.scoped.get(k).and_then(|m| m.get(&pubkey)).cloned()
+        } else {
+            current.values.get(k).cloned()
+        };
+
+        if old_value.as_deref() == Some(new_value) {
+            eprintln!("{} no changes", "◆".magenta());
+            return;
+        }
+
+        if scoped {
+            current
+                .scoped
+                .entry(k.into())
+                .or_default()
+                .insert(pubkey.clone(), new_value.to_string());
+        } else {
+            current.values.insert(k.into(), new_value.to_string());
+        }
+
+        save_vault(vault_path, &mut vault, &original, &current);
+        eprintln!(
+            "{} updated {}{}",
+            "◆".magenta(),
+            k.bold(),
+            if scoped { " (scoped)" } else { "" }
+        );
+    } else {
+        // Multi-key: parse KEY=VALUE lines, diff against original.
+        let mut new_entries: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for line in edited.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let (k, v) = match trimmed.split_once('=') {
+                Some((k, v)) => (k.trim(), v),
+                None => {
+                    eprintln!(
+                        "{} skipping malformed line: {}",
+                        "⚠".yellow(),
+                        trimmed.dimmed()
+                    );
+                    continue;
+                }
+            };
+            if !is_valid_key_name(k) {
+                eprintln!("{} skipping invalid key name: {}", "⚠".yellow(), k.bold());
+                continue;
+            }
+            new_entries.insert(k.to_string(), v.to_string());
+        }
+
+        // Compute diff.
+        let old_entries: std::collections::BTreeMap<String, String> = entries.into_iter().collect();
+        let mut added = 0usize;
+        let mut updated = 0usize;
+        let mut removed = 0usize;
+
+        // Add or update.
+        for (k, v) in &new_entries {
+            match old_entries.get(k) {
+                Some(old_v) if old_v == v => {} // Unchanged.
+                Some(_) => {
+                    if scoped {
+                        current
+                            .scoped
+                            .entry(k.clone())
+                            .or_default()
+                            .insert(pubkey.clone(), v.clone());
+                    } else {
+                        current.values.insert(k.clone(), v.clone());
+                    }
+                    updated += 1;
+                }
+                None => {
+                    if scoped {
+                        current
+                            .scoped
+                            .entry(k.clone())
+                            .or_default()
+                            .insert(pubkey.clone(), v.clone());
+                    } else {
+                        current.values.insert(k.clone(), v.clone());
+                    }
+                    // Ensure schema entry exists for new keys.
+                    vault
+                        .schema
+                        .entry(k.clone())
+                        .or_insert_with(|| murk_cli::types::SchemaEntry {
+                            description: String::new(),
+                            example: None,
+                            tags: vec![],
+                        });
+                    added += 1;
+                }
+            }
+        }
+
+        // Remove deleted keys.
+        for k in old_entries.keys() {
+            if !new_entries.contains_key(k) {
+                if scoped {
+                    if let Some(m) = current.scoped.get_mut(k) {
+                        m.remove(&pubkey);
+                    }
+                } else {
+                    current.values.remove(k);
+                    current.scoped.remove(k);
+                    vault.schema.remove(k);
+                }
+                removed += 1;
+            }
+        }
+
+        if added == 0 && updated == 0 && removed == 0 {
+            eprintln!("{} no changes", "◆".magenta());
+            return;
+        }
+
+        save_vault(vault_path, &mut vault, &original, &current);
+
+        let mut parts = vec![];
+        if added > 0 {
+            parts.push(format!("{added} added"));
+        }
+        if updated > 0 {
+            parts.push(format!("{updated} updated"));
+        }
+        if removed > 0 {
+            parts.push(format!("{removed} removed"));
+        }
+        eprintln!("{} {}", "◆".magenta(), parts.join(", "));
+    }
+}
+
+/// Overwrite a file with zeros and remove it.
+fn overwrite_and_remove(path: &std::path::Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        let len = meta.len() as usize;
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open(path) {
+            use std::io::Write;
+            let _ = f.write_all(&vec![0u8; len]);
+            let _ = f.sync_all();
+        }
+    }
+    let _ = std::fs::remove_file(path);
+}
+
 fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
     let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
@@ -1152,6 +1450,52 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
             summary,
             if added == 1 { "" } else { "s" }
         );
+    } else if let Some(path_hint) = pubkey.strip_prefix("ssh:") {
+        // Read SSH public key from a file.
+        let path = if path_hint.is_empty() {
+            // Default: ~/.ssh/id_ed25519.pub
+            let home = std::env::var("HOME").unwrap_or_else(|_| die(&"HOME not set", 1));
+            std::path::PathBuf::from(home).join(".ssh/id_ed25519.pub")
+        } else {
+            if path_hint.starts_with('~') {
+                let home = std::env::var("HOME").unwrap_or_else(|_| die(&"HOME not set", 1));
+                std::path::PathBuf::from(path_hint.replacen('~', &home, 1))
+            } else {
+                std::path::PathBuf::from(path_hint)
+            }
+        };
+
+        let contents = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            die(&format_args!("cannot read {}: {e}", path.display()), 1);
+        });
+        // Take first non-empty line (pub files may have trailing newlines).
+        let key_line = contents
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| die(&format_args!("empty key file: {}", path.display()), 1));
+        // Strip the comment field if present (ssh-type base64 comment).
+        let key_string = {
+            let parts: Vec<&str> = key_line.splitn(3, ' ').collect();
+            if parts.len() >= 2 {
+                format!("{} {}", parts[0], parts[1])
+            } else {
+                key_line.to_string()
+            }
+        };
+
+        try_or_die(murk_cli::authorize_recipient(
+            &mut vault,
+            &mut current,
+            &key_string,
+            name,
+        ));
+
+        save_vault(vault_path, &mut vault, &original, &current);
+
+        let display = name
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        eprintln!("{} authorized {}", "◆".magenta(), display.bold());
     } else {
         // Raw pubkey (age or SSH).
         try_or_die(murk_cli::authorize_recipient(
@@ -1537,6 +1881,7 @@ fn main() {
         } => cmd_describe(&key, &description, example.as_deref(), &tag, &vault),
         Command::Info { tag, json, vault } => cmd_info(&tag, json, &vault),
         Command::Export { tag, json, vault } => cmd_export(&tag, json, &vault),
+        Command::Edit { key, scoped, vault } => cmd_edit(key.as_deref(), scoped, &vault),
         Command::Exec {
             tag,
             vault,

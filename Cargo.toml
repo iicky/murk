@@ -37,6 +37,11 @@ constant_time_eq = "0.4"
 tempfile = "3.27.0"
 clap_complete = "4.6.0"
 fs2 = "0.4.3"
+pyo3 = { version = "0.24", features = ["extension-module"], optional = true }
+
+[features]
+default = []
+python = ["pyo3"]
 
 [dev-dependencies]
 assert_cmd = "2"

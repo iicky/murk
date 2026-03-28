@@ -1,6 +1,6 @@
 # murk
 
-[![CI](https://github.com/iicky/murk/actions/workflows/ci.yml/badge.svg)](https://github.com/iicky/murk/actions/workflows/ci.yml)
+[![CI](https://github.com/iicky/murk/actions/workflows/ci.yaml/badge.svg)](https://github.com/iicky/murk/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/iicky/murk/graph/badge.svg)](https://codecov.io/gh/iicky/murk)
 [![Crates.io](https://img.shields.io/crates/v/murk-cli)](https://crates.io/crates/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)
@@ -195,6 +195,7 @@ murk restore
 | `murk rotate --all` | Rotate all secrets (prompts for each) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
+| `murk edit [KEY] [--scoped]` | Edit secrets in `$EDITOR` |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
 | `murk exec CMD...` | Run a command with secrets in the environment |
@@ -203,7 +204,7 @@ murk restore
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
 | `murk circle` | List recipients |
-| `murk circle authorize PUBKEY [--name NAME]` | Add a recipient |
+| `murk circle authorize PUBKEY [--name NAME]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
 | `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
