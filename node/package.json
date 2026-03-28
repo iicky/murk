@@ -32,9 +32,12 @@
     "artifacts": "napi artifacts",
     "build": "napi build --platform --release",
     "prepublishOnly": "napi prepublish -t npm",
-    "test": "node __test__/index.test.mjs"
+    "test": "node __test__/index.test.mjs",
+    "lint": "biome check",
+    "format": "biome check --write"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
     "@napi-rs/cli": "^2"
   },
   "engines": {

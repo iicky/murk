@@ -1,9 +1,9 @@
+import assert from 'node:assert'
 import { execSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import assert from 'node:assert'
-import { load, get, exportAll, hasKey } from '../index.js'
+import { exportAll, get, hasKey, load } from '../index.js'
 
 // Find the murk binary.
 const murkBin = join(process.cwd(), '..', 'target', 'release', 'murk')
@@ -15,7 +15,10 @@ function setupVault() {
     execSync(cmd, {
       cwd: dir,
       input,
-      env: { ...process.env, PATH: `${join(process.cwd(), '..', 'target', 'release')}:${process.env.PATH}` },
+      env: {
+        ...process.env,
+        PATH: `${join(process.cwd(), '..', 'target', 'release')}:${process.env.PATH}`,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 
@@ -39,9 +42,24 @@ function setupVault() {
 
   // Add secrets.
   const env = { ...process.env, MURK_KEY: murkKey }
-  execSync(`${murkBin} add DATABASE_URL --vault .murk`, { cwd: dir, input: 'postgres://localhost/mydb\n', env, stdio: ['pipe', 'pipe', 'pipe'] })
-  execSync(`${murkBin} add API_KEY --vault .murk`, { cwd: dir, input: 'sk-test-123\n', env, stdio: ['pipe', 'pipe', 'pipe'] })
-  execSync(`${murkBin} add STRIPE_SECRET --vault .murk`, { cwd: dir, input: 'sk_live_abc\n', env, stdio: ['pipe', 'pipe', 'pipe'] })
+  execSync(`${murkBin} add DATABASE_URL --vault .murk`, {
+    cwd: dir,
+    input: 'postgres://localhost/mydb\n',
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  execSync(`${murkBin} add API_KEY --vault .murk`, {
+    cwd: dir,
+    input: 'sk-test-123\n',
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  execSync(`${murkBin} add STRIPE_SECRET --vault .murk`, {
+    cwd: dir,
+    input: 'sk_live_abc\n',
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
 
   return { dir, murkKey }
 }
@@ -97,9 +115,9 @@ test('vault.get returns null for missing key', () => {
 test('vault.export returns all secrets', () => {
   const vault = load()
   const secrets = vault.export()
-  assert.strictEqual(secrets['DATABASE_URL'], 'postgres://localhost/mydb')
-  assert.strictEqual(secrets['API_KEY'], 'sk-test-123')
-  assert.strictEqual(secrets['STRIPE_SECRET'], 'sk_live_abc')
+  assert.strictEqual(secrets.DATABASE_URL, 'postgres://localhost/mydb')
+  assert.strictEqual(secrets.API_KEY, 'sk-test-123')
+  assert.strictEqual(secrets.STRIPE_SECRET, 'sk_live_abc')
   assert.strictEqual(Object.keys(secrets).length, 3)
 })
 
