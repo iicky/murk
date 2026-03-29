@@ -8,6 +8,10 @@ If you find a vulnerability in the underlying cryptographic primitives, please r
 
 For a detailed analysis of what murk protects and what it doesn't, see [THREAT_MODEL.md](THREAT_MODEL.md).
 
+## Known Issues
+
+**SSH-RSA timing sidechannel (RUSTSEC-2023-0071)** — The `rsa` crate used by age's SSH-RSA support is affected by the Marvin Attack, a timing sidechannel. murk accepts `ssh-rsa` recipients via `circle authorize`, `ssh:` paths, and `github:username`. The risk is low for a local CLI (the attack requires many decryption queries against a server), but if your threat model includes timing oracles, use ed25519 keys instead of RSA. No upstream fix is available yet.
+
 ## Supply Chain
 
 Release binaries are built in GitHub Actions and include [Sigstore artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations). Verify a downloaded binary:

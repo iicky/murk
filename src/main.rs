@@ -1383,7 +1383,12 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
         HashMap::new()
     };
 
-    let entries = murk_cli::diff_secrets(&old_values, &current_murk.values);
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    let current_values: HashMap<String, String> =
+        murk_cli::resolve_secrets(&_vault, &current_murk, &pubkey, &[])
+            .into_iter()
+            .collect();
+    let entries = murk_cli::diff_secrets(&old_values, &current_values);
 
     if json {
         let list: Vec<serde_json::Value> = entries
