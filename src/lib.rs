@@ -29,6 +29,7 @@ pub(crate) mod init;
 pub(crate) mod merge;
 pub(crate) mod recipients;
 pub mod recovery;
+pub mod scan;
 pub(crate) mod secrets;
 pub mod types;
 pub mod vault;

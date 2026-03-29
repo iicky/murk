@@ -1982,62 +1982,25 @@ fn cmd_scan(paths: &[String], vault_path: &str) {
         paths.iter().map(String::as_str).collect()
     };
 
-    let mut found = 0;
+    let findings = murk_cli::scan::scan_for_leaks(&scan_paths, &secrets, 8);
 
-    for base in &scan_paths {
-        let walker = walkdir::WalkDir::new(base)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                // Skip hidden dirs, .git, target, node_modules, .murk files.
-                if e.file_type().is_dir() {
-                    return !name.starts_with('.') && name != "target" && name != "node_modules";
-                }
-                true
-            });
-
-        for entry in walker.flatten() {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-
-            // Skip binary-looking files and the vault itself.
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.ends_with(".murk") || name.ends_with(".lock") {
-                continue;
-            }
-
-            let content = match fs::read_to_string(path) {
-                Ok(c) => c,
-                Err(_) => continue, // skip binary/unreadable files
-            };
-
-            for (key, value) in &secrets {
-                if value.len() < 8 {
-                    continue; // skip short values to avoid false positives
-                }
-                if content.contains(value.as_str()) {
-                    eprintln!(
-                        "{} {} leaked in {}",
-                        "warn".yellow().bold(),
-                        key.bold(),
-                        path.display()
-                    );
-                    found += 1;
-                }
-            }
-        }
+    for f in &findings {
+        eprintln!(
+            "{} {} leaked in {}",
+            "warn".yellow().bold(),
+            f.key.bold(),
+            f.path
+        );
     }
 
-    if found == 0 {
+    if findings.is_empty() {
         eprintln!("{} no leaked secrets found", "ok".green().bold());
     } else {
         eprintln!(
-            "{} {found} leaked secret{} found",
+            "{} {} leaked secret{} found",
             "error".red().bold(),
-            if found == 1 { "" } else { "s" }
+            findings.len(),
+            if findings.len() == 1 { "" } else { "s" }
         );
         process::exit(1);
     }
