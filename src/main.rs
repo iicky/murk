@@ -1266,9 +1266,10 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
     let output = murk_cli::run_merge_driver(&base_contents, &ours_contents, &theirs_contents)
         .unwrap_or_else(|e| die(&e, 2));
 
-    if !output.meta_regenerated {
+    if !output.meta_regenerated && output.result.conflicts.is_empty() {
         // Check if the merge actually changed secrets or recipients vs ours.
         // If so, the MAC in ours.meta is stale and the vault would fail integrity checks.
+        // Skip this check when there are conflicts — the user must resolve and re-merge anyway.
         let ours_vault = vault::parse(
             &fs::read_to_string(ours_path)
                 .unwrap_or_else(|e| die(&format_args!("re-reading ours: {e}"), 2)),
