@@ -152,6 +152,7 @@ mod tests {
                 description: "postgres connection string".into(),
                 example: Some("postgres://user:pass@host/db".into()),
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -206,6 +207,7 @@ mod tests {
                 description: "last".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -214,6 +216,7 @@ mod tests {
                 description: "first".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 

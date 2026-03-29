@@ -241,6 +241,7 @@ mod tests {
                 description: "database url".into(),
                 example: Some("postgres://...".into()),
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         let bytes = test_vault_bytes(schema);
@@ -265,6 +266,7 @@ mod tests {
                 description: "db".into(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         schema.insert(
@@ -273,6 +275,7 @@ mod tests {
                 description: "api".into(),
                 example: None,
                 tags: vec!["api".into()],
+                ..Default::default()
             },
         );
         let bytes = test_vault_bytes(schema);

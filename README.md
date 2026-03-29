@@ -203,7 +203,7 @@ murk restore
 | `murk edit [KEY] [--scoped]` | Edit secrets in `$EDITOR` |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
-| `murk exec CMD...` | Run a command with secrets in the environment |
+| `murk exec CMD...` | Run a command with secrets in the environment (`--only`, `--clean-env`) |
 | `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |
 | `murk describe KEY "..."` | Set description for a key |
@@ -211,6 +211,7 @@ murk restore
 | `murk circle` | List recipients |
 | `murk circle authorize PUBKEY [--name NAME]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
+| `murk scan [PATHS...]` | Scan files for leaked secret values |
 | `murk skeleton` | Export schema-only vault with no secrets or recipients |
 | `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |

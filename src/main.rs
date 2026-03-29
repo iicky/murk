@@ -209,9 +209,15 @@ enum Command {
     /// Run a command with secrets injected as environment variables
     #[command(trailing_var_arg = true)]
     Exec {
+        /// Only inject these specific keys (repeatable)
+        #[arg(long)]
+        only: Vec<String>,
         /// Filter by tag (repeatable)
         #[arg(long)]
         tag: Vec<String>,
+        /// Strip inherited environment (only murk secrets + PATH)
+        #[arg(long)]
+        clean_env: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -306,6 +312,15 @@ enum Command {
         /// Output file (prints to stdout if omitted)
         #[arg(long, short)]
         output: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Scan files for leaked secret values
+    Scan {
+        /// Files or directories to scan (defaults to current directory)
+        paths: Vec<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -1149,11 +1164,7 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                     vault
                         .schema
                         .entry(k.clone())
-                        .or_insert_with(|| murk_cli::types::SchemaEntry {
-                            description: String::new(),
-                            example: None,
-                            tags: vec![],
-                        });
+                        .or_insert_with(murk_cli::types::SchemaEntry::default);
                     added += 1;
                 }
             }
@@ -1209,35 +1220,66 @@ fn overwrite_and_remove(path: &std::path::Path) {
     let _ = std::fs::remove_file(path);
 }
 
-fn cmd_exec(command: &[String], tags: &[String], vault_path: &str) {
+fn cmd_exec(
+    command: &[String],
+    only: &[String],
+    tags: &[String],
+    clean_env: bool,
+    vault_path: &str,
+) {
     let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
-    let secrets = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+    let mut secrets = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+
+    // Filter to specific keys if --only is provided.
+    if !only.is_empty() {
+        secrets.retain(|k, _| only.contains(k));
+        for key in only {
+            if !secrets.contains_key(key) {
+                die(&format_args!("key not found: {key}"), 1);
+            }
+        }
+    }
 
     let program = &command[0];
     let args = &command[1..];
 
+    let build_cmd = |cmd: &mut process::Command| {
+        if clean_env {
+            cmd.env_clear();
+            // Preserve essential vars for the subprocess to function.
+            if let Ok(path) = std::env::var("PATH") {
+                cmd.env("PATH", path);
+            }
+            if let Ok(home) = std::env::var("HOME") {
+                cmd.env("HOME", home);
+            }
+            if let Ok(term) = std::env::var("TERM") {
+                cmd.env("TERM", term);
+            }
+        } else {
+            cmd.env_remove("MURK_KEY");
+            cmd.env_remove("MURK_KEY_FILE");
+        }
+        cmd.envs(&secrets);
+    };
+
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = process::Command::new(program)
-            .args(args)
-            .env_remove("MURK_KEY")
-            .env_remove("MURK_KEY_FILE")
-            .envs(&secrets)
-            .exec();
+        let mut cmd = process::Command::new(program);
+        cmd.args(args);
+        build_cmd(&mut cmd);
+        let err = cmd.exec();
         die(&err, 1);
     }
 
     #[cfg(not(unix))]
     {
-        let status = process::Command::new(program)
-            .args(args)
-            .env_remove("MURK_KEY")
-            .env_remove("MURK_KEY_FILE")
-            .envs(&secrets)
-            .status()
-            .unwrap_or_else(|e| die(&e, 1));
+        let mut cmd = process::Command::new(program);
+        cmd.args(args);
+        build_cmd(&mut cmd);
+        let status = cmd.status().unwrap_or_else(|e| die(&e, 1));
         process::exit(status.code().unwrap_or(1));
     }
 }
@@ -1924,6 +1966,83 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
     }
 }
 
+fn cmd_scan(paths: &[String], vault_path: &str) {
+    let (vault, murk, identity) = load_vault(vault_path);
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    let secrets = murk_cli::resolve_secrets(&vault, &murk, &pubkey, &[]);
+
+    if secrets.is_empty() {
+        eprintln!("{} no secrets to scan for", "ok".green().bold());
+        return;
+    }
+
+    let scan_paths: Vec<&str> = if paths.is_empty() {
+        vec!["."]
+    } else {
+        paths.iter().map(String::as_str).collect()
+    };
+
+    let mut found = 0;
+
+    for base in &scan_paths {
+        let walker = walkdir::WalkDir::new(base)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                // Skip hidden dirs, .git, target, node_modules, .murk files.
+                if e.file_type().is_dir() {
+                    return !name.starts_with('.') && name != "target" && name != "node_modules";
+                }
+                true
+            });
+
+        for entry in walker.flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+
+            // Skip binary-looking files and the vault itself.
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.ends_with(".murk") || name.ends_with(".lock") {
+                continue;
+            }
+
+            let content = match fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue, // skip binary/unreadable files
+            };
+
+            for (key, value) in &secrets {
+                if value.len() < 8 {
+                    continue; // skip short values to avoid false positives
+                }
+                if content.contains(value.as_str()) {
+                    eprintln!(
+                        "{} {} leaked in {}",
+                        "warn".yellow().bold(),
+                        key.bold(),
+                        path.display()
+                    );
+                    found += 1;
+                }
+            }
+        }
+    }
+
+    if found == 0 {
+        eprintln!("{} no leaked secrets found", "ok".green().bold());
+    } else {
+        eprintln!(
+            "{} {found} leaked secret{} found",
+            "error".red().bold(),
+            if found == 1 { "" } else { "s" }
+        );
+        process::exit(1);
+    }
+}
+
 fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
 
@@ -2005,10 +2124,12 @@ fn main() {
         Command::Export { tag, json, vault } => cmd_export(&tag, json, &vault),
         Command::Edit { key, scoped, vault } => cmd_edit(key.as_deref(), scoped, &vault),
         Command::Exec {
+            only,
             tag,
+            clean_env,
             vault,
             command,
-        } => cmd_exec(&command, &tag, &vault),
+        } => cmd_exec(&command, &only, &tag, clean_env, &vault),
         Command::Authorize {
             pubkey,
             name,
@@ -2044,6 +2165,7 @@ fn main() {
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
         Command::Verify { vault } => cmd_verify(&vault),
         Command::Skeleton { output, vault } => cmd_skeleton(output.as_deref(), &vault),
+        Command::Scan { paths, vault } => cmd_scan(&paths, &vault),
         Command::Completion { shell } => cmd_completion(shell),
     }
 }
