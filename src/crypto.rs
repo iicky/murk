@@ -27,6 +27,15 @@ pub enum MurkRecipient {
     Ssh(age::ssh::Recipient),
 }
 
+impl std::fmt::Debug for MurkRecipient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MurkRecipient::Age(r) => write!(f, "Age({r})"),
+            MurkRecipient::Ssh(r) => write!(f, "Ssh({r})"),
+        }
+    }
+}
+
 impl MurkRecipient {
     /// Borrow as a trait object for passing to age's encryptor.
     pub fn as_dyn(&self) -> &dyn age::Recipient {
