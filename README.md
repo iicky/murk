@@ -3,6 +3,7 @@
 [![CI](https://github.com/iicky/murk/actions/workflows/ci.yaml/badge.svg)](https://github.com/iicky/murk/actions/workflows/ci.yaml)
 [![codecov](https://codecov.io/gh/iicky/murk/graph/badge.svg)](https://codecov.io/gh/iicky/murk)
 [![Crates.io](https://img.shields.io/crates/v/murk-cli)](https://crates.io/crates/murk-cli)
+[![docs.rs](https://img.shields.io/docsrs/murk-cli)](https://docs.rs/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)
 
 Encrypted secrets manager for developers. One key unlocks everything.
@@ -206,6 +207,7 @@ murk restore
 | `murk circle` | List recipients |
 | `murk circle authorize PUBKEY [--name NAME]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
+| `murk skeleton` | Export schema-only vault with no secrets or recipients |
 | `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
 
@@ -247,6 +249,8 @@ See [SPEC.md](SPEC.md) for the full specification.
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for the full threat model.
+
+**AI agents** — if you're using murk with AI coding agents, see [docs/ai-agents.md](docs/ai-agents.md) for safe patterns.
 
 ## License
 

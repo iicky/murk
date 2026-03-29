@@ -3,8 +3,7 @@ use murk_cli::{
     vault,
 };
 
-use std::collections::HashMap;
-use std::env;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
@@ -53,6 +52,9 @@ enum Command {
         /// Path to the .env file to import
         #[arg(default_value = ".env")]
         file: String,
+        /// Overwrite existing secrets without prompting
+        #[arg(long)]
+        force: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -294,6 +296,16 @@ enum Command {
 
     /// Verify vault integrity without exporting secrets
     Verify {
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Export schema-only vault with no secrets or recipients
+    Skeleton {
+        /// Output file (prints to stdout if omitted)
+        #[arg(long, short)]
+        output: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -606,7 +618,7 @@ fn cmd_add(
     save_vault(vault_path, &mut vault, &original, &current);
 }
 
-fn cmd_import(file: &str, vault_path: &str) {
+fn cmd_import(file: &str, force: bool, vault_path: &str) {
     let contents = fs::read_to_string(file)
         .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1));
 
@@ -649,6 +661,28 @@ fn cmd_import(file: &str, vault_path: &str) {
     let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
+
+    // Check for collisions with existing secrets.
+    if !force {
+        let collisions: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| current.values.contains_key(k))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        if !collisions.is_empty() {
+            for key in &collisions {
+                eprintln!("{} {} already exists", "warn".yellow().bold(), key.bold());
+            }
+            die(
+                &format_args!(
+                    "{} existing secret{} would be overwritten. Use --force to overwrite",
+                    collisions.len(),
+                    if collisions.len() == 1 { "" } else { "s" }
+                ),
+                1,
+            );
+        }
+    }
 
     let imported = murk_cli::import_secrets(&mut vault, &mut current, &pairs);
 
@@ -866,14 +900,15 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
-    let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
     if json {
-        let map: serde_json::Map<String, serde_json::Value> = exports
+        let raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        let map: serde_json::Map<String, serde_json::Value> = raw
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
         println!("{}", serde_json::to_string_pretty(&map).unwrap());
     } else {
+        let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
         for (k, escaped) in &exports {
             if !is_valid_key_name(k) {
                 eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
@@ -1231,10 +1266,34 @@ fn cmd_merge_driver(base_path: &str, ours_path: &str, theirs_path: &str) {
     let output = murk_cli::run_merge_driver(&base_contents, &ours_contents, &theirs_contents)
         .unwrap_or_else(|e| die(&e, 2));
 
-    if !output.meta_regenerated {
+    if !output.meta_regenerated && output.result.conflicts.is_empty() {
+        // Check if the merge actually changed secrets or recipients vs ours.
+        // If so, the MAC in ours.meta is stale and the vault would fail integrity checks.
+        // Skip this check when there are conflicts — the user must resolve and re-merge anyway.
+        let ours_vault = vault::parse(
+            &fs::read_to_string(ours_path)
+                .unwrap_or_else(|e| die(&format_args!("re-reading ours: {e}"), 2)),
+        )
+        .unwrap_or_else(|e| die(&e, 2));
+
+        let content_changed = output.result.vault.secrets != ours_vault.secrets
+            || output.result.vault.recipients != ours_vault.recipients;
+
+        if content_changed {
+            eprintln!(
+                "{} MURK_KEY not available and merge changed secrets/recipients",
+                "error".red().bold()
+            );
+            eprintln!(
+                "  {}",
+                "set MURK_KEY and retry the merge to regenerate integrity metadata".dimmed()
+            );
+            process::exit(1);
+        }
+
         eprintln!(
-            "{} MURK_KEY not available — meta not regenerated. Run any murk write command to fix",
-            "⚠".yellow()
+            "{} MURK_KEY not available — meta not regenerated (content unchanged, safe to proceed)",
+            "warn".yellow().bold()
         );
     }
 
@@ -1565,7 +1624,9 @@ fn cmd_recipients(json: bool, vault_path: &str) {
     let path = Path::new(vault_path);
     let vault = try_or_die(vault::read(path));
 
-    let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
+    let secret_key = murk_cli::resolve_key_for_vault(vault_path)
+        .ok()
+        .map(|s| s.expose_secret().to_string());
     let entries = murk_cli::list_recipients(&vault, secret_key.as_deref());
 
     if json {
@@ -1688,7 +1749,9 @@ fn cmd_recover() {
 
 fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
     let raw_bytes = fs::read(vault_path).unwrap_or_else(|e| die(&e, 1));
-    let secret_key = env::var("MURK_KEY").ok().filter(|k| !k.is_empty());
+    let secret_key = murk_cli::resolve_key_for_vault(vault_path)
+        .ok()
+        .map(|s| s.expose_secret().to_string());
     let info = try_or_die(murk_cli::vault_info(
         &raw_bytes,
         tags,
@@ -1709,7 +1772,7 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
                 })
             })
             .collect();
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "vault_name": info.vault_name,
             "codename": info.codename,
             "repo": info.repo,
@@ -1717,6 +1780,9 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
             "recipient_count": info.recipient_count,
             "entries": entries,
         });
+        if !info.recipient_names.is_empty() {
+            out["recipient_names"] = serde_json::json!(info.recipient_names);
+        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
     }
@@ -1733,6 +1799,12 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
     }
     println!("   {}     {}", "created".dimmed(), info.created);
     println!("   {}  {}", "recipients".dimmed(), info.recipient_count);
+
+    if !info.recipient_names.is_empty() {
+        for name in &info.recipient_names {
+            println!("   {}  {}", " ".repeat(10), name.green().bold());
+        }
+    }
 
     if info.entries.is_empty() {
         println!();
@@ -1764,8 +1836,9 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
 
     let has_meta = secret_key.is_some();
 
-    // Tag and scoped columns only when unlocked.
-    let tag_width = if has_meta {
+    // Tags are always public — show them regardless of key.
+    let any_tags = info.entries.iter().any(|e| !e.tags.is_empty());
+    let tag_width = if any_tags {
         info.entries
             .iter()
             .map(|e| {
@@ -1793,36 +1866,59 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
 
-        if has_meta {
-            let tag_str = if entry.tags.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", entry.tags.join(", "))
-            };
-            let tag_padded = format!("{tag_str:<tag_width$}");
-
-            let scoped_str = if entry.scoped_recipients.is_empty() {
-                String::new()
-            } else {
-                format!("✦ {}", entry.scoped_recipients.join(", "))
-            };
-
-            println!(
-                "   {}  {}  {}  {}  {}",
-                key_padded.magenta().dimmed().bold(),
-                desc_padded,
-                ex_padded.dimmed(),
-                tag_padded.yellow(),
-                scoped_str.dimmed()
-            );
+        let tag_str = if entry.tags.is_empty() {
+            String::new()
         } else {
-            println!(
-                "   {}  {}  {}",
-                key_padded.magenta().dimmed().bold(),
-                desc_padded,
-                ex_padded.dimmed()
-            );
+            format!("[{}]", entry.tags.join(", "))
+        };
+        let tag_padded = if any_tags {
+            format!("  {tag_str:<tag_width$}")
+        } else {
+            String::new()
+        };
+
+        // Scoped recipients only shown when meta is available.
+        let scoped_str = if has_meta && !entry.scoped_recipients.is_empty() {
+            format!(
+                "  {}",
+                format!("✦ {}", entry.scoped_recipients.join(", ")).dimmed()
+            )
+        } else {
+            String::new()
+        };
+
+        println!(
+            "   {}  {}  {}{}{}",
+            key_padded.magenta().dimmed().bold(),
+            desc_padded,
+            ex_padded.dimmed(),
+            tag_padded.yellow(),
+            scoped_str
+        );
+    }
+}
+
+fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
+    let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
+
+    let skeleton = murk_cli::types::Vault {
+        version: vault.version,
+        created: vault.created,
+        vault_name: vault.vault_name,
+        repo: vault.repo,
+        recipients: Vec::new(),
+        schema: vault.schema,
+        secrets: BTreeMap::new(),
+        meta: String::new(),
+    };
+
+    let json = serde_json::to_string_pretty(&skeleton).unwrap();
+    match output {
+        Some(path) => {
+            fs::write(path, format!("{json}\n")).unwrap_or_else(|e| die(&e, 1));
+            eprintln!("{} wrote skeleton to {}", "ok".green().bold(), path.bold());
         }
+        None => println!("{json}"),
     }
 }
 
@@ -1842,7 +1938,7 @@ fn main() {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
         Command::Restore => cmd_restore(),
-        Command::Import { file, vault } => cmd_import(&file, &vault),
+        Command::Import { file, force, vault } => cmd_import(&file, force, &vault),
         Command::Add {
             key,
             desc,
@@ -1921,6 +2017,7 @@ fn main() {
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
         Command::Verify { vault } => cmd_verify(&vault),
+        Command::Skeleton { output, vault } => cmd_skeleton(output.as_deref(), &vault),
         Command::Completion { shell } => cmd_completion(shell),
     }
 }

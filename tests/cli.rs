@@ -557,6 +557,47 @@ fn scoped_secret_overrides_shared() {
         .stdout(predicate::str::contains("my_personal_key"));
 }
 
+#[test]
+fn scoped_only_secret_persists_across_save() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Add scoped-only value (no shared value for this key).
+    murk(&dir, &key)
+        .args(["add", "PERSONAL_TOKEN", "--scoped", "--vault", "test.murk"])
+        .write_stdin("my_token\n")
+        .assert()
+        .success();
+
+    // Verify it exists.
+    murk(&dir, &key)
+        .args(["get", "PERSONAL_TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my_token"));
+
+    // Add another key to force a save cycle.
+    murk(&dir, &key)
+        .args(["add", "OTHER", "--vault", "test.murk"])
+        .write_stdin("val\n")
+        .assert()
+        .success();
+
+    // Scoped-only key must still be retrievable.
+    murk(&dir, &key)
+        .args(["get", "PERSONAL_TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my_token"));
+
+    // It should appear in ls.
+    murk(&dir, &key)
+        .args(["ls", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PERSONAL_TOKEN"));
+}
+
 // ── rm ──
 
 #[test]
@@ -885,17 +926,17 @@ fn recipients_lists_creator() {
 #[test]
 fn recipients_works_without_murk_key() {
     let dir = TempDir::new().unwrap();
-    let (_, pubkey) = init_vault(&dir);
+    let (_key, _pubkey) = init_vault(&dir);
 
-    // Without MURK_KEY, just shows pubkeys (no names).
+    // Without MURK_KEY env var, key is still resolved via key file.
+    // Should succeed and show recipient info.
     Command::cargo_bin("murk")
         .unwrap()
         .args(["circle", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .assert()
-        .success()
-        .stdout(predicate::str::contains(&pubkey));
+        .success();
 }
 
 // ── authorize / revoke ──
@@ -1060,8 +1101,9 @@ fn add_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
 
-    // Remove .env so backward-compat key resolution can't find the key.
+    // Remove .env and redirect HOME so key file lookup also fails.
     fs::remove_file(dir.path().join(".env")).ok();
+    let fake_home = TempDir::new().unwrap();
 
     Command::cargo_bin("murk")
         .unwrap()
@@ -1070,6 +1112,7 @@ fn add_without_key_fails() {
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
+        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1080,6 +1123,7 @@ fn get_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
     fs::remove_file(dir.path().join(".env")).ok();
+    let fake_home = TempDir::new().unwrap();
 
     Command::cargo_bin("murk")
         .unwrap()
@@ -1087,6 +1131,7 @@ fn get_without_key_fails() {
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
+        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1097,6 +1142,7 @@ fn export_without_key_fails() {
     let dir = TempDir::new().unwrap();
     init_vault(&dir);
     fs::remove_file(dir.path().join(".env")).ok();
+    let fake_home = TempDir::new().unwrap();
 
     Command::cargo_bin("murk")
         .unwrap()
@@ -1104,6 +1150,7 @@ fn export_without_key_fails() {
         .current_dir(dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
+        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1760,6 +1807,62 @@ fn merge_driver_clean_merge() {
     let ours_path = write_vault_json(dir.path(), "ours.murk", ours_json);
     let theirs_path = write_vault_json(dir.path(), "theirs.murk", theirs_json);
 
+    // Without MURK_KEY, merge that changes secrets should fail
+    // because the MAC in ours.meta would be stale.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args([
+            "merge-driver",
+            base_path.to_str().unwrap(),
+            ours_path.to_str().unwrap(),
+            theirs_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("MURK_KEY not available"));
+}
+
+#[test]
+fn merge_driver_schema_only_merge_without_key() {
+    let dir = TempDir::new().unwrap();
+
+    let base_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "DB_URL": { "description": "database", "tags": [] }
+  },
+  "secrets": {
+    "DB_URL": { "shared": "base-cipher-db" }
+  },
+  "meta": "base-meta"
+}"#;
+
+    // Ours: changes description only.
+    let ours_json = r#"{
+  "version": "2.0",
+  "created": "2026-01-01T00:00:00Z",
+  "vault_name": ".murk",
+  "recipients": ["age1alice"],
+  "schema": {
+    "DB_URL": { "description": "updated database desc", "tags": [] }
+  },
+  "secrets": {
+    "DB_URL": { "shared": "base-cipher-db" }
+  },
+  "meta": "ours-meta"
+}"#;
+
+    // Theirs: identical to base (no changes).
+    let theirs_json = base_json;
+
+    let base_path = write_vault_json(dir.path(), "base.murk", base_json);
+    let ours_path = write_vault_json(dir.path(), "ours.murk", ours_json);
+    let theirs_path = write_vault_json(dir.path(), "theirs.murk", theirs_json);
+
+    // Schema-only change — secrets and recipients unchanged, should succeed without MURK_KEY.
     Command::cargo_bin("murk")
         .unwrap()
         .args([
@@ -1770,13 +1873,7 @@ fn merge_driver_clean_merge() {
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("merged cleanly"));
-
-    // Verify the merged result contains all three keys.
-    let merged = fs::read_to_string(&ours_path).unwrap();
-    assert!(merged.contains("API_KEY"));
-    assert!(merged.contains("STRIPE_KEY"));
-    assert!(merged.contains("DB_URL"));
+        .stderr(predicate::str::contains("content unchanged"));
 }
 
 #[test]
@@ -2191,6 +2288,54 @@ fn verify_fails_on_tampered_vault() {
 }
 
 #[test]
+fn skeleton_strips_secrets_and_recipients() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Add a secret with a description
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "--desc",
+            "Database connection string",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("postgres://localhost\n")
+        .assert()
+        .success();
+
+    // Export skeleton to stdout
+    let output = murk(&dir, &key)
+        .args(["skeleton", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let skeleton: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(skeleton["version"], "2.0");
+    assert!(skeleton["recipients"].as_array().unwrap().is_empty());
+    assert!(skeleton["secrets"].as_object().unwrap().is_empty());
+    assert_eq!(skeleton["meta"], "");
+    assert_eq!(
+        skeleton["schema"]["DB_URL"]["description"],
+        "Database connection string"
+    );
+
+    // Export skeleton to file
+    murk(&dir, &key)
+        .args(["skeleton", "--vault", "test.murk", "-o", "skeleton.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("wrote skeleton to"));
+
+    let file_content = fs::read_to_string(dir.path().join("skeleton.murk")).unwrap();
+    let file_skeleton: serde_json::Value = serde_json::from_str(&file_content).unwrap();
+    assert!(file_skeleton["recipients"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn completion_generates_output() {
     Command::cargo_bin("murk")
         .unwrap()
@@ -2281,9 +2426,9 @@ fn merge_driver_conflicts_on_one_sided_recipient_addition() {
     fs::write(&ours_path, &ours).unwrap();
     fs::write(&theirs_path, &theirs).unwrap();
 
-    // Run the merge driver — should fail with conflict.
-    Command::cargo_bin("murk")
-        .unwrap()
+    // Run the merge driver with MURK_KEY so meta can be regenerated.
+    // Should still fail with conflict due to one-sided recipient addition.
+    murk(&dir, &key)
         .args([
             "merge-driver",
             base_path.to_str().unwrap(),

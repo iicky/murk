@@ -43,8 +43,8 @@ pub mod testutil;
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{
     EnvrcStatus, dotenv_has_murk_key, key_file_path, parse_env, read_key_from_dotenv, resolve_key,
-    warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
-    write_key_to_file,
+    resolve_key_for_vault, warn_env_permissions, write_envrc, write_key_ref_to_dotenv,
+    write_key_to_dotenv, write_key_to_file,
 };
 pub use error::MurkError;
 pub use export::{
@@ -62,7 +62,7 @@ pub use recipients::{
 };
 pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_keys, remove_secret};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 /// Check whether a key name is a valid shell identifier (safe for `export KEY=...`).
@@ -136,34 +136,8 @@ pub fn decrypt_vault(
 ) -> Result<types::Murk, MurkError> {
     let pubkey = identity.pubkey_string()?;
 
-    // Decrypt shared values.
-    let mut values = HashMap::new();
-    for (key, entry) in &vault.secrets {
-        let plaintext = decrypt_value(&entry.shared, identity).map_err(|_| {
-            MurkError::Crypto(crypto::CryptoError::Decrypt(
-                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
-            ))
-        })?;
-        let value = String::from_utf8(plaintext)
-            .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
-        values.insert(key.clone(), value);
-    }
-
-    // Decrypt our scoped (mote) overrides.
-    let mut scoped = HashMap::new();
-    for (key, entry) in &vault.secrets {
-        if let Some(encoded) = entry.scoped.get(&pubkey)
-            && let Ok(value) = decrypt_value(encoded, identity)
-                .and_then(|pt| String::from_utf8(pt).map_err(|e| MurkError::Secret(e.to_string())))
-        {
-            scoped
-                .entry(key.clone())
-                .or_insert_with(HashMap::new)
-                .insert(pubkey.clone(), value);
-        }
-    }
-
-    // Decrypt meta for recipient names and validate integrity MAC.
+    // Verify integrity BEFORE decrypting secrets — a tampered vault should fail
+    // with an integrity error, not a misleading "you are not a recipient" message.
     let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
         Some(meta) if !meta.mac.is_empty() => {
             let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
@@ -191,6 +165,36 @@ pub fn decrypt_vault(
         }
     };
 
+    // Decrypt shared values (skip scoped-only entries with empty shared ciphertext).
+    let mut values = HashMap::new();
+    for (key, entry) in &vault.secrets {
+        if entry.shared.is_empty() {
+            continue;
+        }
+        let plaintext = decrypt_value(&entry.shared, identity).map_err(|_| {
+            MurkError::Crypto(crypto::CryptoError::Decrypt(
+                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
+            ))
+        })?;
+        let value = String::from_utf8(plaintext)
+            .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
+        values.insert(key.clone(), value);
+    }
+
+    // Decrypt our scoped (mote) overrides.
+    let mut scoped = HashMap::new();
+    for (key, entry) in &vault.secrets {
+        if let Some(encoded) = entry.scoped.get(&pubkey)
+            && let Ok(value) = decrypt_value(encoded, identity)
+                .and_then(|pt| String::from_utf8(pt).map_err(|e| MurkError::Secret(e.to_string())))
+        {
+            scoped
+                .entry(key.clone())
+                .or_insert_with(HashMap::new)
+                .insert(pubkey.clone(), value);
+        }
+    }
+
     Ok(types::Murk {
         values,
         recipients,
@@ -205,7 +209,7 @@ pub fn decrypt_vault(
 pub fn load_vault(
     vault_path: &str,
 ) -> Result<(types::Vault, types::Murk, crypto::MurkIdentity), MurkError> {
-    let secret_key = resolve_key().map_err(MurkError::Key)?;
+    let secret_key = env::resolve_key_for_vault(vault_path).map_err(MurkError::Key)?;
 
     let identity = crypto::parse_identity(secret_key.expose_secret()).map_err(|e| {
         MurkError::Key(format!(
@@ -240,15 +244,24 @@ pub fn save_vault(
 
     let mut new_secrets = BTreeMap::new();
 
-    for (key, value) in &current.values {
-        let shared = if !recipients_changed && original.values.get(key) == Some(value) {
-            if let Some(existing) = vault.secrets.get(key) {
-                existing.shared.clone()
+    // Collect all keys with a shared or scoped value.
+    let mut all_keys: BTreeSet<&String> = current.values.keys().collect();
+    all_keys.extend(current.scoped.keys());
+
+    for key in all_keys {
+        let shared = if let Some(value) = current.values.get(key) {
+            if !recipients_changed && original.values.get(key) == Some(value) {
+                if let Some(existing) = vault.secrets.get(key) {
+                    existing.shared.clone()
+                } else {
+                    encrypt_value(value.as_bytes(), &recipients)?
+                }
             } else {
                 encrypt_value(value.as_bytes(), &recipients)?
             }
         } else {
-            encrypt_value(value.as_bytes(), &recipients)?
+            // Scoped-only key — no shared ciphertext.
+            String::new()
         };
 
         let mut scoped = vault
@@ -1066,9 +1079,13 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected load_vault to fail for non-recipient"),
         };
+        // Non-recipient can't decrypt meta, so integrity check fails first.
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("decryption failed"),
-            "expected decryption failure, got: {err}"
+            msg.contains("decryption failed")
+                || msg.contains("no meta")
+                || msg.contains("tampered"),
+            "expected decryption or integrity failure, got: {err}"
         );
 
         fs::remove_dir_all(&dir).unwrap();
