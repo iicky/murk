@@ -18,6 +18,29 @@ pub(crate) fn reject_symlink(path: &Path, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Read a file, rejecting symlinks and (on Unix) group/world-readable permissions.
+/// Returns the file contents as a string.
+fn read_secret_file(path: &Path, label: &str) -> Result<String, String> {
+    reject_symlink(path, label)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mode = meta.mode();
+            if mode & WORLD_READABLE_MASK != 0 {
+                return Err(format!(
+                    "{label} is readable by others (mode {:o}). Run: chmod 600 {}",
+                    mode & 0o777,
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    fs::read_to_string(path).map_err(|e| format!("cannot read {label}: {e}"))
+}
+
 /// Environment variable for the secret key.
 pub const ENV_MURK_KEY: &str = "MURK_KEY";
 /// Environment variable for the secret key file path.
@@ -60,21 +83,19 @@ pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
     // 2. Key file env var.
     if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
         let p = std::path::Path::new(&path);
-        if p.is_symlink() {
-            return Err("MURK_KEY_FILE is a symlink — refusing to follow for security".into());
-        }
-        return fs::read_to_string(p)
-            .map(|contents| SecretString::from(contents.trim().to_string()))
-            .map_err(|e| format!("cannot read key file: {e}"));
+        let contents = read_secret_file(p, "MURK_KEY_FILE")?;
+        return Ok(SecretString::from(contents.trim().to_string()));
     }
     // 3. Key file for the specified vault.
     if let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists()) {
-        return fs::read_to_string(&path)
-            .map(|contents| SecretString::from(contents.trim().to_string()))
-            .map_err(|e| format!("cannot read key file: {e}"));
+        let contents = read_secret_file(&path, "key file")?;
+        return Ok(SecretString::from(contents.trim().to_string()));
     }
-    // 4. Backward compat: read from .env file.
+    // 4. Backward compat: read from .env file (deprecated).
     if let Some(key) = read_key_from_dotenv() {
+        eprintln!(
+            "\x1b[1;33mwarn\x1b[0m reading key from .env is deprecated — use MURK_KEY_FILE or `murk init` instead"
+        );
         return Ok(SecretString::from(key));
     }
     Err(
@@ -143,26 +164,35 @@ pub fn warn_env_permissions() {
 
 /// Read MURK_KEY from `.env` file if present.
 ///
-/// Checks for both `export MURK_KEY=...` and `MURK_KEY=...` forms.
-/// Returns the key value or `None` if not found.
+/// Supports `MURK_KEY_FILE=path` references (preferred) and legacy inline
+/// `MURK_KEY=value` (deprecated — logs a warning).
 pub fn read_key_from_dotenv() -> Option<String> {
-    let contents = fs::read_to_string(".env").ok()?;
+    let env_path = Path::new(".env");
+    let contents = fs::read_to_string(env_path).ok()?;
     for line in contents.lines() {
         let trimmed = line.trim();
-        // Direct key: MURK_KEY=AGE-SECRET-KEY-...
+        // Key file reference (preferred path).
+        if let Some(path_str) = trimmed
+            .strip_prefix("export MURK_KEY_FILE=")
+            .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
+        {
+            let p = Path::new(path_str.trim());
+            if let Ok(contents) = read_secret_file(p, "MURK_KEY_FILE from .env") {
+                return Some(contents.trim().to_string());
+            }
+        }
+        // Inline key (deprecated — still accepted for backward compat).
         if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
+            eprintln!(
+                "\x1b[1;33mwarn\x1b[0m inline MURK_KEY in .env is deprecated — use MURK_KEY_FILE instead"
+            );
             return Some(key.to_string());
         }
         if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
+            eprintln!(
+                "\x1b[1;33mwarn\x1b[0m inline MURK_KEY in .env is deprecated — use MURK_KEY_FILE instead"
+            );
             return Some(key.to_string());
-        }
-        // Key file reference: MURK_KEY_FILE=~/.config/murk/keys/...
-        if let Some(contents) = trimmed
-            .strip_prefix("export MURK_KEY_FILE=")
-            .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
-            .and_then(|p| fs::read_to_string(p.trim()).ok())
-        {
-            return Some(contents.trim().to_string());
         }
     }
     None
@@ -535,7 +565,22 @@ mod tests {
         unsafe { env::remove_var("MURK_KEY") };
 
         let path = std::env::temp_dir().join("murk_test_key_file");
-        std::fs::write(&path, "AGE-SECRET-KEY-1FROMFILE\n").unwrap();
+        {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .unwrap();
+                std::io::Write::write_all(&mut f, b"AGE-SECRET-KEY-1FROMFILE\n").unwrap();
+            }
+            #[cfg(not(unix))]
+            std::fs::write(&path, "AGE-SECRET-KEY-1FROMFILE\n").unwrap();
+        }
 
         unsafe { env::set_var("MURK_KEY_FILE", path.to_str().unwrap()) };
         let result = resolve_key();
@@ -558,7 +603,7 @@ mod tests {
         resolve_key_sandbox_teardown(&tmp, &prev);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot read key file"));
+        assert!(result.unwrap_err().contains("cannot read"));
     }
 
     #[test]
