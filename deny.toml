@@ -1,8 +1,11 @@
 [advisories]
 yanked = "warn"
 ignore = [
-    # rsa timing sidechannel (Marvin Attack) — no fix available.
-    # Only reachable via age's SSH-RSA recipient support; murk prefers ed25519.
+    # rsa timing sidechannel (Marvin Attack) — no fix available upstream.
+    # Reachable: murk accepts ssh-rsa recipients via `circle authorize`, `ssh:`,
+    # and `github:username`. Risk is low (timing oracle requires many decryption
+    # queries against a server; murk is a local CLI). Prefer ed25519 keys.
+    # Revisit when the rsa crate ships a fix.
     "RUSTSEC-2023-0071",
 ]
 
