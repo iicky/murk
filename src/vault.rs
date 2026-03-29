@@ -82,6 +82,15 @@ fn lock_path(vault_path: &Path) -> PathBuf {
 /// read-modify-write cycles to prevent concurrent writes from losing changes.
 pub fn lock(vault_path: &Path) -> Result<VaultLock, VaultError> {
     let lp = lock_path(vault_path);
+    if lp.is_symlink() {
+        return Err(VaultError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "lock file is a symlink — refusing to follow: {}",
+                lp.display()
+            ),
+        )));
+    }
     let file = File::create(&lp)?;
     file.lock_exclusive().map_err(|e| {
         VaultError::Io(std::io::Error::new(
