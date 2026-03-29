@@ -24,6 +24,8 @@ pub struct VaultInfo {
     pub repo: String,
     pub created: String,
     pub recipient_count: usize,
+    /// Recipient display names (populated when key is available).
+    pub recipient_names: Vec<String>,
     pub entries: Vec<InfoEntry>,
 }
 
@@ -91,12 +93,28 @@ pub fn vault_info(
         })
         .collect();
 
+    // Build recipient name list when meta is available.
+    let recipient_names = if let Some(ref meta) = meta_data {
+        vault
+            .recipients
+            .iter()
+            .map(|pk| {
+                meta.recipients.get(pk).cloned().unwrap_or_else(|| {
+                    pk.chars().take(PUBKEY_DISPLAY_LEN).collect::<String>() + "\u{2026}"
+                })
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
     Ok(VaultInfo {
         vault_name: vault.vault_name.clone(),
         codename,
         repo: vault.repo.clone(),
         created: vault.created.clone(),
         recipient_count: vault.recipients.len(),
+        recipient_names,
         entries,
     })
 }
@@ -140,7 +158,9 @@ pub fn format_info_lines(info: &VaultInfo, has_meta: bool) -> Vec<String> {
         .max()
         .unwrap_or(0);
 
-    let tag_width = if has_meta {
+    // Tags are always public — show them regardless of key availability.
+    let any_tags = info.entries.iter().any(|e| !e.tags.is_empty());
+    let tag_width = if any_tags {
         info.entries
             .iter()
             .map(|e| {
@@ -167,26 +187,27 @@ pub fn format_info_lines(info: &VaultInfo, has_meta: bool) -> Vec<String> {
         let desc_padded = format!("{:<desc_width$}", entry.description);
         let ex_padded = format!("{example_str:<example_width$}");
 
-        if has_meta {
-            let tag_str = if entry.tags.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", entry.tags.join(", "))
-            };
-            let tag_padded = format!("{tag_str:<tag_width$}");
-
-            let scoped_str = if entry.scoped_recipients.is_empty() {
-                String::new()
-            } else {
-                format!("✦ {}", entry.scoped_recipients.join(", "))
-            };
-
-            lines.push(format!(
-                "   {key_padded}  {desc_padded}  {ex_padded}  {tag_padded}  {scoped_str}"
-            ));
+        let tag_str = if entry.tags.is_empty() {
+            String::new()
         } else {
-            lines.push(format!("   {key_padded}  {desc_padded}  {ex_padded}"));
-        }
+            format!("[{}]", entry.tags.join(", "))
+        };
+        let tag_padded = if any_tags {
+            format!("  {tag_str:<tag_width$}")
+        } else {
+            String::new()
+        };
+
+        // Scoped recipients only shown when meta is available.
+        let scoped_str = if has_meta && !entry.scoped_recipients.is_empty() {
+            format!("  ✦ {}", entry.scoped_recipients.join(", "))
+        } else {
+            String::new()
+        };
+
+        lines.push(format!(
+            "   {key_padded}  {desc_padded}  {ex_padded}{tag_padded}{scoped_str}"
+        ));
     }
 
     lines
@@ -291,6 +312,7 @@ mod tests {
             repo: String::new(),
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
+            recipient_names: vec![],
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
@@ -307,6 +329,7 @@ mod tests {
             repo: "https://github.com/test/repo".into(),
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 2,
+            recipient_names: vec![],
             entries: vec![
                 InfoEntry {
                     key: "DATABASE_URL".into(),
@@ -339,6 +362,7 @@ mod tests {
             repo: String::new(),
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 2,
+            recipient_names: vec![],
             entries: vec![InfoEntry {
                 key: "DB_URL".into(),
                 description: "Database".into(),
@@ -351,5 +375,28 @@ mod tests {
         let entry_line = lines.iter().find(|l| l.contains("DB_URL")).unwrap();
         assert!(entry_line.contains("[prod]"));
         assert!(entry_line.contains("✦ alice"));
+    }
+
+    #[test]
+    fn format_info_tags_visible_without_meta() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            recipient_names: vec![],
+            entries: vec![InfoEntry {
+                key: "DB_URL".into(),
+                description: "Database".into(),
+                example: None,
+                tags: vec!["prod".into()],
+                scoped_recipients: vec![],
+            }],
+        };
+        // has_meta=false — tags should still show.
+        let lines = format_info_lines(&info, false);
+        let entry_line = lines.iter().find(|l| l.contains("DB_URL")).unwrap();
+        assert!(entry_line.contains("[prod]"));
     }
 }
