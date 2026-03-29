@@ -48,7 +48,7 @@ murk is pre-1.0 software. Only the latest release receives security fixes.
 
 **Do not open a public issue for security vulnerabilities.**
 
-Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) to submit a report. You'll get a response within 7 days.
+Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) to submit a report. You'll get a response within 14 days.
 
 Include:
 - Description of the vulnerability
