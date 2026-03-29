@@ -38,6 +38,8 @@ pub fn setup_merge_driver() -> Result<Vec<MergeDriverSetupStep>, String> {
     let gitattributes = Path::new(".gitattributes");
     let merge_line = GITATTRIBUTES_LINE;
 
+    crate::env::reject_symlink(gitattributes, ".gitattributes")?;
+
     if gitattributes.exists() {
         let contents = fs::read_to_string(gitattributes)
             .map_err(|e| format!("reading .gitattributes: {e}"))?;

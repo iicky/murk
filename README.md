@@ -6,9 +6,9 @@
 [![docs.rs](https://img.shields.io/docsrs/murk-cli)](https://docs.rs/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)
 
-Encrypted secrets manager for developers. One key unlocks everything.
+Encrypted secrets manager for developers.
 
-murk stores encrypted secrets in a single `.murk` file that's safe to commit to git. It uses [age](https://age-encryption.org/) encryption, works with [direnv](https://direnv.net/), and supports teams — all in one binary with no runtime dependencies.
+murk stores encrypted secrets in a single `.murk` file designed to be committed to git. Values are encrypted with [age](https://age-encryption.org/), key names remain readable. It works with [direnv](https://direnv.net/) and supports teams — one binary, no runtime dependencies.
 
 > murk is pre-1.0 and has not been independently audited. Use good judgment with production secrets.
 
@@ -20,7 +20,7 @@ murk stores encrypted secrets in a single `.murk` file that's safe to commit to 
 
 Most teams share `.env` files over Slack. That's bad. Tools like SOPS and Vault exist but they're complex, require cloud setup, or pull in runtimes you don't want.
 
-murk is simple: one key on your machine, one encrypted file in your repo, done.
+murk is simple: one key on your machine, one encrypted file in your repo. See [THREAT_MODEL.md](THREAT_MODEL.md) for what it protects and what it doesn't.
 
 ## How murk compares
 
@@ -37,7 +37,7 @@ murk is simple: one key on your machine, one encrypted file in your repo, done.
 
 **SOPS** is the closest alternative. Both encrypt values in-place and support age. murk differs in having scoped (per-user) secrets, a single-file vault model, built-in team management (`murk circle`), and BIP39 key recovery. SOPS has broader KMS backend support and a larger ecosystem.
 
-**Vault** solves a different problem — it's centralized infrastructure for secret storage, rotation, and dynamic credentials. If you need a secrets server, use Vault. If you want encrypted secrets in your repo, use murk.
+**Vault** solves a different problem — it's centralized infrastructure for secret storage, rotation, and dynamic credentials. If you need a secrets server, use Vault. murk is scoped to encrypted secrets in a repo.
 
 **dotenvx** encrypts `.env` files but uses a single shared key for the whole team. There's no per-recipient encryption — if someone leaves, everyone needs a new key.
 
@@ -150,6 +150,8 @@ murk rotate --all         # prompts for each secret
 git commit -am "revoke carol, rotate secrets" && git push
 ```
 
+Revocation re-encrypts the vault going forward, but old versions remain in git history. The revoked user can still decrypt any version they previously had access to. Always rotate secrets after revocation.
+
 If you already have new values in a file, import them directly:
 
 ```bash
@@ -174,7 +176,7 @@ steps:
   - run: ./deploy.sh  # all vault secrets are now in the environment
 ```
 
-Store your `MURK_KEY` as a GitHub Actions secret. All decrypted values are masked in logs.
+Store your `MURK_KEY` as a GitHub Actions secret. Decrypted values are registered with GitHub's log masking, but masking depends on GitHub's runner behavior and is not a hard security boundary.
 
 ## Recovery
 
@@ -213,12 +215,12 @@ murk restore
 
 ## Design
 
-- **age does the crypto** — no custom cryptography
+- **age for encryption, BLAKE3 for integrity** — no custom cryptographic primitives, documented integrity layer
 - **Git is the audit trail** — murk doesn't replicate what git does
 - **Header is public, values are private** — key names are visible, values are not
 - **Explicit over magic** — never silently overwrites or destroys data
 
-The `.murk` file is safe to commit — key names are readable, values are individually encrypted:
+The `.murk` file is designed to be committed — key names are readable, values are individually encrypted:
 
 ```json
 {
@@ -244,7 +246,7 @@ See [SPEC.md](SPEC.md) for the full specification.
 
 **Key names are plaintext** — the `.murk` header exposes key names (e.g. `STRIPE_SECRET_KEY`, `DATABASE_URL`) so that `murk info` works without a key and git diffs stay readable. Only values are encrypted. If your threat model requires hiding what services you use, this is a trade-off to be aware of.
 
-**Key storage** — your secret key lives in `~/.config/murk/keys/` with `chmod 600` permissions, outside your repository. The `.env` file in your project contains only a `MURK_KEY_FILE` reference to this path, not the key itself. This is the same trust model as SSH keys in `~/.ssh`. If a machine is compromised, rotate your key and re-authorize with a new one.
+**Key storage** — your secret key lives in `~/.config/murk/keys/` with `chmod 600` permissions, outside your repository. The `.env` file in your project contains only a `MURK_KEY_FILE` reference to this path, not the key itself. Similar to SSH keys in `~/.ssh`, but murk also exposes secrets via `export` and `exec` into subprocess environments. If a machine is compromised, rotate your key and re-authorize with a new one.
 
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 

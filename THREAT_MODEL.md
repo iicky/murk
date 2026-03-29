@@ -6,7 +6,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 ## What murk protects
 
-**Secrets at rest in git.** The `.murk` file is safe to commit. Secret values are individually encrypted with [age](https://age-encryption.org/) (X25519 + ChaCha20-Poly1305). An attacker with read access to the repository cannot decrypt values without a recipient's private key.
+**Secrets at rest in git.** The `.murk` file is designed to be committed. Secret values are individually encrypted with [age](https://age-encryption.org/) (X25519 + ChaCha20-Poly1305). An attacker with read access to the repository cannot decrypt values without a recipient's private key.
 
 **Secrets in transit via git.** Since values are encrypted before they enter git, pushing/pulling over any transport (HTTPS, SSH, unencrypted) does not expose secret values.
 
@@ -115,13 +115,13 @@ murk includes a git merge driver (`murk merge-driver`) that performs three-way m
 
 ## Cryptographic properties
 
-murk delegates all cryptography to age. It does not implement any custom cryptographic primitives.
+murk uses age for all encryption and decryption. It does not implement custom cryptographic primitives, but defines a vault format and BLAKE3 keyed integrity layer on top of age.
 
 - **Encryption:** age v1 (X25519 key agreement, ChaCha20-Poly1305 payload encryption)
 - **Per-value encryption:** each secret value is encrypted independently with a fresh age file key
 - **Recipient types:** age x25519 keys (`age1...`) and SSH keys (`ssh-ed25519`, `ssh-rsa`) — age handles both natively
 - **Integrity:** BLAKE3 keyed MAC over sorted key names + encrypted shared values + sorted recipient public keys, stored inside an age-encrypted meta blob (legacy SHA-256 accepted on load)
-- **Key derivation:** BIP39 mnemonic (256 bits of entropy) → SHA-256 → age identity (age keys only; SSH keys use their native format)
+- **Key derivation:** BIP39 mnemonic (256 bits of entropy) → direct Bech32 encoding → age identity (no intermediate hash; same bytes, same key). SSH keys use their native format.
 
 The MAC binds independent age ciphertexts together. Without it, an attacker could swap ciphertexts between key names (age authenticates individual ciphertexts but has no cross-value binding).
 

@@ -1,0 +1,7 @@
+#![no_main]
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &str| {
+    // Recovery phrase handling must never panic on arbitrary input.
+    let _ = murk_cli::recovery::recover(data);
+});
