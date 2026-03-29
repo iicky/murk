@@ -148,7 +148,16 @@ pub fn revoke_recipient(
         }
     }
 
-    let exposed_keys = vault.schema.keys().cloned().collect();
+    // Only report keys the revoked recipient could actually decrypt:
+    // shared secrets (all recipients can read) + their scoped entries.
+    let exposed_keys: Vec<String> = vault
+        .secrets
+        .iter()
+        .filter(|(_, entry)| {
+            !entry.shared.is_empty() || pubkeys.iter().any(|pk| entry.scoped.contains_key(pk))
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
 
     Ok(RevokeResult {
         display_name,
@@ -328,6 +337,13 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+            },
+        );
+        vault.secrets.insert(
+            "KEY".into(),
+            types::SecretEntry {
+                shared: "ciphertext".into(),
+                scoped: std::collections::BTreeMap::new(),
             },
         );
         let mut murk = empty_murk();

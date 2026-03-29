@@ -136,6 +136,35 @@ pub fn decrypt_vault(
 ) -> Result<types::Murk, MurkError> {
     let pubkey = identity.pubkey_string()?;
 
+    // Verify integrity BEFORE decrypting secrets — a tampered vault should fail
+    // with an integrity error, not a misleading "you are not a recipient" message.
+    let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
+        Some(meta) if !meta.mac.is_empty() => {
+            let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
+            if !verify_mac(vault, &meta.mac, hmac_key.as_ref()) {
+                let expected = compute_mac(vault, hmac_key.as_ref());
+                return Err(MurkError::Integrity(format!(
+                    "vault may have been tampered with (expected {expected}, got {})",
+                    meta.mac
+                )));
+            }
+            let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
+            (meta.recipients, legacy)
+        }
+        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false),
+        Some(_) => {
+            return Err(MurkError::Integrity(
+                "vault has secrets but MAC is empty — vault may have been tampered with".into(),
+            ));
+        }
+        None if vault.secrets.is_empty() && vault.meta.is_empty() => (HashMap::new(), false),
+        None => {
+            return Err(MurkError::Integrity(
+                "vault has secrets but no meta — vault may have been tampered with".into(),
+            ));
+        }
+    };
+
     // Decrypt shared values (skip scoped-only entries with empty shared ciphertext).
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
@@ -165,34 +194,6 @@ pub fn decrypt_vault(
                 .insert(pubkey.clone(), value);
         }
     }
-
-    // Decrypt meta for recipient names and validate integrity MAC.
-    let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
-        Some(meta) if !meta.mac.is_empty() => {
-            let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
-            if !verify_mac(vault, &meta.mac, hmac_key.as_ref()) {
-                let expected = compute_mac(vault, hmac_key.as_ref());
-                return Err(MurkError::Integrity(format!(
-                    "vault may have been tampered with (expected {expected}, got {})",
-                    meta.mac
-                )));
-            }
-            let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
-            (meta.recipients, legacy)
-        }
-        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false),
-        Some(_) => {
-            return Err(MurkError::Integrity(
-                "vault has secrets but MAC is empty — vault may have been tampered with".into(),
-            ));
-        }
-        None if vault.secrets.is_empty() && vault.meta.is_empty() => (HashMap::new(), false),
-        None => {
-            return Err(MurkError::Integrity(
-                "vault has secrets but no meta — vault may have been tampered with".into(),
-            ));
-        }
-    };
 
     Ok(types::Murk {
         values,
@@ -1078,9 +1079,13 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected load_vault to fail for non-recipient"),
         };
+        // Non-recipient can't decrypt meta, so integrity check fails first.
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("decryption failed"),
-            "expected decryption failure, got: {err}"
+            msg.contains("decryption failed")
+                || msg.contains("no meta")
+                || msg.contains("tampered"),
+            "expected decryption or integrity failure, got: {err}"
         );
 
         fs::remove_dir_all(&dir).unwrap();

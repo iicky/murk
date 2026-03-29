@@ -2426,9 +2426,9 @@ fn merge_driver_conflicts_on_one_sided_recipient_addition() {
     fs::write(&ours_path, &ours).unwrap();
     fs::write(&theirs_path, &theirs).unwrap();
 
-    // Run the merge driver — should fail with conflict.
-    Command::cargo_bin("murk")
-        .unwrap()
+    // Run the merge driver with MURK_KEY so meta can be regenerated.
+    // Should still fail with conflict due to one-sided recipient addition.
+    murk(&dir, &key)
         .args([
             "merge-driver",
             base_path.to_str().unwrap(),

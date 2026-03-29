@@ -70,11 +70,23 @@ pub fn decrypt_vault_values(
     vault: &types::Vault,
     identity: &crate::crypto::MurkIdentity,
 ) -> HashMap<String, String> {
+    let pubkey = identity.pubkey_string().unwrap_or_default();
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
-        if let Ok(value) = crate::decrypt_value(&entry.shared, identity).and_then(|pt| {
-            String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
-        }) {
+        // Decrypt shared value.
+        if !entry.shared.is_empty()
+            && let Ok(value) = crate::decrypt_value(&entry.shared, identity).and_then(|pt| {
+                String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
+            })
+        {
+            values.insert(key.clone(), value);
+        }
+        // Scoped override takes priority.
+        if let Some(encoded) = entry.scoped.get(&pubkey)
+            && let Ok(value) = crate::decrypt_value(encoded, identity).and_then(|pt| {
+                String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
+            })
+        {
             values.insert(key.clone(), value);
         }
     }
