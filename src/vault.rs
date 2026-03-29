@@ -82,16 +82,32 @@ fn lock_path(vault_path: &Path) -> PathBuf {
 /// read-modify-write cycles to prevent concurrent writes from losing changes.
 pub fn lock(vault_path: &Path) -> Result<VaultLock, VaultError> {
     let lp = lock_path(vault_path);
-    if lp.is_symlink() {
-        return Err(VaultError::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "lock file is a symlink — refusing to follow: {}",
-                lp.display()
-            ),
-        )));
-    }
-    let file = File::create(&lp)?;
+
+    // Open lock file without following symlinks (race-safe on Unix).
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&lp)?
+    };
+    #[cfg(not(unix))]
+    let file = {
+        // Fallback: check-then-open (still has TOCTOU on non-Unix).
+        if lp.is_symlink() {
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "lock file is a symlink — refusing to follow: {}",
+                    lp.display()
+                ),
+            )));
+        }
+        File::create(&lp)?
+    };
     file.lock_exclusive().map_err(|e| {
         VaultError::Io(std::io::Error::new(
             e.kind(),
