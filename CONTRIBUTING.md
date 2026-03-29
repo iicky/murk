@@ -1,0 +1,33 @@
+# Contributing
+
+murk is pre-1.0. Contributions are welcome, especially in these areas:
+
+- Bug reports and security issues (see [SECURITY.md](SECURITY.md) for private reporting)
+- Test coverage, especially adversarial/edge-case tests
+- Documentation improvements
+- Platform compatibility fixes (Windows, Linux, macOS)
+
+## Development
+
+```bash
+cargo build              # Build
+cargo test               # Run all tests
+cargo clippy             # Lint
+cargo fmt                # Format
+cargo run -- <command>   # Run murk with arguments
+```
+
+## Pull Requests
+
+- Keep PRs focused — one logical change per PR
+- Run `cargo fmt`, `cargo clippy`, and `cargo test` before submitting
+- PR descriptions should be a short bullet list of changes
+- New features should include tests
+
+## Security
+
+If you find a security vulnerability, **do not open a public issue**. Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) instead.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the same terms as the project (MIT OR Apache-2.0).

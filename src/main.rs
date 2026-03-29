@@ -992,8 +992,12 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         buf
     };
 
-    // Write to a secure tempfile.
-    let dir = std::env::temp_dir();
+    // Prefer XDG_RUNTIME_DIR (typically tmpfs, not written to disk) over /tmp.
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(std::env::temp_dir);
     let mut tmp = tempfile::Builder::new()
         .prefix("murk-edit-")
         .suffix(".env")
@@ -1455,6 +1459,18 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
     }
 }
 
+fn warn_rsa_keys(keys: &[String]) {
+    let rsa_count = keys.iter().filter(|k| k.starts_with("ssh-rsa ")).count();
+    if rsa_count > 0 {
+        eprintln!(
+            "{} {} ssh-rsa key{} added — ed25519 is recommended (see RUSTSEC-2023-0071)",
+            "warn".yellow().bold(),
+            rsa_count,
+            if rsa_count == 1 { "" } else { "s" }
+        );
+    }
+}
+
 fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
     let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
@@ -1514,6 +1530,9 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
             summary,
             if added == 1 { "" } else { "s" }
         );
+
+        let added_keys: Vec<String> = keys.iter().map(|(_, k)| k.clone()).collect();
+        warn_rsa_keys(&added_keys);
     } else if let Some(path_hint) = pubkey.strip_prefix("ssh:") {
         // Read SSH public key from a file.
         let path = if path_hint.is_empty() {
@@ -1560,6 +1579,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
             .map(|n| n.to_string())
             .unwrap_or_else(|| path.display().to_string());
         eprintln!("{} authorized {}", "◆".magenta(), display.bold());
+        warn_rsa_keys(&[key_string]);
     } else {
         // Raw pubkey (age or SSH).
         try_or_die(murk_cli::authorize_recipient(
@@ -1573,6 +1593,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
 
         let display = name.unwrap_or(pubkey);
         eprintln!("{} authorized {}", "◆".magenta(), display.bold());
+        warn_rsa_keys(&[pubkey.to_string()]);
     }
 }
 
