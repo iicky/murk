@@ -5,6 +5,7 @@
 [![Crates.io](https://img.shields.io/crates/v/murk-cli)](https://crates.io/crates/murk-cli)
 [![docs.rs](https://img.shields.io/docsrs/murk-cli)](https://docs.rs/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12291/badge)](https://www.bestpractices.dev/projects/12291)
 
 Encrypted secrets manager for developers.
 
