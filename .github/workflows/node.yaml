@@ -139,10 +139,13 @@ jobs:
       - name: List artifacts
         run: ls -la node/*.node
 
+      - name: Install dependencies
+        working-directory: node
+        run: npm ci
+
       - name: Publish
         working-directory: node
         run: |
-          npm ci
           npx napi prepublish -t npm --skip-gh-release
           npm publish --access public --provenance
         env:
