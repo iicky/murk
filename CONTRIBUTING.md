@@ -22,7 +22,7 @@ cargo run -- <command>   # Run murk with arguments
 - Keep PRs focused — one logical change per PR
 - Run `cargo fmt`, `cargo clippy`, and `cargo test` before submitting
 - PR descriptions should be a short bullet list of changes
-- New features should include tests
+- New features must include tests
 
 ## Security
 
