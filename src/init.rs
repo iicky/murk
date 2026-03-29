@@ -106,13 +106,13 @@ pub fn create_vault(
         meta: String::new(),
     };
 
-    let hmac_key_hex = crate::generate_hmac_key();
-    let hmac_key = crate::decode_hmac_key(&hmac_key_hex).unwrap();
-    let mac = crate::compute_mac(&vault, Some(&hmac_key));
+    let mac_key_hex = crate::generate_mac_key();
+    let mac_key = crate::decode_mac_key(&mac_key_hex).unwrap();
+    let mac = crate::compute_mac(&vault, Some(&mac_key));
     let meta = types::Meta {
         recipients: recipient_names,
         mac,
-        hmac_key: Some(hmac_key_hex),
+        mac_key: Some(mac_key_hex),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -206,7 +206,7 @@ mod tests {
         let meta = types::Meta {
             recipients: names,
             mac: String::new(),
-            hmac_key: None,
+            mac_key: None,
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let meta_enc = encrypt_value(&meta_json, &[recipient]).unwrap();

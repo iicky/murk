@@ -140,9 +140,9 @@ pub fn decrypt_vault(
     // with an integrity error, not a misleading "you are not a recipient" message.
     let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
         Some(meta) if !meta.mac.is_empty() => {
-            let hmac_key = meta.hmac_key.as_deref().and_then(decode_hmac_key);
-            if !verify_mac(vault, &meta.mac, hmac_key.as_ref()) {
-                let expected = compute_mac(vault, hmac_key.as_ref());
+            let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
+            if !verify_mac(vault, &meta.mac, mac_key.as_ref()) {
+                let expected = compute_mac(vault, mac_key.as_ref());
                 return Err(MurkError::Integrity(format!(
                     "vault may have been tampered with (expected {expected}, got {})",
                     meta.mac
@@ -297,13 +297,13 @@ pub fn save_vault(
     vault.secrets = new_secrets;
 
     // Update meta — always generate a fresh BLAKE3 key on save.
-    let hmac_key_hex = generate_hmac_key();
-    let hmac_key = decode_hmac_key(&hmac_key_hex).unwrap();
-    let mac = compute_mac(vault, Some(&hmac_key));
+    let mac_key_hex = generate_mac_key();
+    let mac_key = decode_mac_key(&mac_key_hex).unwrap();
+    let mac = compute_mac(vault, Some(&mac_key));
     let meta = types::Meta {
         recipients: current.recipients.clone(),
         mac,
-        hmac_key: Some(hmac_key_hex),
+        mac_key: Some(mac_key_hex),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -316,8 +316,8 @@ pub fn save_vault(
 ///
 /// If an HMAC key is provided, uses BLAKE3 keyed hash (written as `blake3:`).
 /// Otherwise falls back to unkeyed SHA-256 v2 for legacy compatibility.
-pub(crate) fn compute_mac(vault: &types::Vault, hmac_key: Option<&[u8; 32]>) -> String {
-    match hmac_key {
+pub(crate) fn compute_mac(vault: &types::Vault, mac_key: Option<&[u8; 32]>) -> String {
+    match mac_key {
         Some(key) => compute_mac_v3(vault, key),
         None => compute_mac_v2(vault),
     }
@@ -442,12 +442,12 @@ fn compute_mac_v3(vault: &types::Vault, key: &[u8; 32]) -> String {
 pub(crate) fn verify_mac(
     vault: &types::Vault,
     stored_mac: &str,
-    hmac_key: Option<&[u8; 32]>,
+    mac_key: Option<&[u8; 32]>,
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
     let expected = if stored_mac.starts_with("blake3:") {
-        match hmac_key {
+        match mac_key {
             Some(key) => compute_mac_v3(vault, key),
             None => return false,
         }
@@ -462,7 +462,7 @@ pub(crate) fn verify_mac(
 }
 
 /// Generate a random 32-byte BLAKE3 MAC key, returned as hex.
-pub(crate) fn generate_hmac_key() -> String {
+pub(crate) fn generate_mac_key() -> String {
     let key: [u8; 32] = rand::random();
     key.iter().fold(String::new(), |mut s, b| {
         use std::fmt::Write;
@@ -472,7 +472,7 @@ pub(crate) fn generate_hmac_key() -> String {
 }
 
 /// Decode a hex-encoded 32-byte key.
-pub(crate) fn decode_hmac_key(hex: &str) -> Option<[u8; 32]> {
+pub(crate) fn decode_mac_key(hex: &str) -> Option<[u8; 32]> {
     if hex.len() != 64 {
         return None;
     }
@@ -1238,7 +1238,7 @@ mod tests {
         let meta = types::Meta {
             recipients: recipients_map,
             mac: String::new(),
-            hmac_key: None,
+            mac_key: None,
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         vault.meta = encrypt_value(&meta_json, &[recipient]).unwrap();
@@ -1322,12 +1322,12 @@ mod tests {
     }
 
     #[test]
-    fn hmac_key_roundtrip() {
-        let hex = generate_hmac_key();
+    fn mac_key_roundtrip() {
+        let hex = generate_mac_key();
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
 
-        let key = decode_hmac_key(&hex).expect("valid hex should decode");
+        let key = decode_mac_key(&hex).expect("valid hex should decode");
         // Re-encode and compare.
         let rehex = key.iter().fold(String::new(), |mut s, b| {
             use std::fmt::Write;
@@ -1338,12 +1338,12 @@ mod tests {
     }
 
     #[test]
-    fn decode_hmac_key_rejects_bad_input() {
-        assert!(decode_hmac_key("").is_none());
-        assert!(decode_hmac_key("tooshort").is_none());
-        assert!(decode_hmac_key(&"zz".repeat(32)).is_none()); // invalid hex
-        assert!(decode_hmac_key(&"aa".repeat(31)).is_none()); // 31 bytes
-        assert!(decode_hmac_key(&"aa".repeat(33)).is_none()); // 33 bytes
+    fn decode_mac_key_rejects_bad_input() {
+        assert!(decode_mac_key("").is_none());
+        assert!(decode_mac_key("tooshort").is_none());
+        assert!(decode_mac_key(&"zz".repeat(32)).is_none()); // invalid hex
+        assert!(decode_mac_key(&"aa".repeat(31)).is_none()); // 31 bytes
+        assert!(decode_mac_key(&"aa".repeat(33)).is_none()); // 33 bytes
     }
 
     #[test]
