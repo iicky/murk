@@ -93,7 +93,11 @@ murk includes a git merge driver (`murk merge-driver`) that performs three-way m
 
 ## Supply chain
 
-**Binary distribution:** Release binaries are built in GitHub Actions, checksummed (SHA256SUMS), and signed with Sigstore build provenance attestation. Verify with `gh attestation verify`.
+**Binary distribution:** Release binaries are built in GitHub Actions, checksummed (SHA256SUMS), and signed with Sigstore build provenance attestation ([SLSA Level 2](https://slsa.dev)). Provenance is in [in-toto/SLSA v1](https://slsa.dev/provenance/v1) format, covering all release artifacts. Verify with:
+
+```bash
+gh attestation verify murk-v*.tar.gz --owner iicky
+```
 
 **Install script:** `install.sh` downloads the binary archive and SHA256SUMS, then verifies the checksum before extracting. It does not execute downloaded code before verification.
 

@@ -6,6 +6,7 @@
 [![docs.rs](https://img.shields.io/docsrs/murk-cli)](https://docs.rs/murk-cli)
 [![License](https://img.shields.io/crates/l/murk-cli)](LICENSE-MIT)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12291/badge)](https://www.bestpractices.dev/projects/12291)
+[![SLSA 2](https://slsa.dev/images/gh-badge-level2.svg)](https://slsa.dev)
 
 Encrypted secrets manager for developers.
 
