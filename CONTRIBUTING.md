@@ -28,6 +28,10 @@ cargo run -- <command>   # Run murk with arguments
 
 If you find a security vulnerability, **do not open a public issue**. Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) instead.
 
+## Developer Certificate of Origin
+
+By contributing, you certify that your contribution is your original work or you have the right to submit it under the project's license, per the [Developer Certificate of Origin](https://developercertificate.org/). This is asserted by the act of submitting a pull request.
+
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same terms as the project (MIT OR Apache-2.0).
+Contributions are licensed under the same terms as the project (MIT OR Apache-2.0).
