@@ -25,7 +25,7 @@ jobs:
       - name: Lint
         working-directory: node
         run: |
-          npm install
+          npm ci
           npx biome check
 
   test:
@@ -45,7 +45,7 @@ jobs:
       - name: Install and test
         working-directory: node
         run: |
-          npm install
+          npm ci
           npx napi build --platform --release
           node __test__/index.test.mjs
 
@@ -89,7 +89,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: node
-        run: npm install
+        run: npm ci
 
       - name: Build (native)
         if: ${{ !matrix.settings.docker }}
@@ -142,7 +142,7 @@ jobs:
       - name: Publish
         working-directory: node
         run: |
-          npm install
+          npm ci
           npx napi prepublish -t npm --skip-gh-release
           npm publish --access public --provenance
         env:
