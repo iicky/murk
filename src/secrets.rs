@@ -1,6 +1,6 @@
 //! Secret CRUD operations on the in-memory `Murk` state.
 
-use crate::{crypto, types};
+use crate::{crypto, now_utc, types};
 
 /// Add or update a secret in the working state.
 /// If `scoped` is true, stores in scoped (encrypted to self only).
@@ -27,6 +27,7 @@ pub fn add_secret(
 
     let is_new = !vault.schema.contains_key(key);
 
+    let now = now_utc();
     if let Some(entry) = vault.schema.get_mut(key) {
         if let Some(d) = desc {
             entry.description = d.into();
@@ -38,6 +39,7 @@ pub fn add_secret(
                 }
             }
         }
+        entry.updated = Some(now);
     } else {
         vault.schema.insert(
             key.into(),
@@ -45,6 +47,8 @@ pub fn add_secret(
                 description: desc.unwrap_or("").into(),
                 example: None,
                 tags: tags.to_vec(),
+                created: Some(now.clone()),
+                updated: Some(now),
             },
         );
     }
@@ -86,17 +90,22 @@ pub fn import_secrets(
     murk: &mut types::Murk,
     pairs: &[(String, String)],
 ) -> Vec<String> {
+    let now = now_utc();
     let mut imported = Vec::new();
     for (key, value) in pairs {
         murk.values.insert(key.clone(), value.clone());
 
-        if !vault.schema.contains_key(key.as_str()) {
+        if let Some(entry) = vault.schema.get_mut(key.as_str()) {
+            entry.updated = Some(now.clone());
+        } else {
             vault.schema.insert(
                 key.clone(),
                 types::SchemaEntry {
                     description: String::new(),
                     example: None,
                     tags: vec![],
+                    created: Some(now.clone()),
+                    updated: Some(now.clone()),
                 },
             );
         }
@@ -121,12 +130,15 @@ pub fn describe_key(
             entry.tags = tags.to_vec();
         }
     } else {
+        let now = now_utc();
         vault.schema.insert(
             key.into(),
             types::SchemaEntry {
                 description: description.into(),
                 example: example.map(Into::into),
                 tags: tags.to_vec(),
+                created: Some(now.clone()),
+                updated: Some(now),
             },
         );
     }
@@ -272,6 +284,7 @@ mod tests {
                 description: "desc".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         let mut murk = empty_murk();
@@ -321,6 +334,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -329,6 +343,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -345,6 +360,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -353,6 +369,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["api".into()],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -361,6 +378,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -377,6 +395,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
 
@@ -409,6 +428,7 @@ mod tests {
                 description: "old".into(),
                 example: Some("old_ex".into()),
                 tags: vec!["old_tag".into()],
+                ..Default::default()
             },
         );
 
@@ -428,6 +448,7 @@ mod tests {
                 description: "old".into(),
                 example: None,
                 tags: vec!["keep".into()],
+                ..Default::default()
             },
         );
 
@@ -519,6 +540,7 @@ mod tests {
                 description: "existing desc".into(),
                 example: Some("ex".into()),
                 tags: vec!["tag".into()],
+                ..Default::default()
             },
         );
         let mut murk = empty_murk();

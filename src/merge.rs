@@ -655,6 +655,7 @@ mod tests {
                 description: "database url".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -709,6 +710,7 @@ mod tests {
                 description: "api key".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -941,6 +943,7 @@ mod tests {
                 description: "api".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         let mut theirs = base.clone();
@@ -950,6 +953,7 @@ mod tests {
                 description: "stripe".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 

@@ -337,6 +337,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         vault.secrets.insert(
@@ -441,6 +442,7 @@ mod tests {
                 description: "db".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -449,6 +451,7 @@ mod tests {
                 description: "api".into(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
         vault.secrets.insert(

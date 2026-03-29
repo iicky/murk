@@ -215,6 +215,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -235,6 +236,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -257,6 +259,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -265,6 +268,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["api".into()],
+                ..Default::default()
             },
         );
 
@@ -286,6 +290,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -435,6 +440,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -455,6 +461,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -474,6 +481,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
@@ -496,6 +504,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -504,6 +513,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec!["api".into()],
+                ..Default::default()
             },
         );
 
@@ -526,6 +536,7 @@ mod tests {
                 description: "orphan key".into(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
         vault.schema.insert(
@@ -534,6 +545,7 @@ mod tests {
                 description: "has a value".into(),
                 example: None,
                 tags: vec!["db".into()],
+                ..Default::default()
             },
         );
 
@@ -558,6 +570,7 @@ mod tests {
                 description: String::new(),
                 example: None,
                 tags: vec![],
+                ..Default::default()
             },
         );
 
