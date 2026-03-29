@@ -7,6 +7,17 @@ use std::path::Path;
 
 use age::secrecy::SecretString;
 
+/// Reject symlinks at the given path to prevent symlink-clobber attacks.
+/// Returns Ok(()) if the path does not exist or is not a symlink.
+pub(crate) fn reject_symlink(path: &Path, label: &str) -> Result<(), String> {
+    if path.is_symlink() {
+        return Err(format!(
+            "{label} is a symlink — refusing to follow for security"
+        ));
+    }
+    Ok(())
+}
+
 /// Environment variable for the secret key.
 pub const ENV_MURK_KEY: &str = "MURK_KEY";
 /// Environment variable for the secret key file path.
@@ -178,6 +189,7 @@ pub fn dotenv_has_murk_key() -> bool {
 /// On non-Unix platforms, permissions are not hardened.
 pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
     let env_path = Path::new(".env");
+    reject_symlink(env_path, ".env")?;
 
     // Read existing content (minus any MURK_KEY lines).
     let existing = if env_path.exists() {
@@ -264,6 +276,7 @@ fn dirs_path() -> Result<std::path::PathBuf, String> {
 
 /// Write a secret key to a file with restricted permissions.
 pub fn write_key_to_file(path: &std::path::Path, secret_key: &str) -> Result<(), String> {
+    reject_symlink(path, &path.display().to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -287,6 +300,7 @@ pub fn write_key_to_file(path: &std::path::Path, secret_key: &str) -> Result<(),
 /// Write a MURK_KEY_FILE reference to `.env`, removing any existing MURK_KEY/MURK_KEY_FILE lines.
 pub fn write_key_ref_to_dotenv(key_file_path: &std::path::Path) -> Result<(), String> {
     let env_path = Path::new(".env");
+    reject_symlink(env_path, ".env")?;
 
     let existing = if env_path.exists() {
         let contents = fs::read_to_string(env_path).map_err(|e| format!("reading .env: {e}"))?;
@@ -347,6 +361,7 @@ pub enum EnvrcStatus {
 /// If it exists but doesn't, appends the line. Otherwise creates the file.
 pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
     let envrc = Path::new(".envrc");
+    reject_symlink(envrc, ".envrc")?;
     let murk_line = format!("eval \"$(murk export --vault {vault_name})\"");
 
     if envrc.exists() {

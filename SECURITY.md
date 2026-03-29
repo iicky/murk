@@ -8,6 +8,16 @@ If you find a vulnerability in the underlying cryptographic primitives, please r
 
 For a detailed analysis of what murk protects and what it doesn't, see [THREAT_MODEL.md](THREAT_MODEL.md).
 
+## Known Limitations
+
+- **Not audited.** murk has not had an independent security audit. It is pre-1.0 software. Use good judgment with production secrets.
+- **Not a Vault replacement.** murk is a file-based secrets manager for dev teams. It is not designed for regulated environments, dynamic secrets, rotation policies, or provable access controls. If you need a secrets server, use HashiCorp Vault.
+- **Revoked recipients can read old git history.** Revoking a recipient re-encrypts the vault going forward, but old `.murk` versions remain in git. The revoked user can still decrypt any version they had access to. Always rotate secrets after revocation.
+- **Plaintext during edit.** `murk edit` writes decrypted values to a temp file for `$EDITOR`. The file is overwritten with zeros and deleted afterward, but the plaintext existed on disk briefly. Core dumps, swap, or filesystem journaling could retain fragments.
+- **Compromised workstation = full access.** If an attacker has access to the machine where your key lives, they can decrypt all shared secrets. murk is not a defense against a compromised machine — it protects secrets at rest in git and in transit.
+- **Key names are public.** The `.murk` header exposes what secrets exist (e.g. `STRIPE_SECRET_KEY`). Only values are encrypted. This is a deliberate trade-off for usability (`murk info` without a key, readable git diffs).
+- **No custom cryptography.** murk delegates all crypto to [age](https://age-encryption.org/). Minimal custom code, explicit trade-offs, single-file format.
+
 ## Known Issues
 
 **SSH-RSA timing sidechannel (RUSTSEC-2023-0071)** — The `rsa` crate used by age's SSH-RSA support is affected by the Marvin Attack, a timing sidechannel. murk accepts `ssh-rsa` recipients via `circle authorize`, `ssh:` paths, and `github:username`. The risk is low for a local CLI (the attack requires many decryption queries against a server), but if your threat model includes timing oracles, use ed25519 keys instead of RSA. No upstream fix is available yet.
