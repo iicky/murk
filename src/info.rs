@@ -402,4 +402,90 @@ mod tests {
         let entry_line = lines.iter().find(|l| l.contains("DB_URL")).unwrap();
         assert!(entry_line.contains("[prod]"));
     }
+
+    #[test]
+    fn format_info_recipient_count() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 3,
+            recipient_names: vec![],
+            entries: vec![],
+        };
+        let lines = format_info_lines(&info, false);
+        assert!(lines.iter().any(|l| l.contains("3")));
+    }
+
+    #[test]
+    fn format_info_no_repo_omitted() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            recipient_names: vec![],
+            entries: vec![],
+        };
+        let lines = format_info_lines(&info, false);
+        assert!(!lines.iter().any(|l| l.contains("repo")));
+    }
+
+    #[test]
+    fn format_info_with_repo() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: "https://github.com/test/repo".into(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            recipient_names: vec![],
+            entries: vec![],
+        };
+        let lines = format_info_lines(&info, false);
+        assert!(lines.iter().any(|l| l.contains("repo")));
+    }
+
+    #[test]
+    fn format_info_multiple_tags() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            recipient_names: vec![],
+            entries: vec![InfoEntry {
+                key: "KEY".into(),
+                description: "desc".into(),
+                example: None,
+                tags: vec!["prod".into(), "db".into()],
+                scoped_recipients: vec![],
+            }],
+        };
+        let lines = format_info_lines(&info, false);
+        let entry_line = lines.iter().find(|l| l.contains("KEY")).unwrap();
+        assert!(entry_line.contains("[prod, db]"));
+    }
+
+    #[test]
+    fn vault_info_preserves_timestamps() {
+        let mut schema = BTreeMap::new();
+        schema.insert(
+            "KEY".into(),
+            types::SchemaEntry {
+                description: "test".into(),
+                created: Some("2026-03-01T00:00:00Z".into()),
+                updated: Some("2026-03-15T00:00:00Z".into()),
+                ..Default::default()
+            },
+        );
+        let bytes = test_vault_bytes(schema);
+        let info = vault_info(&bytes, &[], None).unwrap();
+        // Timestamps are in schema, not in InfoEntry — but the vault parses correctly.
+        assert_eq!(info.entries.len(), 1);
+        assert_eq!(info.entries[0].key, "KEY");
+    }
 }

@@ -1109,4 +1109,131 @@ mod tests {
         assert!(r.vault.secrets.contains_key("NEW_KEY"));
         assert!(r.vault.recipients.contains(&"age1charlie".to_string()));
     }
+
+    // -- Meta handling --
+
+    #[test]
+    fn merge_takes_ours_meta() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.meta = "ours-meta".into();
+        let mut theirs = base.clone();
+        theirs.meta = "theirs-meta".into();
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert_eq!(r.vault.meta, "ours-meta");
+    }
+
+    // -- run_merge_driver parses and delegates --
+
+    #[test]
+    fn run_merge_driver_invalid_base() {
+        let result = run_merge_driver("not json", "{}", "{}");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parsing base"));
+    }
+
+    #[test]
+    fn run_merge_driver_invalid_ours() {
+        let base = serde_json::to_string(&base_vault()).unwrap();
+        let result = run_merge_driver(&base, "not json", &base);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parsing ours"));
+    }
+
+    #[test]
+    fn run_merge_driver_invalid_theirs() {
+        let base = serde_json::to_string(&base_vault()).unwrap();
+        let result = run_merge_driver(&base, &base, "not json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parsing theirs"));
+    }
+
+    #[test]
+    fn run_merge_driver_clean_no_changes() {
+        let base = serde_json::to_string(&base_vault()).unwrap();
+        let output = run_merge_driver(&base, &base, &base).unwrap();
+        assert!(output.result.conflicts.is_empty());
+        // meta_regenerated depends on MURK_KEY availability — don't assert it.
+    }
+
+    // -- Static field preservation --
+
+    #[test]
+    fn merge_preserves_ours_static_fields() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.vault_name = "custom.murk".into();
+        ours.repo = "https://github.com/test/repo".into();
+
+        let r = merge_vaults(&base, &ours, &base);
+        assert_eq!(r.vault.vault_name, "custom.murk");
+        assert_eq!(r.vault.repo, "https://github.com/test/repo");
+        assert_eq!(r.vault.version, VAULT_VERSION);
+    }
+
+    // -- Both sides remove same recipient --
+
+    #[test]
+    fn merge_both_remove_same_recipient() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.recipients.retain(|r| r != "age1bob");
+        let mut theirs = base.clone();
+        theirs.recipients.retain(|r| r != "age1bob");
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(!r.vault.recipients.contains(&"age1bob".to_string()));
+        // Both removed same recipient — should not conflict.
+        assert!(
+            !r.conflicts.iter().any(|c| c.reason.contains("recipient")),
+            "removing same recipient from both sides should not conflict"
+        );
+    }
+
+    // -- Empty vault merge --
+
+    #[test]
+    fn merge_empty_vaults() {
+        let empty = Vault {
+            version: VAULT_VERSION.into(),
+            created: "2026-01-01T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1alice".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let r = merge_vaults(&empty, &empty, &empty);
+        assert!(r.conflicts.is_empty());
+        assert!(r.vault.secrets.is_empty());
+    }
+
+    // -- Schema merge: description changes --
+
+    #[test]
+    fn merge_schema_ours_changes_description() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.schema.get_mut("DB_URL").unwrap().description = "updated desc".into();
+
+        let r = merge_vaults(&base, &ours, &base);
+        assert_eq!(r.vault.schema["DB_URL"].description, "updated desc");
+        assert!(r.conflicts.is_empty());
+    }
+
+    #[test]
+    fn merge_schema_both_change_description_takes_ours() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.schema.get_mut("DB_URL").unwrap().description = "ours desc".into();
+        let mut theirs = base.clone();
+        theirs.schema.get_mut("DB_URL").unwrap().description = "theirs desc".into();
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Both changed the same schema entry — ours wins (schema conflicts are
+        // reported but the merge still produces a result).
+        assert_eq!(r.vault.schema["DB_URL"].description, "ours desc");
+    }
 }
