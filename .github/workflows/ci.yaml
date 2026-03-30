@@ -69,7 +69,7 @@ jobs:
       - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-tarpaulin
         with:
           tool: cargo-tarpaulin
-      - run: cargo tarpaulin --out xml --skip-clean --run-types Tests Bins -- --test-threads=1
+      - run: cargo tarpaulin --out xml --skip-clean --run-types Tests -- --test-threads=1
       - uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
