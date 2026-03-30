@@ -146,6 +146,7 @@ jobs:
       - name: Publish
         working-directory: node
         run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
           npx napi prepublish -t npm --skip-gh-release
           npm publish --access public --provenance
         env:
