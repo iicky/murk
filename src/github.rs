@@ -1,5 +1,9 @@
 //! GitHub SSH key fetching for `murk authorize github:username`.
 
+use std::fmt::Write;
+
+use base64::Engine;
+
 use crate::crypto::{self, MurkRecipient};
 
 /// Errors that can occur when fetching GitHub SSH keys.
@@ -94,6 +98,60 @@ pub fn parse_github_keys(
     }
 
     Ok(keys)
+}
+
+/// Compute a SHA-256 fingerprint of an SSH public key string.
+///
+/// Returns a string like `SHA256:abc123...` (base64, no padding).
+pub fn fingerprint(key_string: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(key_string.as_bytes());
+    let encoded = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash);
+    format!("SHA256:{encoded}")
+}
+
+/// Check fetched keys against pinned fingerprints.
+///
+/// Returns Ok(()) if pins match or no pins exist (TOFU).
+/// Returns Err with a description of what changed if pins don't match.
+pub fn check_pins(
+    username: &str,
+    fetched_keys: &[(MurkRecipient, String)],
+    pinned: &[String],
+) -> Result<(), String> {
+    if pinned.is_empty() {
+        return Ok(()); // First use — trust on first use.
+    }
+
+    let fetched_fps: Vec<String> = fetched_keys.iter().map(|(_, k)| fingerprint(k)).collect();
+
+    let mut added: Vec<&str> = Vec::new();
+    let mut removed: Vec<&str> = Vec::new();
+
+    for fp in &fetched_fps {
+        if !pinned.contains(fp) {
+            added.push(fp);
+        }
+    }
+    for fp in pinned {
+        if !fetched_fps.contains(fp) {
+            removed.push(fp);
+        }
+    }
+
+    if added.is_empty() && removed.is_empty() {
+        return Ok(());
+    }
+
+    let mut msg = format!("github:{username} keys changed since last authorization\n");
+    for fp in &added {
+        let _ = writeln!(msg, "  + {fp}");
+    }
+    for fp in &removed {
+        let _ = writeln!(msg, "  - {fp}");
+    }
+    msg.push_str("use --force to accept the new keys");
+    Err(msg)
 }
 
 /// Classify an SSH key type for human-readable display.
