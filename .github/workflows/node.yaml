@@ -139,14 +139,9 @@ jobs:
       - name: List artifacts
         run: ls -la node/*.node
 
-      - name: Install dependencies
-        working-directory: node
-        run: npm ci --ignore-scripts
-
       - name: Publish
         working-directory: node
         run: |
+          npm ci --ignore-scripts
           npx napi prepublish -t npm --skip-gh-release
           npm publish --access public --provenance
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
