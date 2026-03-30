@@ -24,7 +24,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -- -D warnings
       - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2
-      - run: cargo install cargo-audit --locked && cargo audit --ignore RUSTSEC-2023-0071
+      - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-audit
+        with:
+          tool: cargo-audit
+      - run: cargo audit --ignore RUSTSEC-2023-0071
 
   test:
     name: Test (${{ matrix.os }})
@@ -63,12 +66,14 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
-      - run: cargo install cargo-tarpaulin
-      - run: cargo tarpaulin --out xml --skip-clean -- --test-threads=1
+      - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-llvm-cov
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --codecov --output-path codecov.json -- --test-threads=1
       - uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: cobertura.xml
+          files: codecov.json
           fail_ci_if_error: false
 
   demo-test:

@@ -73,3 +73,71 @@ impl From<std::io::Error> for MurkError {
         MurkError::Io(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_integrity() {
+        let e = MurkError::Integrity("mac mismatch".into());
+        assert_eq!(e.to_string(), "integrity check failed: mac mismatch");
+    }
+
+    #[test]
+    fn display_key() {
+        let e = MurkError::Key("MURK_KEY not set".into());
+        assert_eq!(e.to_string(), "MURK_KEY not set");
+    }
+
+    #[test]
+    fn display_recipient() {
+        let e = MurkError::Recipient("not found".into());
+        assert_eq!(e.to_string(), "not found");
+    }
+
+    #[test]
+    fn display_secret() {
+        let e = MurkError::Secret("invalid".into());
+        assert_eq!(e.to_string(), "invalid");
+    }
+
+    #[test]
+    fn display_io() {
+        let e = MurkError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        assert!(e.to_string().contains("I/O error"));
+    }
+
+    #[test]
+    fn from_vault_error() {
+        let ve = VaultError::Parse("bad json".into());
+        let e: MurkError = ve.into();
+        assert!(e.to_string().contains("bad json"));
+    }
+
+    #[test]
+    fn from_crypto_error() {
+        let ce = CryptoError::Decrypt("failed".into());
+        let e: MurkError = ce.into();
+        assert!(e.to_string().contains("failed"));
+    }
+
+    #[test]
+    fn from_io_error() {
+        let io = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let e: MurkError = io.into();
+        assert!(e.to_string().contains("denied"));
+    }
+
+    #[test]
+    fn error_source_io() {
+        let e = MurkError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test"));
+        assert!(std::error::Error::source(&e).is_some());
+    }
+
+    #[test]
+    fn error_source_non_io() {
+        let e = MurkError::Key("test".into());
+        assert!(std::error::Error::source(&e).is_none());
+    }
+}

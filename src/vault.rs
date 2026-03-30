@@ -64,6 +64,7 @@ pub fn read(path: &Path) -> Result<Vault, VaultError> {
 ///
 /// Holds a `.murk.lock` file with an exclusive flock for the duration of a
 /// read-modify-write cycle. Dropped automatically when the guard goes out of scope.
+#[derive(Debug)]
 pub struct VaultLock {
     _file: File,
     _path: PathBuf,
@@ -339,6 +340,135 @@ mod tests {
 
         let entry = &read_vault.secrets["DATABASE_URL"];
         assert_eq!(entry.scoped["age1bob"], "encrypted-for-bob");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lock_creates_lock_file() {
+        let dir = std::env::temp_dir().join("murk_test_lock_create");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let vault_path = dir.join("test.murk");
+
+        let _lock = lock(&vault_path).unwrap();
+        assert!(lock_path(&vault_path).exists());
+
+        drop(_lock);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_rejects_symlink() {
+        let dir = std::env::temp_dir().join("murk_test_lock_symlink");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let vault_path = dir.join("test.murk");
+        let lp = lock_path(&vault_path);
+
+        // Create a symlink where the lock file would go.
+        std::os::unix::fs::symlink("/tmp/evil", &lp).unwrap();
+
+        let result = lock(&vault_path);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        // On Unix with O_NOFOLLOW, we get a "too many levels of symbolic links" error.
+        assert!(
+            msg.contains("symlink") || msg.contains("symbolic link"),
+            "unexpected error: {msg}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_is_atomic() {
+        let dir = std::env::temp_dir().join("murk_test_write_atomic");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let vault = test_vault();
+        write(&path, &vault).unwrap();
+
+        // File should exist and be valid JSON.
+        let contents = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed["version"], VAULT_VERSION);
+
+        // Overwrite with a new vault — should atomically replace.
+        let mut vault2 = test_vault();
+        vault2.vault_name = "updated.murk".into();
+        write(&path, &vault2).unwrap();
+        let contents2 = fs::read_to_string(&path).unwrap();
+        assert!(contents2.contains("updated.murk"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn schema_entry_timestamps_roundtrip() {
+        let dir = std::env::temp_dir().join("murk_test_timestamps");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = test_vault();
+        vault.schema.insert(
+            "TIMED_KEY".into(),
+            SchemaEntry {
+                description: "has timestamps".into(),
+                created: Some("2026-03-29T00:00:00Z".into()),
+                updated: Some("2026-03-29T12:00:00Z".into()),
+                ..Default::default()
+            },
+        );
+
+        write(&path, &vault).unwrap();
+        let read_vault = read(&path).unwrap();
+        let entry = &read_vault.schema["TIMED_KEY"];
+        assert_eq!(entry.created.as_deref(), Some("2026-03-29T00:00:00Z"));
+        assert_eq!(entry.updated.as_deref(), Some("2026-03-29T12:00:00Z"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn schema_entry_without_timestamps_roundtrips() {
+        let dir = std::env::temp_dir().join("murk_test_no_timestamps");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = test_vault();
+        vault.schema.insert(
+            "LEGACY".into(),
+            SchemaEntry {
+                description: "no timestamps".into(),
+                ..Default::default()
+            },
+        );
+
+        write(&path, &vault).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        // Schema timestamps should be omitted from JSON when None.
+        // Check that the LEGACY entry block doesn't contain timestamp fields.
+        let legacy_block = &contents[contents.find("LEGACY").unwrap()..];
+        let block_end = legacy_block.find('}').unwrap();
+        let legacy_block = &legacy_block[..block_end];
+        assert!(
+            !legacy_block.contains("created"),
+            "LEGACY entry should not have created timestamp"
+        );
+        assert!(
+            !legacy_block.contains("updated"),
+            "LEGACY entry should not have updated timestamp"
+        );
+
+        let read_vault = read(&path).unwrap();
+        assert!(read_vault.schema["LEGACY"].created.is_none());
+        assert!(read_vault.schema["LEGACY"].updated.is_none());
 
         fs::remove_dir_all(&dir).unwrap();
     }

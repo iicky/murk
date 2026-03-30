@@ -913,4 +913,60 @@ mod tests {
         std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn reject_symlink_ok_for_regular_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("regular.txt");
+        std::fs::write(&path, "content").unwrap();
+        assert!(reject_symlink(&path, "test").is_ok());
+    }
+
+    #[test]
+    fn reject_symlink_ok_for_nonexistent() {
+        let path = std::path::Path::new("/tmp/does_not_exist_murk_test");
+        assert!(reject_symlink(path, "test").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reject_symlink_rejects_symlink() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink("/tmp/target", &link).unwrap();
+        let result = reject_symlink(&link, "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_secret_file_rejects_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("loose.key");
+        std::fs::write(&path, "secret").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let result = read_secret_file(&path, "test");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("readable by others"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_secret_file_accepts_600() {
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("tight.key");
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut f, b"secret").unwrap();
+        let result = read_secret_file(&path, "test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "secret");
+    }
 }

@@ -57,6 +57,16 @@ pub fn fetch_keys(username: &str) -> Result<Vec<(MurkRecipient, String)>, GitHub
         return Err(GitHubError::NoKeys(username.into()));
     }
 
+    parse_github_keys(&body, username)
+}
+
+/// Parse SSH keys from a GitHub `.keys` response body.
+///
+/// Filters to ed25519 and rsa only. Normalizes by stripping comments.
+pub fn parse_github_keys(
+    body: &str,
+    username: &str,
+) -> Result<Vec<(MurkRecipient, String)>, GitHubError> {
     let mut keys = Vec::new();
     for line in body.lines() {
         let line = line.trim();
@@ -64,17 +74,13 @@ pub fn fetch_keys(username: &str) -> Result<Vec<(MurkRecipient, String)>, GitHub
             continue;
         }
 
-        // Extract key type (first space-delimited token).
         let key_type = line.split_whitespace().next().unwrap_or("");
 
-        // Only accept ed25519 and rsa — skip ecdsa, sk-ssh-*, etc.
         if key_type != "ssh-ed25519" && key_type != "ssh-rsa" {
             continue;
         }
 
-        // Normalize: parse and re-serialize (strips any trailing comment).
         if let Ok(recipient) = crypto::parse_recipient(line) {
-            // Use the normalized (comment-stripped) key string.
             let normalized = match &recipient {
                 MurkRecipient::Ssh(r) => r.to_string(),
                 MurkRecipient::Age(_) => unreachable!("SSH key parsed as age key"),
@@ -118,5 +124,77 @@ mod tests {
     #[test]
     fn key_type_label_empty() {
         assert_eq!(key_type_label(""), "ssh");
+    }
+
+    const TEST_ED25519_KEY: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJI7KsDGxx+I8XZQwtbgoEYDfuNd9fQ4MzcHHUmtIau9";
+
+    #[test]
+    fn parse_keys_ed25519() {
+        let body = format!("{TEST_ED25519_KEY}\n");
+        let keys = parse_github_keys(&body, "testuser").unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].1.starts_with("ssh-ed25519 "));
+    }
+
+    #[test]
+    fn parse_keys_skips_ecdsa() {
+        let body = "ecdsa-sha2-nistp256 AAAAE2VjZHNh...\n";
+        let result = parse_github_keys(body, "testuser");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_keys_skips_blank_lines() {
+        let body = format!("\n\n{TEST_ED25519_KEY}\n\n");
+        let keys = parse_github_keys(&body, "testuser").unwrap();
+        assert_eq!(keys.len(), 1);
+    }
+
+    #[test]
+    fn parse_keys_empty_body() {
+        let result = parse_github_keys("", "testuser");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_keys_strips_comment() {
+        let body = format!("{TEST_ED25519_KEY} user@host\n");
+        let keys = parse_github_keys(&body, "testuser").unwrap();
+        assert!(!keys[0].1.contains("user@host"));
+    }
+
+    #[test]
+    fn fetch_rejects_empty_username() {
+        let result = fetch_keys("");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid GitHub username")
+        );
+    }
+
+    #[test]
+    fn fetch_rejects_long_username() {
+        let long = "a".repeat(40);
+        let result = fetch_keys(&long);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fetch_rejects_path_traversal() {
+        let result = fetch_keys("../etc/passwd");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn github_error_display() {
+        let e = GitHubError::Fetch("connection refused".into());
+        assert!(e.to_string().contains("connection refused"));
+
+        let e = GitHubError::NoKeys("alice".into());
+        assert!(e.to_string().contains("alice"));
     }
 }

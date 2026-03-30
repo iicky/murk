@@ -141,7 +141,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: node
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Publish
         working-directory: node
@@ -150,3 +150,4 @@ jobs:
           npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

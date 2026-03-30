@@ -19,6 +19,7 @@
 // Domain modules — pub(crate) unless main.rs needs direct path access.
 pub(crate) mod codename;
 pub mod crypto;
+pub mod edit;
 pub(crate) mod env;
 pub mod error;
 pub(crate) mod export;
@@ -29,6 +30,7 @@ pub(crate) mod init;
 pub(crate) mod merge;
 pub(crate) mod recipients;
 pub mod recovery;
+pub mod scan;
 pub(crate) mod secrets;
 pub mod types;
 pub mod vault;

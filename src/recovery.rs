@@ -141,4 +141,39 @@ mod tests {
         let words = "zzz yyy xxx www vvv uuu ttt sss rrr qqq ppp ooo nnn mmm lll kkk jjj iii hhh ggg fff eee ddd ccc";
         assert!(recover(words).is_err());
     }
+
+    #[test]
+    fn recover_empty_string() {
+        assert!(recover("").is_err());
+    }
+
+    #[test]
+    fn phrase_from_key_invalid_key() {
+        assert!(phrase_from_key("not-a-valid-key").is_err());
+    }
+
+    #[test]
+    fn phrase_from_key_empty() {
+        assert!(phrase_from_key("").is_err());
+    }
+
+    #[test]
+    fn generate_key_is_deterministic_from_entropy() {
+        // Same entropy → same key, verified via phrase roundtrip.
+        let (phrase, key, _) = generate().unwrap();
+        let recovered = recover(&phrase).unwrap();
+        assert_eq!(key, recovered);
+        // And the phrase from that key matches.
+        let phrase_back = phrase_from_key(&key).unwrap();
+        assert_eq!(phrase, phrase_back);
+    }
+
+    #[test]
+    fn recovery_error_display() {
+        let e = RecoveryError::Bip39("bad mnemonic".into());
+        assert!(e.to_string().contains("bad mnemonic"));
+
+        let e = RecoveryError::InvalidKey("not a key".into());
+        assert!(e.to_string().contains("not a key"));
+    }
 }
