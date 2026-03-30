@@ -113,6 +113,7 @@ pub fn create_vault(
         recipients: recipient_names,
         mac,
         mac_key: Some(mac_key_hex),
+        github_pins: HashMap::new(),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -207,6 +208,7 @@ mod tests {
             recipients: names,
             mac: String::new(),
             mac_key: None,
+            github_pins: HashMap::new(),
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let meta_enc = encrypt_value(&meta_json, &[recipient]).unwrap();

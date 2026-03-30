@@ -606,6 +606,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         recipients: HashMap::new(),
         mac: String::new(),
         mac_key: None,
+        github_pins: HashMap::new(),
     };
 
     let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
@@ -623,10 +624,17 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     let mac_key_hex = crate::generate_mac_key();
     let mac_key = crate::decode_mac_key(&mac_key_hex).unwrap();
     let mac = compute_mac(merged, Some(&mac_key));
+    // Merge github pins: union, ours wins on conflict.
+    let mut github_pins = theirs_meta.github_pins;
+    for (user, pins) in ours_meta.github_pins {
+        github_pins.insert(user, pins);
+    }
+
     let meta = crate::types::Meta {
         recipients: names,
         mac,
         mac_key: Some(mac_key_hex),
+        github_pins,
     };
 
     let recipients = parse_recipients(&merged.recipients).ok()?;

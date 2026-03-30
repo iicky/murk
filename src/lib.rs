@@ -82,10 +82,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 pub use crypto::{MurkIdentity, MurkRecipient};
 
 /// Decrypt the meta blob from a vault, returning the deserialized Meta if possible.
-pub(crate) fn decrypt_meta(
-    vault: &types::Vault,
-    identity: &crypto::MurkIdentity,
-) -> Option<types::Meta> {
+pub fn decrypt_meta(vault: &types::Vault, identity: &crypto::MurkIdentity) -> Option<types::Meta> {
     if vault.meta.is_empty() {
         return None;
     }
@@ -140,7 +137,7 @@ pub fn decrypt_vault(
 
     // Verify integrity BEFORE decrypting secrets — a tampered vault should fail
     // with an integrity error, not a misleading "you are not a recipient" message.
-    let (recipients, legacy_mac) = match decrypt_meta(vault, identity) {
+    let (recipients, legacy_mac, github_pins) = match decrypt_meta(vault, identity) {
         Some(meta) if !meta.mac.is_empty() => {
             let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
             if !verify_mac(vault, &meta.mac, mac_key.as_ref()) {
@@ -151,15 +148,17 @@ pub fn decrypt_vault(
                 )));
             }
             let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
-            (meta.recipients, legacy)
+            (meta.recipients, legacy, meta.github_pins)
         }
-        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false),
+        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false, meta.github_pins),
         Some(_) => {
             return Err(MurkError::Integrity(
                 "vault has secrets but MAC is empty — vault may have been tampered with".into(),
             ));
         }
-        None if vault.secrets.is_empty() && vault.meta.is_empty() => (HashMap::new(), false),
+        None if vault.secrets.is_empty() && vault.meta.is_empty() => {
+            (HashMap::new(), false, HashMap::new())
+        }
         None => {
             return Err(MurkError::Integrity(
                 "vault has secrets but no meta — vault may have been tampered with".into(),
@@ -202,6 +201,7 @@ pub fn decrypt_vault(
         recipients,
         scoped,
         legacy_mac,
+        github_pins,
     })
 }
 
@@ -306,6 +306,7 @@ pub fn save_vault(
         recipients: current.recipients.clone(),
         mac,
         mac_key: Some(mac_key_hex),
+        github_pins: current.github_pins.clone(),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -655,6 +656,7 @@ mod tests {
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         let current = original.clone();
@@ -709,6 +711,7 @@ mod tests {
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         let mut current = original.clone();
@@ -766,6 +769,7 @@ mod tests {
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         let mut current = original.clone();
@@ -815,6 +819,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         let mut current_recipients = HashMap::new();
@@ -825,6 +830,7 @@ mod tests {
             recipients: current_recipients,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
@@ -874,6 +880,7 @@ mod tests {
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         // Add a scoped override.
@@ -945,6 +952,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         // save_vault needs MURK_KEY set to encrypt meta.
@@ -1009,6 +1017,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1066,6 +1075,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         unsafe { std::env::set_var("MURK_KEY", &other_secret) };
@@ -1123,6 +1133,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1178,6 +1189,7 @@ mod tests {
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
+            github_pins: HashMap::new(),
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1241,6 +1253,7 @@ mod tests {
             recipients: recipients_map,
             mac: String::new(),
             mac_key: None,
+            github_pins: HashMap::new(),
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         vault.meta = encrypt_value(&meta_json, &[recipient]).unwrap();

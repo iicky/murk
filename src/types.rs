@@ -66,6 +66,10 @@ pub struct Meta {
     /// BLAKE3 keyed MAC key (hex-encoded, 32 bytes). Generated at init, stored encrypted.
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "hmac_key")]
     pub mac_key: Option<String>,
+    /// Pinned GitHub key fingerprints: username → [SHA256:...].
+    /// Used for TOFU (Trust On First Use) verification on `authorize github:user`.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub github_pins: HashMap<String, Vec<String>>,
 }
 
 // -- Murk (decrypted in-memory state) --
@@ -83,4 +87,6 @@ pub struct Murk {
     pub scoped: HashMap<String, HashMap<String, String>>,
     /// True if the vault uses a legacy unkeyed MAC (sha256/sha256v2).
     pub legacy_mac: bool,
+    /// Pinned GitHub key fingerprints (carried from meta).
+    pub github_pins: HashMap<String, Vec<String>>,
 }

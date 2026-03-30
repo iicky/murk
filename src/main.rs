@@ -234,6 +234,9 @@ enum Command {
         /// Display name for this recipient
         #[arg(long)]
         name: Option<String>,
+        /// Accept changed GitHub keys without confirmation
+        #[arg(long)]
+        force: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -342,6 +345,9 @@ enum CircleCommand {
         /// Display name for this recipient
         #[arg(long)]
         name: Option<String>,
+        /// Accept changed GitHub keys without confirmation
+        #[arg(long)]
+        force: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -1513,14 +1519,26 @@ fn warn_rsa_keys(keys: &[String]) {
     }
 }
 
-fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
-    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
+fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str) {
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
     if let Some(username) = pubkey.strip_prefix("github:") {
         // Fetch all SSH keys from GitHub.
         let keys = try_or_die(murk_cli::fetch_keys(username).map_err(|e| e.to_string()));
+
+        // TOFU: check fetched keys against pinned fingerprints.
+        let pinned = murk_cli::decrypt_meta(&vault, &identity)
+            .and_then(|m| {
+                let pins = m.github_pins.get(username)?.clone();
+                Some(pins)
+            })
+            .unwrap_or_default();
+
+        if !force && let Err(msg) = murk_cli::github::check_pins(username, &keys, &pinned) {
+            die(&msg, 1);
+        }
 
         let display_name = format!("{username}@github");
         let mut added = 0;
@@ -1554,6 +1572,13 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, vault_path: &str) {
             );
             return;
         }
+
+        // Update pinned fingerprints for this GitHub user.
+        let new_pins: Vec<String> = keys
+            .iter()
+            .map(|(_, k)| murk_cli::github::fingerprint(k))
+            .collect();
+        current.github_pins.insert(username.to_string(), new_pins);
 
         save_vault(vault_path, &mut vault, &original, &current);
 
@@ -2096,8 +2121,9 @@ fn main() {
         Command::Authorize {
             pubkey,
             name,
+            force,
             vault,
-        } => cmd_authorize(&pubkey, name.as_deref(), &vault),
+        } => cmd_authorize(&pubkey, name.as_deref(), force, &vault),
         Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
         Command::Circle {
             sub: None,
@@ -2109,10 +2135,11 @@ fn main() {
                 Some(CircleCommand::Authorize {
                     pubkey,
                     name,
+                    force,
                     vault,
                 }),
             ..
-        } => cmd_authorize(&pubkey, name.as_deref(), &vault),
+        } => cmd_authorize(&pubkey, name.as_deref(), force, &vault),
         Command::Circle {
             sub: Some(CircleCommand::Revoke { recipient, vault }),
             ..
