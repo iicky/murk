@@ -139,16 +139,9 @@ jobs:
       - name: List artifacts
         run: ls -la node/*.node
 
-      - name: Install dependencies
-        working-directory: node
-        run: npm ci --ignore-scripts
-
       - name: Publish
         working-directory: node
         run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > .npmrc
+          npm ci --ignore-scripts
           npx napi prepublish -t npm --skip-gh-release
           npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
