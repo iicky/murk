@@ -394,6 +394,204 @@ fn scan_binary_files_skipped() {
     );
 }
 
+// ── Invalid key ──
+
+#[test]
+fn invalid_murk_key_fails() {
+    let dir = TempDir::new().unwrap();
+    let (_key, _) = init_vault(&dir);
+
+    murk(&dir, "not-a-valid-age-key")
+        .args(["ls", "--vault", "test.murk"])
+        .assert()
+        .success(); // ls doesn't need a key
+
+    murk(&dir, "not-a-valid-age-key")
+        .args(["export", "--vault", "test.murk"])
+        .assert()
+        .failure(); // export needs to decrypt
+}
+
+#[test]
+fn empty_murk_key_fails() {
+    let dir = TempDir::new().unwrap();
+    let (_key, _) = init_vault(&dir);
+    let fake_home = TempDir::new().unwrap();
+
+    // Remove .env so the fallback can't find the key either.
+    fs::remove_file(dir.path().join(".env")).ok();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["export", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env("MURK_KEY", "")
+        .env_remove("MURK_KEY_FILE")
+        .env("HOME", fake_home.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("MURK_KEY not set"));
+}
+
+// ── Vault edge cases ──
+
+#[test]
+fn vault_with_empty_secrets_and_schema() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Vault with no secrets should work for info/ls.
+    murk(&dir, &key)
+        .args(["ls", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn get_nonexistent_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["get", "DOES_NOT_EXIST", "--vault", "test.murk"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn rm_nonexistent_key_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // rm on a nonexistent key succeeds silently (idempotent).
+    murk(&dir, &key)
+        .args(["rm", "DOES_NOT_EXIST", "--vault", "test.murk"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn revoke_nonexistent_recipient() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["circle", "revoke", "nobody", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn revoke_last_recipient_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, pubkey) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["circle", "revoke", &pubkey, "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("last recipient"));
+}
+
+#[test]
+fn authorize_invalid_pubkey() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            "not-a-valid-pubkey",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn double_add_updates_value() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "KEY", "--vault", "test.murk"])
+        .write_stdin("first\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["add", "KEY", "--vault", "test.murk"])
+        .write_stdin("second\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["get", "KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("second"));
+}
+
+#[test]
+fn import_collision_blocked_without_force() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "EXISTING", "--vault", "test.murk"])
+        .write_stdin("original\n")
+        .assert()
+        .success();
+
+    fs::write(dir.path().join("collision.env"), "EXISTING=overwritten\n").unwrap();
+
+    murk(&dir, &key)
+        .args(["import", "collision.env", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+
+    // Value should be unchanged.
+    murk(&dir, &key)
+        .args(["get", "EXISTING", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("original"));
+}
+
+#[test]
+fn import_collision_allowed_with_force() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "EXISTING", "--vault", "test.murk"])
+        .write_stdin("original\n")
+        .assert()
+        .success();
+
+    fs::write(dir.path().join("collision.env"), "EXISTING=overwritten\n").unwrap();
+
+    murk(&dir, &key)
+        .args(["import", "collision.env", "--force", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["get", "EXISTING", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("overwritten"));
+}
+
 // ── Tampered vault ──
 
 #[test]
