@@ -61,12 +61,23 @@ if command -v sha256sum >/dev/null 2>&1; then
 elif command -v shasum >/dev/null 2>&1; then
     actual=$(shasum -a 256 "$tmpdir/$archive" | cut -d' ' -f1)
 else
-    echo "warning: no sha256sum or shasum found, skipping verification" >&2
-    actual="$expected"
+    echo "error: no sha256sum or shasum found — cannot verify download" >&2
+    echo "hint: install coreutils or use 'cargo install murk-cli' instead" >&2
+    exit 1
 fi
 if [ "$actual" != "$expected" ]; then
     echo "error: checksum mismatch — expected $expected, got $actual" >&2
     exit 1
+fi
+
+# Verify build provenance attestation (optional, requires gh CLI).
+if command -v gh >/dev/null 2>&1; then
+    if gh attestation verify "$tmpdir/$archive" --repo "$REPO" >/dev/null 2>&1; then
+        echo "verified build provenance attestation"
+    else
+        echo "warning: attestation verification failed — binary may not have been built by CI" >&2
+        echo "hint: install the latest gh CLI for attestation support, or verify manually" >&2
+    fi
 fi
 
 tar xzf "$tmpdir/$archive" -C "$tmpdir"
