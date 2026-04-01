@@ -11,18 +11,20 @@ fn init_vault(dir: &TempDir) -> (String, String) {
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .write_stdin("testuser\n")
         .assert()
         .success();
 
     let env_contents = fs::read_to_string(dir.path().join(".env")).unwrap();
 
-    // .env now contains MURK_KEY_FILE=<path> — read the key from that file.
+    // .env now contains MURK_KEY_FILE='<path>' — read the key from that file.
     let murk_key = if let Some(path) = env_contents.lines().find_map(|l| {
         l.strip_prefix("export MURK_KEY_FILE=")
             .or_else(|| l.strip_prefix("MURK_KEY_FILE="))
     }) {
-        fs::read_to_string(path.trim()).unwrap().trim().to_string()
+        let path = path.trim().trim_matches('\'');
+        fs::read_to_string(path).unwrap().trim().to_string()
     } else if let Some(key) = env_contents.lines().find_map(|l| {
         l.strip_prefix("export MURK_KEY=")
             .or_else(|| l.strip_prefix("MURK_KEY="))
@@ -46,7 +48,9 @@ fn init_vault(dir: &TempDir) -> (String, String) {
 /// Helper: build a murk command with MURK_KEY and vault set.
 fn murk(dir: &TempDir, key: &str) -> Command {
     let mut cmd = Command::cargo_bin("murk").unwrap();
-    cmd.current_dir(dir.path()).env("MURK_KEY", key);
+    cmd.current_dir(dir.path())
+        .env("MURK_KEY", key)
+        .env("HOME", dir.path());
     cmd
 }
 
@@ -60,6 +64,7 @@ fn init_creates_vault_and_env() {
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .write_stdin("alice\n")
         .assert()
         .success()
@@ -81,8 +86,10 @@ fn init_creates_vault_and_env() {
     let key_path = env
         .lines()
         .find_map(|l| l.strip_prefix("export MURK_KEY_FILE="))
-        .unwrap();
-    let key = fs::read_to_string(key_path.trim()).unwrap();
+        .unwrap()
+        .trim()
+        .trim_matches('\'');
+    let key = fs::read_to_string(key_path).unwrap();
     assert!(key.trim().starts_with("AGE-SECRET-KEY-"));
 }
 
@@ -141,6 +148,7 @@ fn init_existing_vault_no_key() {
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
         .assert()
@@ -168,6 +176,7 @@ fn init_existing_vault_reads_dotenv() {
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
         .assert()

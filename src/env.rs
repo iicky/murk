@@ -189,7 +189,8 @@ pub fn read_key_from_dotenv() -> Option<String> {
             .strip_prefix("export MURK_KEY_FILE=")
             .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
         {
-            let p = Path::new(path_str.trim());
+            let unquoted = path_str.trim().trim_matches('\'');
+            let p = Path::new(unquoted);
             if let Ok(contents) = read_secret_file(p, "MURK_KEY_FILE from .env") {
                 return Some(contents.trim().to_string());
             }
