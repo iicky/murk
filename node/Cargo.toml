@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 murk-cli = { path = ".." }
 napi = { version = "2", default-features = false, features = ["napi9"] }
-napi-derive = "2"
+napi-derive = "3"
 
 [build-dependencies]
 napi-build = "2"
