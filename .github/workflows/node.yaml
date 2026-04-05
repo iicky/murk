@@ -147,5 +147,5 @@ jobs:
         working-directory: node
         run: |
           npm ci --ignore-scripts
-          npx napi prepublish -t npm --skip-gh-release
+          npx napi pre-publish -t npm
           npm publish --access public --provenance
