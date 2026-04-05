@@ -13,6 +13,7 @@ fn murk(dir: &TempDir, key: &str) -> Command {
     let mut cmd = Command::cargo_bin("murk").unwrap();
     cmd.current_dir(dir.path())
         .env("MURK_KEY", key)
+        .env("HOME", dir.path())
         .env_remove("MURK_KEY_FILE");
     cmd
 }
@@ -22,6 +23,7 @@ fn init_vault(dir: &TempDir) -> (String, String) {
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
+        .env("HOME", dir.path())
         .write_stdin("testuser\n")
         .assert()
         .success();
@@ -31,7 +33,8 @@ fn init_vault(dir: &TempDir) -> (String, String) {
         l.strip_prefix("export MURK_KEY_FILE=")
             .or_else(|| l.strip_prefix("MURK_KEY_FILE="))
     }) {
-        fs::read_to_string(path.trim()).unwrap().trim().to_string()
+        let path = path.trim().trim_matches('\'');
+        fs::read_to_string(path).unwrap().trim().to_string()
     } else {
         panic!("no MURK_KEY_FILE found in .env");
     };

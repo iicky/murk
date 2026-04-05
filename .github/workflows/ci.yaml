@@ -22,7 +22,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
       - run: cargo fmt --check
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-features -- -D warnings
       - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2
       - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-audit
         with:
@@ -40,7 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
       - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # nextest
-      - run: cargo nextest run --profile ci
+      - run: cargo nextest run --all-features --profile ci
       - uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1
         if: always()
         with:

@@ -19,8 +19,8 @@ use crate::{env, export, types};
 /// A loaded and decrypted murk vault.
 #[pyclass]
 struct Vault {
-    vault: types::Vault,
-    murk: types::Murk,
+    inner: types::Vault,
+    decrypted: types::Murk,
     pubkey: String,
 }
 
@@ -28,51 +28,51 @@ struct Vault {
 impl Vault {
     /// Get a single decrypted secret value.
     /// Returns the scoped override if one exists, otherwise the shared value.
-    fn get(&self, key: &str) -> PyResult<Option<String>> {
-        // Check scoped first.
-        if let Some(scoped_map) = self.murk.scoped.get(key) {
-            if let Some(value) = scoped_map.get(&self.pubkey) {
-                return Ok(Some(value.clone()));
-            }
+    fn get(&self, key: &str) -> Option<String> {
+        if let Some(value) = self
+            .decrypted
+            .scoped
+            .get(key)
+            .and_then(|m| m.get(&self.pubkey))
+        {
+            return Some(value.clone());
         }
-        Ok(self.murk.values.get(key).cloned())
+        self.decrypted.values.get(key).cloned()
     }
 
     /// Export all secrets as a dict. Scoped values override shared values.
-    fn export(&self) -> PyResult<HashMap<String, String>> {
-        Ok(
-            export::resolve_secrets(&self.vault, &self.murk, &self.pubkey, &[])
-                .into_iter()
-                .collect(),
-        )
+    fn export(&self) -> HashMap<String, String> {
+        export::resolve_secrets(&self.inner, &self.decrypted, &self.pubkey, &[])
+            .into_iter()
+            .collect()
     }
 
     /// List all key names.
-    fn keys(&self) -> PyResult<Vec<String>> {
-        Ok(self.vault.schema.keys().cloned().collect())
+    fn keys(&self) -> Vec<String> {
+        self.inner.schema.keys().cloned().collect()
     }
 
     /// Number of secrets in the vault.
     fn __len__(&self) -> usize {
-        self.vault.schema.len()
+        self.inner.schema.len()
     }
 
     /// Get a value by key (dict-style access).
     fn __getitem__(&self, key: &str) -> PyResult<String> {
-        self.get(key)?
+        self.get(key)
             .ok_or_else(|| PyRuntimeError::new_err(format!("key not found: {key}")))
     }
 
     /// Check if a key exists.
     fn __contains__(&self, key: &str) -> bool {
-        self.vault.schema.contains_key(key)
+        self.inner.schema.contains_key(key)
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Vault({} secrets, {} recipients)",
-            self.vault.schema.len(),
-            self.vault.recipients.len()
+            self.inner.schema.len(),
+            self.inner.recipients.len()
         )
     }
 }
@@ -87,8 +87,8 @@ fn load(vault_path: &str) -> PyResult<Vault> {
         .pubkey_string()
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
     Ok(Vault {
-        vault,
-        murk,
+        inner: vault,
+        decrypted: murk,
         pubkey,
     })
 }
@@ -97,14 +97,16 @@ fn load(vault_path: &str) -> PyResult<Vault> {
 #[pyfunction]
 #[pyo3(signature = (key, vault_path=".murk"))]
 fn get(key: &str, vault_path: &str) -> PyResult<Option<String>> {
-    load(vault_path)?.get(key)
+    let v = load(vault_path)?;
+    Ok(v.get(key))
 }
 
 /// One-liner: load the vault and export all secrets as a dict.
 #[pyfunction]
 #[pyo3(signature = (vault_path=".murk"))]
 fn export_all(vault_path: &str) -> PyResult<HashMap<String, String>> {
-    load(vault_path)?.export()
+    let v = load(vault_path)?;
+    Ok(v.export())
 }
 
 /// Resolve the MURK_KEY from the environment without loading a vault.

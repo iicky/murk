@@ -7,6 +7,19 @@ use std::path::Path;
 
 use age::secrecy::SecretString;
 
+/// Shell-escape a string using single quotes, safe for embedding in shell scripts.
+/// If the value is a simple identifier (alphanumeric, `-`, `_`, `.`, `/`), returns it bare.
+fn shell_escape(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
 /// Reject symlinks at the given path to prevent symlink-clobber attacks.
 /// Returns Ok(()) if the path does not exist or is not a symlink.
 pub(crate) fn reject_symlink(path: &Path, label: &str) -> Result<(), String> {
@@ -176,7 +189,8 @@ pub fn read_key_from_dotenv() -> Option<String> {
             .strip_prefix("export MURK_KEY_FILE=")
             .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
         {
-            let p = Path::new(path_str.trim());
+            let unquoted = path_str.trim().trim_matches('\'');
+            let p = Path::new(unquoted);
             if let Ok(contents) = read_secret_file(p, "MURK_KEY_FILE from .env") {
                 return Some(contents.trim().to_string());
             }
@@ -349,8 +363,8 @@ pub fn write_key_ref_to_dotenv(key_file_path: &std::path::Path) -> Result<(), St
     };
 
     let full_content = format!(
-        "{existing}export MURK_KEY_FILE={}\n",
-        key_file_path.display()
+        "{existing}export MURK_KEY_FILE='{}'\n",
+        key_file_path.display().to_string().replace('\'', "'\\''")
     );
 
     #[cfg(unix)]
@@ -392,7 +406,8 @@ pub enum EnvrcStatus {
 pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
     let envrc = Path::new(".envrc");
     reject_symlink(envrc, ".envrc")?;
-    let murk_line = format!("eval \"$(murk export --vault {vault_name})\"");
+    let safe_vault_name = shell_escape(vault_name);
+    let murk_line = format!("eval \"$(murk export --vault {safe_vault_name})\"");
 
     if envrc.exists() {
         let contents = fs::read_to_string(envrc).map_err(|e| format!("reading .envrc: {e}"))?;
@@ -968,5 +983,41 @@ mod tests {
         let result = read_secret_file(&path, "test");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "secret");
+    }
+
+    #[test]
+    fn shell_escape_bare_identifiers() {
+        assert_eq!(shell_escape(".murk"), ".murk");
+        assert_eq!(shell_escape("my-vault.murk"), "my-vault.murk");
+        assert_eq!(
+            shell_escape("/home/user/.config/murk/key"),
+            "/home/user/.config/murk/key"
+        );
+    }
+
+    #[test]
+    fn shell_escape_quotes_special_chars() {
+        assert_eq!(shell_escape("my vault"), "'my vault'");
+        assert_eq!(shell_escape("it's"), "'it'\\''s'");
+        assert_eq!(shell_escape("val'ue"), "'val'\\''ue'");
+    }
+
+    #[test]
+    fn write_envrc_escapes_vault_name() {
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join("murk_test_envrc_escape");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let status = write_envrc("my vault.murk").unwrap();
+        assert_eq!(status, EnvrcStatus::Created);
+
+        let contents = std::fs::read_to_string(dir.join(".envrc")).unwrap();
+        assert!(contents.contains("'my vault.murk'"));
+
+        std::env::set_current_dir(original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -37,11 +37,11 @@ def vault_dir():
         dot_env = Path(tmpdir) / ".env"
         for line in dot_env.read_text().splitlines():
             if line.startswith("export MURK_KEY_FILE="):
-                key_file = line.split("=", 1)[1].strip()
+                key_file = line.split("=", 1)[1].strip().strip("'\"")
                 murk_key = Path(key_file).read_text().strip()
                 break
             elif line.startswith("export MURK_KEY="):
-                murk_key = line.split("=", 1)[1].strip()
+                murk_key = line.split("=", 1)[1].strip().strip("'\"")
                 break
         else:
             pytest.fail("Could not find MURK_KEY in .env")
