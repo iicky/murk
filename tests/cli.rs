@@ -2355,6 +2355,60 @@ fn completion_generates_output() {
 }
 
 #[test]
+fn completion_install_writes_file() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["completion", "install", "bash"])
+        .env("HOME", dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ok wrote"));
+
+    let completions_path = dir
+        .path()
+        .join(".local/share/bash-completion/completions/murk");
+    assert!(completions_path.exists(), "completions file should exist");
+    let content = fs::read_to_string(completions_path).unwrap();
+    assert!(
+        content.contains("murk"),
+        "completions should reference murk"
+    );
+}
+
+#[test]
+fn completion_install_zsh_shows_hint() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["completion", "install", "zsh"])
+        .env("HOME", dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("fpath+=~/.zfunc"));
+
+    assert!(dir.path().join(".zfunc/_murk").exists());
+}
+
+#[test]
+fn completion_install_fish() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["completion", "install", "fish"])
+        .env("HOME", dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ok wrote"));
+
+    assert!(
+        dir.path()
+            .join(".config/fish/completions/murk.fish")
+            .exists()
+    );
+}
+
+#[test]
 fn concurrent_adds_dont_lose_data() {
     // Two sequential adds should both persist — tests the locking path.
     let dir = TempDir::new().unwrap();
