@@ -30,12 +30,18 @@ function setupVault() {
   let murkKey
   for (const line of dotenv.split('\n')) {
     if (line.startsWith('export MURK_KEY_FILE=')) {
-      const keyFile = line.split('=')[1].trim()
+      const keyFile = line
+        .split('=')[1]
+        .trim()
+        .replace(/^['"]|['"]$/g, '')
       murkKey = readFileSync(keyFile, 'utf8').trim()
       break
     }
     if (line.startsWith('export MURK_KEY=')) {
-      murkKey = line.split('=')[1].trim()
+      murkKey = line
+        .split('=')[1]
+        .trim()
+        .replace(/^['"]|['"]$/g, '')
       break
     }
   }

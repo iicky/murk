@@ -18,15 +18,16 @@
     "murk"
   ],
   "napi": {
-    "name": "murk-secrets",
-    "triples": {
-      "defaults": true,
-      "additional": [
-        "aarch64-apple-darwin",
-        "aarch64-unknown-linux-gnu",
-        "aarch64-unknown-linux-musl"
-      ]
-    }
+    "binaryName": "murk-secrets",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "x86_64-pc-windows-msvc"
+    ]
   },
   "scripts": {
     "artifacts": "napi artifacts",
@@ -38,7 +39,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.9",
-    "@napi-rs/cli": "^2"
+    "@napi-rs/cli": "^3"
   },
   "engines": {
     "node": ">= 16"
