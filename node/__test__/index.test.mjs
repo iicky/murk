@@ -35,7 +35,10 @@ function setupVault() {
       break
     }
     if (line.startsWith('export MURK_KEY=')) {
-      murkKey = line.split('=')[1].trim().replace(/^['"]|['"]$/g, '')
+      murkKey = line
+        .split('=')[1]
+        .trim()
+        .replace(/^['"]|['"]$/g, '')
       break
     }
   }
