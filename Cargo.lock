@@ -1379,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "murk-cli"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "age",
  "assert_cmd",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "murk-napi"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "murk-cli",
  "napi",
