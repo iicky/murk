@@ -30,7 +30,10 @@ function setupVault() {
   let murkKey
   for (const line of dotenv.split('\n')) {
     if (line.startsWith('export MURK_KEY_FILE=')) {
-      const keyFile = line.split('=')[1].trim().replace(/^['"]|['"]$/g, '')
+      const keyFile = line
+        .split('=')[1]
+        .trim()
+        .replace(/^['"]|['"]$/g, '')
       murkKey = readFileSync(keyFile, 'utf8').trim()
       break
     }

@@ -1,6 +1,37 @@
 #!/bin/sh
+
+# Rust formatting
 cargo fmt --check 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "pre-commit: formatting check failed. Run 'cargo fmt' and try again."
+    echo "pre-commit: cargo fmt check failed. Run 'cargo fmt' and try again."
     exit 1
+fi
+
+# Rust linting
+cargo clippy --all-features -- -D warnings 2>/dev/null
+if [ $? -ne 0 ]; then
+    echo "pre-commit: clippy check failed. Fix warnings and try again."
+    exit 1
+fi
+
+# Node linting (only if node files staged)
+if git diff --cached --name-only | grep -q '^node/'; then
+    if command -v npx >/dev/null 2>&1 && [ -f node/package.json ]; then
+        (cd node && npx biome check) 2>/dev/null
+        if [ $? -ne 0 ]; then
+            echo "pre-commit: biome check failed. Run 'cd node && npx biome check --write' and try again."
+            exit 1
+        fi
+    fi
+fi
+
+# Python linting (only if python files staged)
+if git diff --cached --name-only | grep -q '^python/'; then
+    if command -v ruff >/dev/null 2>&1; then
+        ruff check python/ 2>/dev/null
+        if [ $? -ne 0 ]; then
+            echo "pre-commit: ruff check failed. Fix issues and try again."
+            exit 1
+        fi
+    fi
 fi
