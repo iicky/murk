@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.9",
-    "@napi-rs/cli": "^2"
+    "@napi-rs/cli": "^3"
   },
   "engines": {
     "node": ">= 16"
