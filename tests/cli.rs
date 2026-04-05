@@ -2348,7 +2348,7 @@ fn skeleton_strips_secrets_and_recipients() {
 fn completion_generates_output() {
     Command::cargo_bin("murk")
         .unwrap()
-        .args(["completion", "bash"])
+        .args(["completion", "generate", "bash"])
         .assert()
         .success()
         .stdout(predicate::str::contains("_murk"));
