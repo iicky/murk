@@ -145,6 +145,8 @@ jobs:
 
       - name: Publish
         working-directory: node
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm ci --ignore-scripts
           npx napi pre-publish -t npm
