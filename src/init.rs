@@ -6,6 +6,34 @@ use std::process::Command;
 
 use crate::{crypto, encrypt_value, now_utc, types};
 
+/// Strip embedded credentials from a git remote URL.
+///
+/// Handles `https://user:pass@host/repo` → `https://host/repo` and
+/// `https://token@host/repo` → `https://host/repo`.
+/// SSH and other formats are returned as-is (no credentials to strip).
+fn sanitize_remote_url(url: &str) -> String {
+    if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        let scheme = if url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
+        if let Some(at_pos) = rest.find('@') {
+            // Only strip if the '@' is before the first '/' (i.e. in the authority).
+            let slash_pos = rest.find('/').unwrap_or(rest.len());
+            if at_pos < slash_pos {
+                return format!("{scheme}://{}", &rest[at_pos + 1..]);
+            }
+        }
+        url.to_string()
+    } else {
+        url.to_string()
+    }
+}
+
 /// A key discovered from the environment or .env file.
 #[derive(Debug)]
 pub struct DiscoveredKey {
@@ -85,14 +113,14 @@ pub fn create_vault(
 
     let recipient = crypto::parse_recipient(pubkey)?;
 
-    // Detect git repo URL.
+    // Detect git repo URL, stripping any embedded credentials.
     let repo = Command::new("git")
         .args(["remote", "get-url", "origin"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
+        .map(|s| sanitize_remote_url(s.trim()))
         .unwrap_or_default();
 
     let mut vault = types::Vault {
@@ -263,5 +291,47 @@ mod tests {
         assert!(vault.schema.is_empty());
         assert!(vault.secrets.is_empty());
         assert!(!vault.meta.is_empty());
+    }
+
+    // ── sanitize_remote_url tests ──
+
+    #[test]
+    fn sanitize_strips_https_credentials() {
+        assert_eq!(
+            sanitize_remote_url("https://user:pass@github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_https_token() {
+        assert_eq!(
+            sanitize_remote_url("https://ghp_abc123@github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn sanitize_preserves_clean_https() {
+        assert_eq!(
+            sanitize_remote_url("https://github.com/org/repo.git"),
+            "https://github.com/org/repo.git"
+        );
+    }
+
+    #[test]
+    fn sanitize_preserves_ssh() {
+        assert_eq!(
+            sanitize_remote_url("git@github.com:org/repo.git"),
+            "git@github.com:org/repo.git"
+        );
+    }
+
+    #[test]
+    fn sanitize_strips_http_credentials() {
+        assert_eq!(
+            sanitize_remote_url("http://user:pass@example.com/repo"),
+            "http://example.com/repo"
+        );
     }
 }

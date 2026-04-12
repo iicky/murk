@@ -132,10 +132,28 @@ pub fn write(path: &Path, vault: &Vault) -> Result<(), VaultError> {
     // Write to a sibling temp file, fsync, then atomically rename.
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+
+    // Restrict temp file permissions before writing plaintext JSON.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tmp.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+
     tmp.write_all(json.as_bytes())?;
     tmp.write_all(b"\n")?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| e.error)?;
+
+    // Fsync the parent directory so the rename is durable across power loss.
+    #[cfg(unix)]
+    {
+        if let Ok(d) = File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+
     Ok(())
 }
 
