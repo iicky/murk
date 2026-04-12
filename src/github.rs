@@ -255,4 +255,51 @@ mod tests {
         let e = GitHubError::NoKeys("alice".into());
         assert!(e.to_string().contains("alice"));
     }
+
+    // ── check_pins tests ──
+
+    #[test]
+    fn check_pins_tofu_accepts_any_keys() {
+        let body = format!("{TEST_ED25519_KEY}\n");
+        let keys = parse_github_keys(&body, "alice").unwrap();
+        assert!(check_pins("alice", &keys, &[]).is_ok());
+    }
+
+    #[test]
+    fn check_pins_matching_passes() {
+        let body = format!("{TEST_ED25519_KEY}\n");
+        let keys = parse_github_keys(&body, "alice").unwrap();
+        let pins: Vec<String> = keys.iter().map(|(_, k)| fingerprint(k)).collect();
+        assert!(check_pins("alice", &keys, &pins).is_ok());
+    }
+
+    #[test]
+    fn check_pins_detects_added_key() {
+        let body = format!("{TEST_ED25519_KEY}\n");
+        let keys = parse_github_keys(&body, "alice").unwrap();
+        // Pinned list is empty (but not TOFU — simulate having had a different key).
+        let old_pins = vec!["SHA256:fakefakefake".to_string()];
+        let result = check_pins("alice", &keys, &old_pins);
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("+"));
+        assert!(msg.contains("-"));
+    }
+
+    #[test]
+    fn check_pins_detects_removed_key() {
+        // No keys fetched, but we had a pin.
+        let old_pins = vec!["SHA256:oldkey".to_string()];
+        let result = check_pins("alice", &[], &old_pins);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("- SHA256:oldkey"));
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic() {
+        let fp1 = fingerprint(TEST_ED25519_KEY);
+        let fp2 = fingerprint(TEST_ED25519_KEY);
+        assert_eq!(fp1, fp2);
+        assert!(fp1.starts_with("SHA256:"));
+    }
 }
