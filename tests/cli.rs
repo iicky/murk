@@ -2009,6 +2009,18 @@ fn info_displays_codename() {
 }
 
 #[test]
+fn info_displays_self_marker_and_key_source() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("*").and(predicate::str::contains("key")));
+}
+
+#[test]
 fn codename_changes_when_vault_changes() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);

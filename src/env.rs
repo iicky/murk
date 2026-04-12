@@ -83,38 +83,70 @@ pub fn resolve_key() -> Result<SecretString, String> {
     resolve_key_for_vault(".murk")
 }
 
+/// Where the resolved key came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeySource {
+    /// From `MURK_KEY` environment variable.
+    EnvVar,
+    /// From `MURK_KEY_FILE` environment variable (path).
+    EnvFile(std::path::PathBuf),
+    /// Auto-discovered at `~/.config/murk/keys/<hash>`.
+    Auto(std::path::PathBuf),
+    /// Legacy `.env` file in cwd.
+    Dotenv,
+}
+
+impl KeySource {
+    /// Human-readable description for display.
+    pub fn describe(&self) -> String {
+        match self {
+            KeySource::EnvVar => "MURK_KEY environment variable".into(),
+            KeySource::EnvFile(p) => format!("MURK_KEY_FILE {}", p.display()),
+            KeySource::Auto(p) => p.display().to_string(),
+            KeySource::Dotenv => ".env file (deprecated)".into(),
+        }
+    }
+}
+
+/// Resolve the secret key and report where it came from.
+pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySource), String> {
+    if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
+        return Ok((SecretString::from(k), KeySource::EnvVar));
+    }
+    if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
+        let p = std::path::Path::new(&path);
+        let contents = read_secret_file(p, "MURK_KEY_FILE")?;
+        return Ok((
+            SecretString::from(contents.trim().to_string()),
+            KeySource::EnvFile(p.to_path_buf()),
+        ));
+    }
+    if let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists()) {
+        let contents = read_secret_file(&path, "key file")?;
+        return Ok((
+            SecretString::from(contents.trim().to_string()),
+            KeySource::Auto(path),
+        ));
+    }
+    if let Some(key) = read_key_from_dotenv() {
+        eprintln!(
+            "\x1b[1;33mwarn\x1b[0m reading key from .env is deprecated — use MURK_KEY_FILE or `murk init` instead"
+        );
+        return Ok((SecretString::from(key), KeySource::Dotenv));
+    }
+    Err(
+        "MURK_KEY not set — run `murk init` to generate a key, or ask a recipient to authorize you"
+            .into(),
+    )
+}
+
 /// Resolve the secret key for a specific vault, checking in order:
 /// 1. `MURK_KEY` env var (explicit key)
 /// 2. `MURK_KEY_FILE` env var (path to key file)
 /// 3. `~/.config/murk/keys/<vault-hash>` (automatic lookup keyed to the given vault path)
 /// 4. `.env` file in cwd (backward compat)
 pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
-    // 1. Direct env var.
-    if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
-        return Ok(SecretString::from(k));
-    }
-    // 2. Key file env var.
-    if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
-        let p = std::path::Path::new(&path);
-        let contents = read_secret_file(p, "MURK_KEY_FILE")?;
-        return Ok(SecretString::from(contents.trim().to_string()));
-    }
-    // 3. Key file for the specified vault.
-    if let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists()) {
-        let contents = read_secret_file(&path, "key file")?;
-        return Ok(SecretString::from(contents.trim().to_string()));
-    }
-    // 4. Backward compat: read from .env file (deprecated).
-    if let Some(key) = read_key_from_dotenv() {
-        eprintln!(
-            "\x1b[1;33mwarn\x1b[0m reading key from .env is deprecated — use MURK_KEY_FILE or `murk init` instead"
-        );
-        return Ok(SecretString::from(key));
-    }
-    Err(
-        "MURK_KEY not set — run `murk init` to generate a key, or ask a recipient to authorize you"
-            .into(),
-    )
+    resolve_key_with_source(vault_path).map(|(k, _)| k)
 }
 
 /// Parse a .env file into key-value pairs.

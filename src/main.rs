@@ -1856,9 +1856,11 @@ fn cmd_recover() {
 
 fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
     let raw_bytes = fs::read(vault_path).unwrap_or_else(|e| die(&e, 1));
-    let secret_key = murk_cli::resolve_key_for_vault(vault_path)
-        .ok()
-        .map(|s| s.expose_secret().to_string());
+    let key_with_source = murk_cli::resolve_key_with_source(vault_path).ok();
+    let secret_key = key_with_source
+        .as_ref()
+        .map(|(k, _)| k.expose_secret().to_string());
+    let key_source = key_with_source.as_ref().map(|(_, s)| s.clone());
     let info = try_or_die(murk_cli::vault_info(
         &raw_bytes,
         tags,
@@ -1890,6 +1892,15 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
         if !info.recipient_names.is_empty() {
             out["recipient_names"] = serde_json::json!(info.recipient_names);
         }
+        if let Some(name) = &info.self_name {
+            out["self_name"] = serde_json::json!(name);
+        }
+        if let Some(pk) = &info.self_pubkey {
+            out["self_pubkey"] = serde_json::json!(pk);
+        }
+        if let Some(src) = &key_source {
+            out["key_source"] = serde_json::json!(src.describe());
+        }
         println!("{}", serde_json::to_string_pretty(&out).unwrap());
         return;
     }
@@ -1909,8 +1920,17 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
 
     if !info.recipient_names.is_empty() {
         for name in &info.recipient_names {
-            println!("   {}  {}", " ".repeat(10), name.green().bold());
+            let marker = if info.self_name.as_ref() == Some(name) {
+                "*"
+            } else {
+                " "
+            };
+            println!("   {} {} {}", " ".repeat(9), marker, name.green().bold());
         }
+    }
+
+    if let Some(src) = &key_source {
+        println!("   {}  {}", "key".dimmed(), src.describe().dimmed());
     }
 
     if info.entries.is_empty() {

@@ -26,6 +26,10 @@ pub struct VaultInfo {
     pub recipient_count: usize,
     /// Recipient display names (populated when key is available).
     pub recipient_names: Vec<String>,
+    /// Your own identity in this vault (display name, if known).
+    pub self_name: Option<String>,
+    /// Your own pubkey in this vault (for reference even without meta).
+    pub self_pubkey: Option<String>,
     pub entries: Vec<InfoEntry>,
 }
 
@@ -53,6 +57,12 @@ pub fn vault_info(
             .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
             .collect()
     };
+
+    // Derive self pubkey from the secret key (if available).
+    let self_pubkey = secret_key.and_then(|sk| {
+        let identity = crate::crypto::parse_identity(sk).ok()?;
+        identity.pubkey_string().ok()
+    });
 
     // Try to decrypt meta for recipient names.
     let meta_data = secret_key.and_then(|sk| {
@@ -108,6 +118,13 @@ pub fn vault_info(
         vec![]
     };
 
+    // Resolve self name from meta if pubkey is known.
+    let self_name = self_pubkey.as_ref().and_then(|pk| {
+        meta_data
+            .as_ref()
+            .and_then(|m| m.recipients.get(pk).cloned())
+    });
+
     Ok(VaultInfo {
         vault_name: vault.vault_name.clone(),
         codename,
@@ -115,6 +132,8 @@ pub fn vault_info(
         created: vault.created.clone(),
         recipient_count: vault.recipients.len(),
         recipient_names,
+        self_name,
+        self_pubkey,
         entries,
     })
 }
@@ -316,6 +335,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
@@ -333,6 +354,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 2,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![
                 InfoEntry {
                     key: "DATABASE_URL".into(),
@@ -366,6 +389,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 2,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![InfoEntry {
                 key: "DB_URL".into(),
                 description: "Database".into(),
@@ -389,6 +414,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![InfoEntry {
                 key: "DB_URL".into(),
                 description: "Database".into(),
@@ -412,6 +439,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 3,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
@@ -427,6 +456,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
@@ -442,6 +473,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
@@ -457,6 +490,8 @@ mod tests {
             created: "2026-01-01T00:00:00Z".into(),
             recipient_count: 1,
             recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
             entries: vec![InfoEntry {
                 key: "KEY".into(),
                 description: "desc".into(),
