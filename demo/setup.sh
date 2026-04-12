@@ -57,6 +57,9 @@ demo_init_dirs() {
     export GIT_COMMITTER_NAME="demo"
     export GIT_COMMITTER_EMAIL="demo@murk"
 
+    # Redirect HOME so key files land in the temp dir, not ~/.config/murk/keys.
+    export HOME="$DEMO_BASE"
+
     for name in "$@"; do
         local upper
         upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')

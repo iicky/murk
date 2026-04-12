@@ -311,8 +311,10 @@ fn dirs_path() -> Result<std::path::PathBuf, String> {
     {
         use std::os::unix::fs::PermissionsExt;
         let parent = dir.parent().unwrap(); // ~/.config/murk
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).ok();
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).ok();
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("setting permissions on {}: {e}", parent.display()))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("setting permissions on {}: {e}", dir.display()))?;
     }
 
     Ok(dir)
@@ -421,7 +423,24 @@ pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
         writeln!(file, "\n{murk_line}").map_err(|e| format!("writing .envrc: {e}"))?;
         Ok(EnvrcStatus::Appended)
     } else {
-        fs::write(envrc, format!("{murk_line}\n")).map_err(|e| format!("writing .envrc: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(SECRET_FILE_MODE)
+                .open(envrc)
+                .map_err(|e| format!("writing .envrc: {e}"))?;
+            file.write_all(format!("{murk_line}\n").as_bytes())
+                .map_err(|e| format!("writing .envrc: {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(envrc, format!("{murk_line}\n"))
+                .map_err(|e| format!("writing .envrc: {e}"))?;
+        }
         Ok(EnvrcStatus::Created)
     }
 }

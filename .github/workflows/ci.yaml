@@ -28,6 +28,14 @@ jobs:
         with:
           tool: cargo-audit
       - run: cargo audit --ignore RUSTSEC-2023-0071
+      - name: Check version parity (Cargo.toml vs node/package.json)
+        run: |
+          cargo_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          node_ver=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' node/package.json | head -1)
+          if [ "$cargo_ver" != "$node_ver" ]; then
+            echo "::error::Version mismatch: Cargo.toml=$cargo_ver node/package.json=$node_ver"
+            exit 1
+          fi
 
   test:
     name: Test (${{ matrix.os }})
