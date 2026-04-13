@@ -65,7 +65,10 @@ Show
 
 # === BOB: revoke Carol and rotate secrets ===
 
-Type "# Carol is leaving — who's on the team?"
+Type "# Carol is leaving the team"
+Enter
+Sleep 1s
+Type "# Who currently has access?"
 Enter
 Sleep 500ms
 
