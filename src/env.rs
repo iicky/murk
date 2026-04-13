@@ -290,6 +290,7 @@ pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
             .write(true)
             .truncate(true)
             .mode(SECRET_FILE_MODE)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(env_path)
             .map_err(|e| format!("opening .env: {e}"))?;
         file.write_all(full_content.as_bytes())
@@ -368,6 +369,7 @@ pub fn write_key_to_file(path: &std::path::Path, secret_key: &str) -> Result<(),
             .write(true)
             .truncate(true)
             .mode(SECRET_FILE_MODE)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(path)
             .map_err(|e| format!("writing key file: {e}"))?;
         file.write_all(secret_key.as_bytes())
@@ -414,6 +416,7 @@ pub fn write_key_ref_to_dotenv(key_file_path: &std::path::Path) -> Result<(), St
             .write(true)
             .truncate(true)
             .mode(SECRET_FILE_MODE)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(env_path)
             .map_err(|e| format!("opening .env: {e}"))?;
         file.write_all(full_content.as_bytes())
@@ -468,6 +471,7 @@ pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
                 .write(true)
                 .truncate(true)
                 .mode(SECRET_FILE_MODE)
+                .custom_flags(libc::O_NOFOLLOW)
                 .open(envrc)
                 .map_err(|e| format!("writing .envrc: {e}"))?;
             file.write_all(format!("{murk_line}\n").as_bytes())
