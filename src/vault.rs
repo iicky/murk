@@ -55,7 +55,20 @@ pub fn parse(contents: &str) -> Result<Vault, VaultError> {
 }
 
 /// Read a .murk vault file.
+///
+/// Rejects symlinks at the vault path to prevent a local attacker from
+/// redirecting vault operations to a different project's vault (and thus
+/// triggering auto key-file lookup against the attacker-controlled path).
 pub fn read(path: &Path) -> Result<Vault, VaultError> {
+    if path.is_symlink() {
+        return Err(VaultError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "vault file is a symlink — refusing to follow for security: {}",
+                path.display()
+            ),
+        )));
+    }
     let contents = fs::read_to_string(path)?;
     parse(&contents)
 }

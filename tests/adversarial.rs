@@ -218,6 +218,80 @@ fn lock_file_symlink_rejected() {
 
 #[cfg(unix)]
 #[test]
+fn symlinked_vault_rejected() {
+    // A vault file that is a symlink to another project's vault must be
+    // refused — otherwise auto key discovery could decrypt the target.
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir_a);
+
+    // Point B's vault at A's vault via symlink.
+    let vault_a = dir_a.path().join("test.murk");
+    let vault_b = dir_b.path().join("test.murk");
+    std::os::unix::fs::symlink(&vault_a, &vault_b).unwrap();
+
+    // Even with the correct key available, reading the symlinked vault fails.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["ls", "--vault", "test.murk"])
+        .current_dir(dir_b.path())
+        .env("MURK_KEY", &key)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_vault_does_not_autodiscover_target_key() {
+    // A.murk's key is auto-stored under a hash of A's absolute path.
+    // A symlink B/.murk -> A/.murk must NOT resolve to A's key file.
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+
+    // Init A with auto key discovery populated under fake HOME.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["init", "--vault", "test.murk"])
+        .current_dir(dir_a.path())
+        .env("HOME", fake_home.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .write_stdin("alice\n")
+        .assert()
+        .success();
+
+    // Sanity: A works from its own directory.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["ls", "--vault", "test.murk"])
+        .current_dir(dir_a.path())
+        .env("HOME", fake_home.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .assert()
+        .success();
+
+    // Now symlink B/test.murk -> A/test.murk and try to read it with no
+    // explicit key — the auto discovery must fail (not leak A's secrets).
+    let vault_a = dir_a.path().join("test.murk");
+    let vault_b = dir_b.path().join("test.murk");
+    std::os::unix::fs::symlink(&vault_a, &vault_b).unwrap();
+
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["ls", "--vault", "test.murk"])
+        .current_dir(dir_b.path())
+        .env("HOME", fake_home.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .assert()
+        .failure();
+}
+
+#[cfg(unix)]
+#[test]
 fn env_file_symlink_rejected() {
     let dir = TempDir::new().unwrap();
 
