@@ -305,17 +305,22 @@ pub fn write_key_to_dotenv(secret_key: &str) -> Result<(), String> {
 }
 
 /// Compute the key file path for a vault: `~/.config/murk/keys/<hash>`.
-/// The hash is a truncated SHA-256 of the absolute vault path.
+///
+/// The hash is a truncated SHA-256 of the *lexical* absolute vault path
+/// (cwd-joined if relative, but symlinks are NOT resolved). Using the
+/// literal path is important for security: a symlink `.murk` pointing at
+/// another project's vault must not resolve to that project's key file.
 pub fn key_file_path(vault_path: &str) -> Result<std::path::PathBuf, String> {
     use sha2::{Digest, Sha256};
 
-    let abs_path = std::path::Path::new(vault_path)
-        .canonicalize()
-        .or_else(|_| {
-            // Vault may not exist yet (init). Use cwd + vault_path.
-            std::env::current_dir().map(|cwd| cwd.join(vault_path))
-        })
-        .map_err(|e| format!("cannot resolve vault path: {e}"))?;
+    let p = std::path::Path::new(vault_path);
+    let abs_path = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("cannot resolve vault path: {e}"))?
+            .join(p)
+    };
 
     let hash = Sha256::digest(abs_path.to_string_lossy().as_bytes());
     let short_hash: String = hash.iter().take(8).fold(String::new(), |mut s, b| {
