@@ -70,14 +70,29 @@ if [ "$actual" != "$expected" ]; then
     exit 1
 fi
 
-# Verify build provenance attestation (optional, requires gh CLI).
+# Verify build provenance attestation.
+# If gh CLI is installed, attestation MUST succeed — a failure is treated
+# as fatal so a tampered release channel cannot silently defeat the check.
+# If gh is not installed, warn loudly and continue. Set MURK_REQUIRE_ATTESTATION=1
+# to refuse install without attestation.
 if command -v gh >/dev/null 2>&1; then
     if gh attestation verify "$tmpdir/$archive" --repo "$REPO" >/dev/null 2>&1; then
         echo "verified build provenance attestation"
     else
-        echo "warning: attestation verification failed — binary may not have been built by CI" >&2
-        echo "hint: install the latest gh CLI for attestation support, or verify manually" >&2
+        echo "error: attestation verification failed — aborting install" >&2
+        echo "hint: this binary may not have been built by CI, or the release was tampered with" >&2
+        echo "hint: to bypass, set MURK_SKIP_ATTESTATION=1 (not recommended)" >&2
+        if [ "${MURK_SKIP_ATTESTATION:-0}" != "1" ]; then
+            exit 1
+        fi
     fi
+elif [ "${MURK_REQUIRE_ATTESTATION:-0}" = "1" ]; then
+    echo "error: MURK_REQUIRE_ATTESTATION is set but gh CLI is not installed" >&2
+    echo "hint: install gh from https://cli.github.com or unset MURK_REQUIRE_ATTESTATION" >&2
+    exit 1
+else
+    echo "warning: gh CLI not installed — skipping provenance verification" >&2
+    echo "hint: install gh to verify that this binary was built by CI" >&2
 fi
 
 tar xzf "$tmpdir/$archive" -C "$tmpdir"
