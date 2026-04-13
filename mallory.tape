@@ -70,7 +70,7 @@ Type `murk circle authorize "$MALLORY_PUBKEY" --name mallory`
 Enter
 Sleep 3s
 
-Type "# Can't — she's not a recipient, so she edits .murk directly"
+Type "# She's not a recipient, so she edits .murk directly"
 Enter
 Sleep 1s
 
@@ -114,6 +114,6 @@ Type "murk get DATABASE_URL"
 Enter
 Sleep 3s
 
-Type "# The vault is safe — restore from git"
+Type "# The vault is safe, restore from git"
 Enter
 Sleep 2s

@@ -79,7 +79,7 @@ Type `echo "API_KEY=$API_KEY"`
 Enter
 Sleep 2s
 
-Type "# Leave and come back — direnv reloads automatically"
+Type "# Leave and come back, direnv reloads automatically"
 Enter
 Sleep 500ms
 

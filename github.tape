@@ -62,7 +62,7 @@ Type "murk circle"
 Enter
 Sleep 3s
 
-Type "# Commit and push — done"
+Type "# Commit and push"
 Enter
 Sleep 500ms
 

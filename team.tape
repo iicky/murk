@@ -45,7 +45,7 @@ Show
 
 # === ALICE: review vault and add scoped override ===
 
-Type "# Check the vault — 1 recipient, 3 secrets"
+Type "# Check the vault, 1 recipient and 3 secrets"
 Enter
 Sleep 500ms
 
@@ -99,7 +99,7 @@ Type "murk init"
 Enter
 Sleep 4s
 
-Type "# 1 recipient — Bob isn't on the team yet"
+Type "# 1 recipient, Bob isn't on the team yet"
 Enter
 Sleep 500ms
 
@@ -177,7 +177,7 @@ Type "git pull"
 Enter
 Sleep 2s
 
-Type "# 2 recipients now — Bob is on the team"
+Type "# 2 recipients now, Bob is on the team"
 Enter
 Sleep 500ms
 
