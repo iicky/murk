@@ -53,6 +53,6 @@ Type "murk circle"
 Enter
 Sleep 2s
 
-Type "# Bob's SSH key is now a recipient — done"
+Type "# Bob's SSH key is now a recipient"
 Enter
 Sleep 2s

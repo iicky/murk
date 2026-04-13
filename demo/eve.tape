@@ -41,7 +41,7 @@ Enter
 Sleep 300ms
 Show
 
-Type "# Eve cloned the repo — she has the .murk file"
+Type "# Eve cloned the repo, so she has the .murk file"
 Enter
 Sleep 1s
 

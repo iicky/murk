@@ -51,6 +51,6 @@ Type `echo "$PHRASE" | murk restore`
 Enter
 Sleep 2s
 
-Type "# Same key — round trip confirmed"
+Type "# Same key, round trip confirmed"
 Enter
 Sleep 2s
