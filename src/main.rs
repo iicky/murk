@@ -2174,7 +2174,9 @@ fn main() {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
         Command::Restore => cmd_restore(),
-        Command::Import { file, force, vault } => cmd_import(&file, force, &vault),
+        Command::Import { file, force, vault } => {
+            cmd_import(&file, force, &murk_cli::resolve_vault_path(&vault));
+        }
         Command::Add {
             key,
             desc,
@@ -2182,6 +2184,7 @@ fn main() {
             tag,
             vault,
         } => {
+            let vault = murk_cli::resolve_vault_path(&vault);
             let resolved = resolve_value(&key);
             cmd_add(&key, &resolved, desc.as_deref(), scoped, &tag, &vault);
         }
@@ -2192,7 +2195,14 @@ fn main() {
             desc,
             tag,
             vault,
-        } => cmd_generate(&key, length, hex, desc.as_deref(), &tag, &vault),
+        } => cmd_generate(
+            &key,
+            length,
+            hex,
+            desc.as_deref(),
+            &tag,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
         Command::Rotate {
             key,
             all,
@@ -2200,39 +2210,77 @@ fn main() {
             length,
             hex,
             vault,
-        } => cmd_rotate(key.as_deref(), all, generate, length, hex, &vault),
-        Command::Rm { key, vault } => cmd_rm(&key, &vault),
-        Command::Get { key, vault } => cmd_get(&key, &vault),
-        Command::Ls { tag, json, vault } => cmd_ls(&tag, json, &vault),
+        } => cmd_rotate(
+            key.as_deref(),
+            all,
+            generate,
+            length,
+            hex,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
+        Command::Rm { key, vault } => cmd_rm(&key, &murk_cli::resolve_vault_path(&vault)),
+        Command::Get { key, vault } => cmd_get(&key, &murk_cli::resolve_vault_path(&vault)),
+        Command::Ls { tag, json, vault } => {
+            cmd_ls(&tag, json, &murk_cli::resolve_vault_path(&vault));
+        }
         Command::Describe {
             key,
             description,
             example,
             tag,
             vault,
-        } => cmd_describe(&key, &description, example.as_deref(), &tag, &vault),
-        Command::Info { tag, json, vault } => cmd_info(&tag, json, &vault),
-        Command::Export { tag, json, vault } => cmd_export(&tag, json, &vault),
-        Command::Edit { key, scoped, vault } => cmd_edit(key.as_deref(), scoped, &vault),
+        } => cmd_describe(
+            &key,
+            &description,
+            example.as_deref(),
+            &tag,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
+        Command::Info { tag, json, vault } => {
+            cmd_info(&tag, json, &murk_cli::resolve_vault_path(&vault));
+        }
+        Command::Export { tag, json, vault } => {
+            cmd_export(&tag, json, &murk_cli::resolve_vault_path(&vault));
+        }
+        Command::Edit { key, scoped, vault } => {
+            cmd_edit(
+                key.as_deref(),
+                scoped,
+                &murk_cli::resolve_vault_path(&vault),
+            );
+        }
         Command::Exec {
             only,
             tag,
             clean_env,
             vault,
             command,
-        } => cmd_exec(&command, &only, &tag, clean_env, &vault),
+        } => cmd_exec(
+            &command,
+            &only,
+            &tag,
+            clean_env,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
         Command::Authorize {
             pubkey,
             name,
             force,
             vault,
-        } => cmd_authorize(&pubkey, name.as_deref(), force, &vault),
-        Command::Revoke { recipient, vault } => cmd_revoke(&recipient, &vault),
+        } => cmd_authorize(
+            &pubkey,
+            name.as_deref(),
+            force,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
+        Command::Revoke { recipient, vault } => {
+            cmd_revoke(&recipient, &murk_cli::resolve_vault_path(&vault));
+        }
         Command::Circle {
             sub: None,
             json,
             vault,
-        } => cmd_recipients(json, &vault),
+        } => cmd_recipients(json, &murk_cli::resolve_vault_path(&vault)),
         Command::Circle {
             sub:
                 Some(CircleCommand::Authorize {
@@ -2242,23 +2290,37 @@ fn main() {
                     vault,
                 }),
             ..
-        } => cmd_authorize(&pubkey, name.as_deref(), force, &vault),
+        } => cmd_authorize(
+            &pubkey,
+            name.as_deref(),
+            force,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
         Command::Circle {
             sub: Some(CircleCommand::Revoke { recipient, vault }),
             ..
-        } => cmd_revoke(&recipient, &vault),
+        } => cmd_revoke(&recipient, &murk_cli::resolve_vault_path(&vault)),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,
             show_values,
             json,
             vault,
-        } => cmd_diff(&git_ref, show_values, json, &vault),
+        } => cmd_diff(
+            &git_ref,
+            show_values,
+            json,
+            &murk_cli::resolve_vault_path(&vault),
+        ),
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
-        Command::Verify { vault } => cmd_verify(&vault),
-        Command::Skeleton { output, vault } => cmd_skeleton(output.as_deref(), &vault),
-        Command::Scan { paths, vault } => cmd_scan(&paths, &vault),
+        Command::Verify { vault } => cmd_verify(&murk_cli::resolve_vault_path(&vault)),
+        Command::Skeleton { output, vault } => {
+            cmd_skeleton(output.as_deref(), &murk_cli::resolve_vault_path(&vault));
+        }
+        Command::Scan { paths, vault } => {
+            cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));
+        }
         Command::Completion { action } => match action {
             CompletionAction::Generate { shell } => cmd_completion_generate(shell),
             CompletionAction::Install { shell } => cmd_completion_install(shell),
