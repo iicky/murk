@@ -124,6 +124,64 @@ pub fn read_vault(vault_path: &str) -> Result<types::Vault, MurkError> {
     Ok(vault::read(Path::new(vault_path))?)
 }
 
+/// Resolve a vault path argument, walking up parent directories to discover the vault.
+///
+/// Mirrors how git finds `.git` and cargo finds `Cargo.toml`: if the user passed a bare
+/// filename (no path separator, not absolute) and it does not exist in the current
+/// directory, walk up from CWD looking for a file of that name. Stops at:
+///
+/// - a directory containing `.git` (the git root — don't escape the repo)
+/// - `$HOME` (don't traverse into parents of the user's home)
+/// - the filesystem root
+///
+/// If a match is found, returns the absolute path. Otherwise returns the input unchanged,
+/// so downstream error messages still reference what the user asked for.
+///
+/// Explicit paths (absolute, or containing `/` or `\`) are returned unchanged — the user
+/// told us exactly where to look, so don't second-guess them.
+pub fn resolve_vault_path(arg: &str) -> String {
+    use std::path::PathBuf;
+
+    // Explicit path: no traversal.
+    if arg.is_empty() || arg.contains('/') || arg.contains('\\') || Path::new(arg).is_absolute() {
+        return arg.to_string();
+    }
+
+    let Ok(cwd) = std::env::current_dir() else {
+        return arg.to_string();
+    };
+
+    // Found in CWD — nothing to discover.
+    if cwd.join(arg).exists() {
+        return arg.to_string();
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dir = cwd.as_path();
+    loop {
+        let candidate = dir.join(arg);
+        if candidate.exists() {
+            return candidate.to_string_lossy().into_owned();
+        }
+        // Stop at git root after checking this directory.
+        if dir.join(".git").exists() {
+            break;
+        }
+        // Stop at $HOME boundary (don't traverse above the user's home).
+        if let Some(ref h) = home
+            && dir == h.as_path()
+        {
+            break;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent,
+            None => break,
+        }
+    }
+
+    arg.to_string()
+}
+
 /// Decrypt a vault using the given identity. Verifies integrity, decrypts all
 /// shared and scoped values, and returns the working state.
 ///
@@ -558,6 +616,73 @@ mod tests {
     use std::fs;
 
     use crate::testutil::ENV_LOCK;
+
+    #[test]
+    fn resolve_vault_path_finds_in_parent_dir() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        // Create a fake git repo with a vault at the root and a nested subdir.
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".murk"), "{}").unwrap();
+        let nested = dir.path().join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&nested).unwrap();
+        let got = resolve_vault_path(".murk");
+        std::env::set_current_dir(prev).unwrap();
+
+        assert_eq!(
+            std::fs::canonicalize(&got).unwrap(),
+            std::fs::canonicalize(dir.path().join(".murk")).unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_vault_path_returns_as_is_when_found_in_cwd() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".murk"), "{}").unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let got = resolve_vault_path(".murk");
+        std::env::set_current_dir(prev).unwrap();
+        assert_eq!(got, ".murk");
+    }
+
+    #[test]
+    fn resolve_vault_path_passes_through_explicit_paths() {
+        assert_eq!(resolve_vault_path("/abs/path.murk"), "/abs/path.murk");
+        assert_eq!(resolve_vault_path("./foo.murk"), "./foo.murk");
+        assert_eq!(resolve_vault_path("sub/dir.murk"), "sub/dir.murk");
+    }
+
+    #[test]
+    fn resolve_vault_path_stops_at_git_root() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        // Vault lives OUTSIDE the git repo; traversal should not find it.
+        fs::write(dir.path().join(".murk"), "{}").unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        fs::create_dir(repo.join(".git")).unwrap();
+        let nested = repo.join("sub");
+        fs::create_dir(&nested).unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&nested).unwrap();
+        let got = resolve_vault_path(".murk");
+        std::env::set_current_dir(prev).unwrap();
+
+        // Unchanged — we stopped at the git root and never saw the outer vault.
+        assert_eq!(got, ".murk");
+    }
 
     #[test]
     fn encrypt_decrypt_value_roundtrip() {
