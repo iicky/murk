@@ -2314,24 +2314,36 @@ fn verify_fails_on_tampered_vault() {
 }
 
 #[test]
-fn verify_flags_inline_murk_key_in_dotenv() {
-    // The .env runtime fallback is gone, so an inline MURK_KEY in .env is
-    // dead config — verify should surface it as a safety issue.
+fn doctor_clean_repo_passes() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
 
-    // Append an inline MURK_KEY= line to the .env that init wrote.
+    // init_vault doesn't make this a git repo, so the gitignore check
+    // won't fire. Doctor should report clean.
+    murk(&dir, &key)
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("repo hygiene looks clean"));
+}
+
+#[test]
+fn doctor_flags_inline_murk_key_in_dotenv() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Append an inline MURK_KEY= line to the .env init wrote.
     let env_path = dir.path().join(".env");
     let mut contents = fs::read_to_string(&env_path).unwrap();
     contents.push_str("MURK_KEY=AGE-SECRET-KEY-1INLINEFAKE\n");
     fs::write(&env_path, contents).unwrap();
 
     murk(&dir, &key)
-        .args(["verify", "--vault", "test.murk"])
+        .args(["doctor"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("inline MURK_KEY in .env"))
-        .stderr(predicate::str::contains("vault integrity verified"));
+        .stderr(predicate::str::contains("issue in repo"));
 }
 
 #[test]
