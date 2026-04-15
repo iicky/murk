@@ -2314,6 +2314,40 @@ fn verify_fails_on_tampered_vault() {
 }
 
 #[test]
+fn verify_flags_inline_murk_key_in_dotenv() {
+    // The .env runtime fallback is gone, so an inline MURK_KEY in .env is
+    // dead config — verify should surface it as a safety issue.
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // Append an inline MURK_KEY= line to the .env that init wrote.
+    let env_path = dir.path().join(".env");
+    let mut contents = fs::read_to_string(&env_path).unwrap();
+    contents.push_str("MURK_KEY=AGE-SECRET-KEY-1INLINEFAKE\n");
+    fs::write(&env_path, contents).unwrap();
+
+    murk(&dir, &key)
+        .args(["verify", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("inline MURK_KEY in .env"))
+        .stderr(predicate::str::contains("vault integrity verified"));
+}
+
+#[test]
+fn verify_reports_key_source() {
+    // Verify should print which key source it used, for transparency.
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["verify", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("key  MURK_KEY"));
+}
+
+#[test]
 fn skeleton_strips_secrets_and_recipients() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);

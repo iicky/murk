@@ -2091,9 +2091,140 @@ fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     }
 }
 
+/// A single finding produced by `murk verify`. Each check either passes
+/// silently or produces a `Finding` describing what's wrong and how to fix it.
+struct Finding {
+    /// Short category tag printed next to the line (e.g. "mac", "recipients").
+    category: &'static str,
+    /// One-line human-readable message.
+    message: String,
+    /// Optional fix hint printed underneath.
+    fix: Option<String>,
+}
+
 fn cmd_verify(vault_path: &str) {
-    let _ = load_vault(vault_path);
-    eprintln!("{} vault integrity verified", "ok".green().bold());
+    // Always load the vault first — MAC/integrity failure should short-circuit
+    // the rest of the checks with the hard error from the loader.
+    let (vault, murk, _identity) = load_vault(vault_path);
+
+    let mut findings: Vec<Finding> = Vec::new();
+
+    // ── MAC ──
+    // load_vault succeeded, so integrity passed. If the vault is on the
+    // legacy unkeyed MAC, surface that as a finding so verify doesn't
+    // pass silently on a vault that's overdue for an upgrade.
+    if murk.legacy_mac {
+        findings.push(Finding {
+            category: "mac",
+            message: "vault uses legacy unkeyed MAC".into(),
+            fix: Some("run any write command (e.g. `murk describe`) to upgrade to BLAKE3".into()),
+        });
+    }
+
+    // ── Vault file permissions ──
+    // The vault file itself is public-by-design, so we don't care about read
+    // perms. We do care about *write* perms: a group-writable vault is an
+    // easy way for a local attacker to tamper with ciphertext.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(vault_path) {
+            let mode = meta.mode() & 0o777;
+            if mode & 0o022 != 0 {
+                findings.push(Finding {
+                    category: "perms",
+                    message: format!("vault file is group/world writable (mode {mode:o})"),
+                    fix: Some(format!("chmod 644 {vault_path}")),
+                });
+            }
+        }
+    }
+
+    // ── Key source ──
+    // After the .env kill, every valid key source is safe. But if verify
+    // can't resolve a key at all, that's still worth flagging — the vault
+    // loaded for us only because we were authorized via the auto key file.
+    // Re-resolve explicitly to surface the source in the output.
+    match murk_cli::resolve_key_with_source(vault_path) {
+        Ok((_, source)) => {
+            // Explicit note on where the key came from, for transparency.
+            eprintln!(
+                "{} key  {}",
+                "ok".green().bold(),
+                source.describe().dimmed()
+            );
+        }
+        Err(msg) => {
+            findings.push(Finding {
+                category: "key",
+                message: format!("cannot resolve a key: {msg}"),
+                fix: None,
+            });
+        }
+    }
+
+    // ── Inline MURK_KEY in .env ──
+    // A .env that inlines MURK_KEY is a clear downgrade from the reference
+    // form that `murk init` writes. After the .env kill, it's also dead
+    // config — nothing reads it. Flag it so users clean it up.
+    if std::path::Path::new(".env").exists()
+        && let Ok(contents) = std::fs::read_to_string(".env")
+    {
+        let has_inline = contents.lines().any(|l| {
+            let t = l.trim_start();
+            (t.starts_with("MURK_KEY=") || t.starts_with("export MURK_KEY="))
+                && !t.starts_with("MURK_KEY_FILE=")
+                && !t.starts_with("export MURK_KEY_FILE=")
+        });
+        if has_inline {
+            findings.push(Finding {
+                category: "dotenv",
+                message: "inline MURK_KEY in .env (no longer read at runtime)".into(),
+                fix: Some("replace with `export MURK_KEY_FILE=...` via `murk init`".into()),
+            });
+        }
+    }
+
+    // ── Weak recipient types ──
+    let rsa_recipients: Vec<&String> = vault
+        .recipients
+        .iter()
+        .filter(|r| r.starts_with("ssh-rsa "))
+        .collect();
+    if !rsa_recipients.is_empty() {
+        findings.push(Finding {
+            category: "recipients",
+            message: format!(
+                "{} ssh-rsa recipient{} present",
+                rsa_recipients.len(),
+                if rsa_recipients.len() == 1 { "" } else { "s" }
+            ),
+            fix: Some("rotate to ed25519 keys and `murk revoke` the old ssh-rsa recipients".into()),
+        });
+    }
+
+    // ── Report ──
+    if findings.is_empty() {
+        eprintln!("{} vault integrity verified", "ok".green().bold());
+        eprintln!("{} no safety issues found", "ok".green().bold());
+        return;
+    }
+
+    eprintln!("{} vault integrity verified (MAC ok)", "ok".green().bold());
+    eprintln!();
+    eprintln!(
+        "{} {} safety issue{} found",
+        "warn".yellow().bold(),
+        findings.len(),
+        if findings.len() == 1 { "" } else { "s" }
+    );
+    for f in &findings {
+        eprintln!("  {} {}", f.category.yellow().bold(), f.message);
+        if let Some(fix) = &f.fix {
+            eprintln!("      {}", fix.dimmed());
+        }
+    }
+    std::process::exit(1);
 }
 
 fn cmd_completion_generate(shell: clap_complete::Shell) {
