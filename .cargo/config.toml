@@ -1,0 +1,17 @@
+# Local build settings. Not shipped with the binary — these only affect
+# developer-machine cargo invocations.
+
+[build]
+# Use all cores for compilation by default.
+# cargo already does this, but being explicit makes it easy to override
+# with CARGO_BUILD_JOBS when debugging contention.
+
+[profile.dev]
+# Skip dsymutil on macOS by leaving debug info unpacked — this is the
+# single biggest dev-build speedup on Apple Silicon. Already the default
+# on recent cargo, set explicitly so it survives future default changes.
+split-debuginfo = "unpacked"
+
+[profile.test]
+# Match dev so integration test binaries don't pay dsymutil either.
+split-debuginfo = "unpacked"
