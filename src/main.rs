@@ -237,6 +237,9 @@ enum Command {
         /// Accept changed GitHub keys without confirmation
         #[arg(long)]
         force: bool,
+        /// Allow ssh-rsa recipients (rejected by default — use ed25519)
+        #[arg(long)]
+        allow_ssh_rsa: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -362,6 +365,9 @@ enum CircleCommand {
         /// Accept changed GitHub keys without confirmation
         #[arg(long)]
         force: bool,
+        /// Allow ssh-rsa recipients (rejected by default — use ed25519)
+        #[arg(long)]
+        allow_ssh_rsa: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -1521,28 +1527,54 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
     }
 }
 
-fn warn_rsa_keys(keys: &[String]) {
-    let rsa_count = keys.iter().filter(|k| k.starts_with("ssh-rsa ")).count();
-    if rsa_count > 0 {
+fn is_ssh_rsa(key: &str) -> bool {
+    key.starts_with("ssh-rsa ")
+}
+
+/// Abort if any of the given keys are ssh-rsa, unless the user passed
+/// `--allow-ssh-rsa`. Default-closed because ssh-rsa has known weaknesses
+/// (see RUSTSEC-2023-0071) and ed25519 is strictly better for this use case.
+fn reject_rsa_keys(keys: &[String], allow: bool) {
+    let rsa_count = keys.iter().filter(|k| is_ssh_rsa(k)).count();
+    if rsa_count == 0 {
+        return;
+    }
+    if allow {
         eprintln!(
-            "{} {} ssh-rsa key{} added — ed25519 is recommended (see RUSTSEC-2023-0071)",
+            "{} {} ssh-rsa key{} authorized via --allow-ssh-rsa — ed25519 is strongly recommended (see RUSTSEC-2023-0071)",
             "warn".yellow().bold(),
             rsa_count,
             if rsa_count == 1 { "" } else { "s" }
         );
+        return;
     }
+    die(
+        &format_args!(
+            "refusing to authorize {rsa_count} ssh-rsa key{s} — ed25519 is strongly recommended (see RUSTSEC-2023-0071). Pass --allow-ssh-rsa to override.",
+            s = if rsa_count == 1 { "" } else { "s" }
+        ),
+        1,
+    );
 }
 
-fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str) {
+fn cmd_authorize(
+    pubkey: &str,
+    name: Option<&str>,
+    force: bool,
+    allow_ssh_rsa: bool,
+    vault_path: &str,
+) {
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
     if let Some(username) = pubkey.strip_prefix("github:") {
         // Fetch all SSH keys from GitHub.
-        let keys = try_or_die(murk_cli::fetch_keys(username).map_err(|e| e.to_string()));
+        let all_keys = try_or_die(murk_cli::fetch_keys(username).map_err(|e| e.to_string()));
 
-        // TOFU: check fetched keys against pinned fingerprints.
+        // TOFU: check fetched keys against pinned fingerprints. Pin checking
+        // runs over the full key set (including ssh-rsa) so rotation of an
+        // rsa key is still detected even though we refuse to authorize it.
         let pinned = murk_cli::decrypt_meta(&vault, &identity)
             .and_then(|m| {
                 let pins = m.github_pins.get(username)?.clone();
@@ -1550,8 +1582,38 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
             })
             .unwrap_or_default();
 
-        if !force && let Err(msg) = murk_cli::github::check_pins(username, &keys, &pinned) {
+        if !force && let Err(msg) = murk_cli::github::check_pins(username, &all_keys, &pinned) {
             die(&msg, 1);
+        }
+
+        // Filter ssh-rsa out of the authorize set unless explicitly allowed.
+        // We don't abort the whole operation the way we do for a single raw
+        // pubkey — GitHub users often have a mix of key types and the common
+        // case is "use the ed25519 ones, skip the rsa ones with a warning."
+        let rsa_skipped = all_keys.iter().filter(|(_, k)| is_ssh_rsa(k)).count();
+        let keys: Vec<_> = if allow_ssh_rsa {
+            all_keys.iter().collect()
+        } else {
+            all_keys.iter().filter(|(_, k)| !is_ssh_rsa(k)).collect()
+        };
+        if rsa_skipped > 0 && !allow_ssh_rsa {
+            eprintln!(
+                "{} skipped {} ssh-rsa key{} from {}@github — ed25519 is strongly recommended (see RUSTSEC-2023-0071). Pass --allow-ssh-rsa to include them.",
+                "warn".yellow().bold(),
+                rsa_skipped,
+                if rsa_skipped == 1 { "" } else { "s" },
+                username
+            );
+        }
+        if keys.is_empty() {
+            die(
+                &format_args!(
+                    "no authorizable keys for {username}@github — all {total} key{s} were ssh-rsa and --allow-ssh-rsa was not set",
+                    total = all_keys.len(),
+                    s = if all_keys.len() == 1 { "" } else { "s" }
+                ),
+                1,
+            );
         }
 
         let display_name = format!("{username}@github");
@@ -1587,8 +1649,11 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
             return;
         }
 
-        // Update pinned fingerprints for this GitHub user.
-        let new_pins: Vec<String> = keys
+        // Update pinned fingerprints for this GitHub user. Pin the full
+        // upstream set, not just the filtered one, so future TOFU comparisons
+        // still detect when an ssh-rsa key rotates even though we don't
+        // authorize it.
+        let new_pins: Vec<String> = all_keys
             .iter()
             .map(|(_, k)| murk_cli::github::fingerprint(k))
             .collect();
@@ -1611,9 +1676,6 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
             summary,
             if added == 1 { "" } else { "s" }
         );
-
-        let added_keys: Vec<String> = keys.iter().map(|(_, k)| k.clone()).collect();
-        warn_rsa_keys(&added_keys);
     } else if let Some(path_hint) = pubkey.strip_prefix("ssh:") {
         // Read SSH public key from a file.
         let path = if path_hint.is_empty() {
@@ -1647,6 +1709,7 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
             }
         };
 
+        reject_rsa_keys(std::slice::from_ref(&key_string), allow_ssh_rsa);
         try_or_die(murk_cli::authorize_recipient(
             &mut vault,
             &mut current,
@@ -1660,9 +1723,9 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
             .map(|n| n.to_string())
             .unwrap_or_else(|| path.display().to_string());
         eprintln!("{} authorized {}", "◆".magenta(), display.bold());
-        warn_rsa_keys(&[key_string]);
     } else {
         // Raw pubkey (age or SSH).
+        reject_rsa_keys(&[pubkey.to_string()], allow_ssh_rsa);
         try_or_die(murk_cli::authorize_recipient(
             &mut vault,
             &mut current,
@@ -1674,7 +1737,6 @@ fn cmd_authorize(pubkey: &str, name: Option<&str>, force: bool, vault_path: &str
 
         let display = name.unwrap_or(pubkey);
         eprintln!("{} authorized {}", "◆".magenta(), display.bold());
-        warn_rsa_keys(&[pubkey.to_string()]);
     }
 }
 
@@ -2399,11 +2461,13 @@ fn main() {
             pubkey,
             name,
             force,
+            allow_ssh_rsa,
             vault,
         } => cmd_authorize(
             &pubkey,
             name.as_deref(),
             force,
+            allow_ssh_rsa,
             &murk_cli::resolve_vault_path(&vault),
         ),
         Command::Revoke { recipient, vault } => {
@@ -2420,6 +2484,7 @@ fn main() {
                     pubkey,
                     name,
                     force,
+                    allow_ssh_rsa,
                     vault,
                 }),
             ..
@@ -2427,6 +2492,7 @@ fn main() {
             &pubkey,
             name.as_deref(),
             force,
+            allow_ssh_rsa,
             &murk_cli::resolve_vault_path(&vault),
         ),
         Command::Circle {

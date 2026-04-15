@@ -2664,6 +2664,81 @@ fn authorize_ssh_file_not_found() {
         .stderr(predicate::str::contains("cannot read"));
 }
 
+// A well-formed but weak ssh-rsa public key used only to test the
+// ssh-rsa rejection path. Not a real key — murk should refuse to add it
+// regardless, so the bytes don't matter beyond "parses as ssh-rsa."
+const FAKE_SSH_RSA_KEY: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC6Fj9mHw0TMFR5D+J/fakekey+r0fLrqSoaOvIWFLr0OhQnyJEnOzEq6eEuV7krsKu/GzSWrlgPXJpNRGa8TEoLK7RUfYkEU8qoYylSpmGnvj2qtDQNN++j0QIqfiryh3wNJWTKhTN9EThB2wQ3r1mBiQQLq5QrPbqfejkCcpHZpkS3pyv1SpNV6hZlEmG2GSbAjBxJqrV3K6+z6uDGdqMF7/m+wJNMZsSYUpTlgrxHVM8n5YajdlEbBTEdfBnebQ+k8ofYVK0kFTokI50TjHnFnHqJcxbu8kDbfsYSUYkhsPEESz2iIxdngftLxcaNBmMY8T49SW/KMOHtr5z6ht6Jx fake@test";
+
+#[test]
+fn authorize_raw_ssh_rsa_rejected_by_default() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            FAKE_SSH_RSA_KEY,
+            "--name",
+            "rsa-user",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to authorize"))
+        .stderr(predicate::str::contains("--allow-ssh-rsa"));
+}
+
+#[test]
+fn authorize_raw_ssh_rsa_override_passes_the_gate() {
+    // We don't have a real parseable ssh-rsa key in-tree, so we verify the
+    // narrower property: with --allow-ssh-rsa, the ssh-rsa refusal gate is
+    // bypassed (warning printed), and control reaches the real key parser.
+    // Any downstream parse failure is acceptable — the point of this test
+    // is that `reject_rsa_keys` doesn't fire.
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            FAKE_SSH_RSA_KEY,
+            "--name",
+            "rsa-user",
+            "--allow-ssh-rsa",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .stderr(predicate::str::contains("authorized via --allow-ssh-rsa"))
+        .stderr(predicate::str::contains("refusing to authorize").not());
+}
+
+#[test]
+fn authorize_ssh_file_ssh_rsa_rejected_by_default() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    let pub_path = dir.path().join("rsa.pub");
+    fs::write(&pub_path, format!("{FAKE_SSH_RSA_KEY}\n")).unwrap();
+
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &format!("ssh:{}", pub_path.display()),
+            "--name",
+            "rsa-user",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to authorize"));
+}
+
 #[test]
 fn authorize_ssh_file_empty() {
     let dir = TempDir::new().unwrap();
