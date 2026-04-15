@@ -167,23 +167,28 @@ fn init_existing_vault_no_key() {
 }
 
 #[test]
-fn init_existing_vault_reads_dotenv() {
+fn init_existing_vault_ignores_dotenv() {
+    // murk-82q: .env is no longer a trusted runtime input. With MURK_KEY and
+    // MURK_KEY_FILE both absent from the environment, init must NOT silently
+    // authorize by reading .env from the current directory.
     let dir = TempDir::new().unwrap();
     let (_key, _) = init_vault(&dir);
 
-    // Key is in .env file but not in environment — should still detect it.
-    Command::cargo_bin("murk")
+    let assertion = Command::cargo_bin("murk")
         .unwrap()
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env("HOME", dir.path())
         .env_remove("MURK_KEY")
         .env_remove("MURK_KEY_FILE")
-        .assert()
-        .success()
-        .stderr(
-            predicate::str::contains("already exists").and(predicate::str::contains("authorized")),
-        );
+        .write_stdin("n\n")
+        .assert();
+    let output = assertion.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("authorized"),
+        "init must not report authorized when .env is the only source of the key: {stderr}"
+    );
 }
 
 // ── add / get ──

@@ -44,8 +44,8 @@ pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use env::{
-    EnvrcStatus, KeySource, dotenv_has_murk_key, key_file_path, parse_env, read_key_from_dotenv,
-    resolve_key, resolve_key_for_vault, resolve_key_with_source, warn_env_permissions, write_envrc,
+    EnvrcStatus, KeySource, dotenv_has_murk_key, key_file_path, parse_env, resolve_key,
+    resolve_key_for_vault, resolve_key_with_source, warn_env_permissions, write_envrc,
     write_key_ref_to_dotenv, write_key_to_dotenv, write_key_to_file,
 };
 pub use error::MurkError;
