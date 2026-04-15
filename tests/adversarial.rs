@@ -292,6 +292,60 @@ fn symlinked_vault_does_not_autodiscover_target_key() {
 
 #[cfg(unix)]
 #[test]
+fn copied_vault_cannot_borrow_key_via_dotenv() {
+    // murk-82q regression: copying a vault into repoB along with a .env that
+    // inlines repoA's MURK_KEY (or a MURK_KEY_FILE reference) must NOT let
+    // repoB decrypt the copied vault. Runtime key resolution ignores .env —
+    // the environment is the only trusted source.
+    let dir_a = TempDir::new().unwrap();
+    let dir_b = TempDir::new().unwrap();
+    let fake_home = TempDir::new().unwrap();
+
+    let (key_a, _) = init_vault(&dir_a);
+
+    // Add a secret in A so there's something to try to read.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .current_dir(dir_a.path())
+        .env("MURK_KEY", &key_a)
+        .env("HOME", dir_a.path())
+        .write_stdin("hunter2\n")
+        .assert()
+        .success();
+
+    // Copy the vault file itself into B (the "stolen vault" scenario).
+    fs::copy(
+        dir_a.path().join("test.murk"),
+        dir_b.path().join("test.murk"),
+    )
+    .unwrap();
+
+    // Plant a .env in B that inlines A's key. In the old world this would
+    // have been picked up by the runtime fallback and decrypted the vault.
+    fs::write(
+        dir_b.path().join(".env"),
+        format!("export MURK_KEY={key_a}\n"),
+    )
+    .unwrap();
+
+    // Runtime resolution ignores .env → no key → decrypting the copied
+    // vault must fail. Use `get` (not `ls`) because `ls` only reads the
+    // plaintext schema and would succeed even without a key.
+    Command::cargo_bin("murk")
+        .unwrap()
+        .args(["get", "SECRET", "--vault", "test.murk"])
+        .current_dir(dir_b.path())
+        .env("HOME", fake_home.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("MURK_KEY"));
+}
+
+#[cfg(unix)]
+#[test]
 fn env_file_symlink_rejected() {
     let dir = TempDir::new().unwrap();
 

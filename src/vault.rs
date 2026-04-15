@@ -60,6 +60,16 @@ pub fn parse(contents: &str) -> Result<Vault, VaultError> {
 /// redirecting vault operations to a different project's vault (and thus
 /// triggering auto key-file lookup against the attacker-controlled path).
 pub fn read(path: &Path) -> Result<Vault, VaultError> {
+    Ok(read_with_raw(path)?.0)
+}
+
+/// Read a .murk vault file and return both the parsed vault and the raw bytes.
+///
+/// Use this when a caller needs the raw file contents (e.g. for computing a
+/// content-addressed codename via `codename::from_bytes`) and must NOT bypass
+/// the symlink rejection and version check that `read` enforces. Callers
+/// should always prefer this or `read` over calling `fs::read(path)` directly.
+pub fn read_with_raw(path: &Path) -> Result<(Vault, Vec<u8>), VaultError> {
     if path.is_symlink() {
         return Err(VaultError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -70,7 +80,8 @@ pub fn read(path: &Path) -> Result<Vault, VaultError> {
         )));
     }
     let contents = fs::read_to_string(path)?;
-    parse(&contents)
+    let vault = parse(&contents)?;
+    Ok((vault, contents.into_bytes()))
 }
 
 /// An exclusive advisory lock on a vault file.

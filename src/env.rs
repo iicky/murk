@@ -92,8 +92,6 @@ pub enum KeySource {
     EnvFile(std::path::PathBuf),
     /// Auto-discovered at `~/.config/murk/keys/<hash>`.
     Auto(std::path::PathBuf),
-    /// Legacy `.env` file in cwd.
-    Dotenv,
 }
 
 impl KeySource {
@@ -103,12 +101,22 @@ impl KeySource {
             KeySource::EnvVar => "MURK_KEY environment variable".into(),
             KeySource::EnvFile(p) => format!("MURK_KEY_FILE {}", p.display()),
             KeySource::Auto(p) => p.display().to_string(),
-            KeySource::Dotenv => ".env file (deprecated)".into(),
         }
     }
 }
 
 /// Resolve the secret key and report where it came from.
+///
+/// Checks, in order:
+/// 1. `MURK_KEY` env var (explicit key)
+/// 2. `MURK_KEY_FILE` env var (path to a key file)
+/// 3. `~/.config/murk/keys/<hash-of-vault-path>` (automatic lookup)
+///
+/// `.env` is **not** consulted at runtime. It is a write-only convenience that
+/// `murk init` populates with a `MURK_KEY_FILE` reference for direnv to export.
+/// Reading `.env` at runtime would let a copied vault in another repo borrow
+/// whichever key happened to be referenced in the current working directory's
+/// `.env` — a confused-deputy path that defeats per-vault key isolation.
 pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySource), String> {
     if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
         return Ok((SecretString::from(k), KeySource::EnvVar));
@@ -128,23 +136,13 @@ pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySou
             KeySource::Auto(path),
         ));
     }
-    if let Some(key) = read_key_from_dotenv() {
-        eprintln!(
-            "\x1b[1;33mwarn\x1b[0m reading key from .env is deprecated — use MURK_KEY_FILE or `murk init` instead"
-        );
-        return Ok((SecretString::from(key), KeySource::Dotenv));
-    }
     Err(
-        "MURK_KEY not set — run `murk init` to generate a key, or ask a recipient to authorize you"
+        "MURK_KEY not set. Run `murk init` to generate a key, set MURK_KEY_FILE to point at one, or ask a recipient to authorize you. If your .env contains an inline MURK_KEY or MURK_KEY_FILE, run `direnv allow` (or `source .env`) so it is exported to the environment — murk no longer reads .env directly."
             .into(),
     )
 }
 
-/// Resolve the secret key for a specific vault, checking in order:
-/// 1. `MURK_KEY` env var (explicit key)
-/// 2. `MURK_KEY_FILE` env var (path to key file)
-/// 3. `~/.config/murk/keys/<vault-hash>` (automatic lookup keyed to the given vault path)
-/// 4. `.env` file in cwd (backward compat)
+/// Resolve the secret key for a specific vault.
 pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
     resolve_key_with_source(vault_path).map(|(k, _)| k)
 }
@@ -205,43 +203,6 @@ pub fn warn_env_permissions() {
             }
         }
     }
-}
-
-/// Read MURK_KEY from `.env` file if present.
-///
-/// Supports `MURK_KEY_FILE=path` references (preferred) and legacy inline
-/// `MURK_KEY=value` (deprecated — logs a warning).
-pub fn read_key_from_dotenv() -> Option<String> {
-    let env_path = Path::new(".env");
-    let contents = fs::read_to_string(env_path).ok()?;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        // Key file reference (preferred path).
-        if let Some(path_str) = trimmed
-            .strip_prefix("export MURK_KEY_FILE=")
-            .or_else(|| trimmed.strip_prefix("MURK_KEY_FILE="))
-        {
-            let unquoted = path_str.trim().trim_matches('\'');
-            let p = Path::new(unquoted);
-            if let Ok(contents) = read_secret_file(p, "MURK_KEY_FILE from .env") {
-                return Some(contents.trim().to_string());
-            }
-        }
-        // Inline key (deprecated — still accepted for backward compat).
-        if let Some(key) = trimmed.strip_prefix("export MURK_KEY=") {
-            eprintln!(
-                "\x1b[1;33mwarn\x1b[0m inline MURK_KEY in .env is deprecated — use MURK_KEY_FILE instead"
-            );
-            return Some(key.to_string());
-        }
-        if let Some(key) = trimmed.strip_prefix("MURK_KEY=") {
-            eprintln!(
-                "\x1b[1;33mwarn\x1b[0m inline MURK_KEY in .env is deprecated — use MURK_KEY_FILE instead"
-            );
-            return Some(key.to_string());
-        }
-    }
-    None
 }
 
 /// Check whether `.env` already contains a `MURK_KEY` line.
@@ -751,54 +712,48 @@ mod tests {
     }
 
     #[test]
-    fn read_key_from_dotenv_export_form() {
+    fn resolve_key_does_not_read_dotenv() {
+        // Confirms the murk-82q fix: even if .env sits in CWD with an inline
+        // MURK_KEY, resolve_key_with_source must not pick it up. The runtime
+        // only trusts the environment and the vault-keyed auto lookup.
         let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join("murk_test_read_dotenv_export");
+        let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join("murk_test_resolve_ignores_dotenv");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let env_path = dir.join(".env");
-        std::fs::write(&env_path, "export MURK_KEY=AGE-SECRET-KEY-1ABC\n").unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "MURK_KEY=AGE-SECRET-KEY-1SHOULDNEVERBEREAD\n",
+        )
+        .unwrap();
+
+        // Preserve and clear any ambient key env so we see the true fallback.
+        let prev_key = env::var(ENV_MURK_KEY).ok();
+        let prev_keyfile = env::var(ENV_MURK_KEY_FILE).ok();
+        unsafe {
+            env::remove_var(ENV_MURK_KEY);
+            env::remove_var(ENV_MURK_KEY_FILE);
+        }
 
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
-        let result = read_key_from_dotenv();
+        // Use a vault_path that won't match any auto key file on this machine.
+        let result = resolve_key_with_source("nonexistent-vault-for-test.murk");
         std::env::set_current_dir(original_dir).unwrap();
 
-        assert_eq!(result, Some("AGE-SECRET-KEY-1ABC".into()));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
+        unsafe {
+            if let Some(v) = prev_key {
+                env::set_var(ENV_MURK_KEY, v);
+            }
+            if let Some(v) = prev_keyfile {
+                env::set_var(ENV_MURK_KEY_FILE, v);
+            }
+        }
 
-    #[test]
-    fn read_key_from_dotenv_bare_form() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join("murk_test_read_dotenv_bare");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let env_path = dir.join(".env");
-        std::fs::write(&env_path, "MURK_KEY=AGE-SECRET-KEY-1XYZ\n").unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
-        let result = read_key_from_dotenv();
-        std::env::set_current_dir(original_dir).unwrap();
-
-        assert_eq!(result, Some("AGE-SECRET-KEY-1XYZ".into()));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn read_key_from_dotenv_missing_file() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join("murk_test_read_dotenv_missing");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&dir).unwrap();
-        let result = read_key_from_dotenv();
-        std::env::set_current_dir(original_dir).unwrap();
-
-        assert_eq!(result, None);
+        assert!(
+            result.is_err(),
+            "resolve_key_with_source must not fall back to .env"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

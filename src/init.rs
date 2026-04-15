@@ -41,13 +41,30 @@ pub struct DiscoveredKey {
     pub pubkey: String,
 }
 
-/// Try to find an existing age key: checks `MURK_KEY` env var first,
-/// then falls back to `.env` file. Returns `None` if neither is set.
+/// Try to find an existing age key from the environment.
+///
+/// Checks `MURK_KEY` first, then reads the file at `MURK_KEY_FILE` if set.
+/// Does NOT read `.env` — for direnv users, the shim already exports both
+/// variables into the environment, so the environment is the authoritative
+/// source and `.env` is only a write-only convenience populated by `murk init`.
 pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
-    let raw = env::var(crate::env::ENV_MURK_KEY)
+    let raw = if let Some(k) = env::var(crate::env::ENV_MURK_KEY)
         .ok()
         .filter(|k| !k.is_empty())
-        .or_else(crate::read_key_from_dotenv);
+    {
+        Some(k)
+    } else if let Ok(path) = env::var(crate::env::ENV_MURK_KEY_FILE) {
+        let p = std::path::Path::new(&path);
+        crate::env::reject_symlink(p, "MURK_KEY_FILE")?;
+        Some(
+            std::fs::read_to_string(p)
+                .map_err(|e| format!("cannot read MURK_KEY_FILE: {e}"))?
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
 
     match raw {
         Some(key) => {
@@ -172,21 +189,55 @@ mod tests {
     }
 
     #[test]
-    fn discover_existing_key_from_dotenv() {
+    fn discover_existing_key_ignores_dotenv() {
+        // murk-82q: discover_existing_key must not read .env from CWD, even
+        // in the init flow. A .env sitting in the current directory with an
+        // inline MURK_KEY is explicitly *not* a trusted input source.
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { env::remove_var("MURK_KEY") };
+        unsafe {
+            env::remove_var("MURK_KEY");
+            env::remove_var("MURK_KEY_FILE");
+        }
 
-        // Create a temp .env in a temp dir and chdir there.
-        let dir = std::env::temp_dir().join("murk_test_discover_dotenv");
+        let dir = std::env::temp_dir().join("murk_test_discover_ignores_dotenv");
         std::fs::create_dir_all(&dir).unwrap();
-        let (secret, pubkey) = generate_keypair();
+        let (secret, _pubkey) = generate_keypair();
         std::fs::write(dir.join(".env"), format!("MURK_KEY={secret}\n")).unwrap();
 
         let orig_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
         let result = discover_existing_key();
         std::env::set_current_dir(&orig_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(
+            result.unwrap().is_none(),
+            "discover_existing_key must not fall back to .env"
+        );
+    }
+
+    #[test]
+    fn discover_existing_key_from_env_file_var() {
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            env::remove_var("MURK_KEY");
+        }
+
+        let (secret, pubkey) = generate_keypair();
+        let dir = std::env::temp_dir().join("murk_test_discover_env_file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("key");
+        std::fs::write(&key_path, format!("{secret}\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        unsafe { env::set_var("MURK_KEY_FILE", &key_path) };
+        let result = discover_existing_key();
+        unsafe { env::remove_var("MURK_KEY_FILE") };
         std::fs::remove_dir_all(&dir).unwrap();
 
         let dk = result.unwrap().unwrap();

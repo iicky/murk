@@ -1855,7 +1855,9 @@ fn cmd_recover() {
 }
 
 fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
-    let raw_bytes = fs::read(vault_path).unwrap_or_else(|e| die(&e, 1));
+    // Route through the hardened loader so info rejects symlinked vaults and
+    // enforces the version check — same as every other read path.
+    let (_vault, raw_bytes) = try_or_die(murk_cli::vault::read_with_raw(Path::new(vault_path)));
     let key_with_source = murk_cli::resolve_key_with_source(vault_path).ok();
     let secret_key = key_with_source
         .as_ref()
