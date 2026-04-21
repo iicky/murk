@@ -313,6 +313,9 @@ enum Command {
         vault: String,
     },
 
+    /// Check the surrounding repo for hygiene issues
+    Doctor,
+
     /// Export schema-only vault with no secrets or recipients
     Skeleton {
         /// Output file (prints to stdout if omitted)
@@ -2153,28 +2156,53 @@ fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     }
 }
 
-/// A single finding produced by `murk verify`. Each check either passes
-/// silently or produces a `Finding` describing what's wrong and how to fix it.
+/// A single finding produced by a check command (`verify`, `doctor`, ...).
+/// Each check either passes silently or pushes a `Finding` describing what's
+/// wrong and how to fix it. See `docs/cli-style.md` for the output contract.
 struct Finding {
-    /// Short category tag printed next to the line (e.g. "mac", "recipients").
+    /// Short category tag for the failing-item line (e.g. "mac", "recipients").
     category: &'static str,
     /// One-line human-readable message.
     message: String,
-    /// Optional fix hint printed underneath.
+    /// Optional fix hint, printed dimmed under the parent line.
     fix: Option<String>,
 }
 
+/// Emit a list of findings to stderr per the CLI style guide and exit(1) if
+/// any exist. `header` is a single verb-phrase like "vault" or "repo" — the
+/// reporter prints "warn N issue{s} in {header}" above the list.
+///
+/// Returns `()` on no findings. Exits the process on any finding — callers
+/// should finish any "ok" lines before calling this.
+fn report_findings(findings: &[Finding], header: &str) {
+    if findings.is_empty() {
+        return;
+    }
+
+    eprintln!();
+    eprintln!(
+        "{} {} issue{} in {}",
+        "warn".yellow().bold(),
+        findings.len(),
+        if findings.len() == 1 { "" } else { "s" },
+        header
+    );
+    for f in findings {
+        eprintln!("  {} {} — {}", "✕".red(), f.category.bold(), f.message);
+        if let Some(fix) = &f.fix {
+            eprintln!("      {}", fix.dimmed());
+        }
+    }
+    std::process::exit(1);
+}
+
 fn cmd_verify(vault_path: &str) {
-    // Always load the vault first — MAC/integrity failure should short-circuit
-    // the rest of the checks with the hard error from the loader.
+    // Load the vault first — MAC/integrity failure short-circuits the rest
+    // of the checks with the hard error from the loader.
     let (vault, murk, _identity) = load_vault(vault_path);
 
     let mut findings: Vec<Finding> = Vec::new();
 
-    // ── MAC ──
-    // load_vault succeeded, so integrity passed. If the vault is on the
-    // legacy unkeyed MAC, surface that as a finding so verify doesn't
-    // pass silently on a vault that's overdue for an upgrade.
     if murk.legacy_mac {
         findings.push(Finding {
             category: "mac",
@@ -2183,7 +2211,6 @@ fn cmd_verify(vault_path: &str) {
         });
     }
 
-    // ── Vault file permissions ──
     // The vault file itself is public-by-design, so we don't care about read
     // perms. We do care about *write* perms: a group-writable vault is an
     // easy way for a local attacker to tamper with ciphertext.
@@ -2202,14 +2229,11 @@ fn cmd_verify(vault_path: &str) {
         }
     }
 
-    // ── Key source ──
-    // After the .env kill, every valid key source is safe. But if verify
-    // can't resolve a key at all, that's still worth flagging — the vault
-    // loaded for us only because we were authorized via the auto key file.
-    // Re-resolve explicitly to surface the source in the output.
+    // After the .env kill, every valid key source is safe. Re-resolve
+    // explicitly so verify can surface where the key came from — transparency
+    // about key provenance is the point.
     match murk_cli::resolve_key_with_source(vault_path) {
         Ok((_, source)) => {
-            // Explicit note on where the key came from, for transparency.
             eprintln!(
                 "{} key  {}",
                 "ok".green().bold(),
@@ -2225,29 +2249,6 @@ fn cmd_verify(vault_path: &str) {
         }
     }
 
-    // ── Inline MURK_KEY in .env ──
-    // A .env that inlines MURK_KEY is a clear downgrade from the reference
-    // form that `murk init` writes. After the .env kill, it's also dead
-    // config — nothing reads it. Flag it so users clean it up.
-    if std::path::Path::new(".env").exists()
-        && let Ok(contents) = std::fs::read_to_string(".env")
-    {
-        let has_inline = contents.lines().any(|l| {
-            let t = l.trim_start();
-            (t.starts_with("MURK_KEY=") || t.starts_with("export MURK_KEY="))
-                && !t.starts_with("MURK_KEY_FILE=")
-                && !t.starts_with("export MURK_KEY_FILE=")
-        });
-        if has_inline {
-            findings.push(Finding {
-                category: "dotenv",
-                message: "inline MURK_KEY in .env (no longer read at runtime)".into(),
-                fix: Some("replace with `export MURK_KEY_FILE=...` via `murk init`".into()),
-            });
-        }
-    }
-
-    // ── Weak recipient types ──
     let rsa_recipients: Vec<&String> = vault
         .recipients
         .iter()
@@ -2265,7 +2266,6 @@ fn cmd_verify(vault_path: &str) {
         });
     }
 
-    // ── Report ──
     if findings.is_empty() {
         eprintln!("{} vault integrity verified", "ok".green().bold());
         eprintln!("{} no safety issues found", "ok".green().bold());
@@ -2273,20 +2273,92 @@ fn cmd_verify(vault_path: &str) {
     }
 
     eprintln!("{} vault integrity verified (MAC ok)", "ok".green().bold());
-    eprintln!();
-    eprintln!(
-        "{} {} safety issue{} found",
-        "warn".yellow().bold(),
-        findings.len(),
-        if findings.len() == 1 { "" } else { "s" }
-    );
-    for f in &findings {
-        eprintln!("  {} {}", f.category.yellow().bold(), f.message);
-        if let Some(fix) = &f.fix {
-            eprintln!("      {}", fix.dimmed());
+    report_findings(&findings, "vault");
+}
+
+fn cmd_doctor() {
+    // doctor is repo-level hygiene — it doesn't need a vault to run. The
+    // checks it performs are all about the working tree: env files, key
+    // files sitting next to the vault, obvious commit-would-be-bad state.
+    let mut findings: Vec<Finding> = Vec::new();
+
+    let cwd = std::env::current_dir().unwrap_or_else(|e| die(&e, 1));
+
+    // ── .env contains an inline MURK_KEY ──
+    // After the .env kill this is dead config AND a historical footgun.
+    // Previously-committed .env files with inline keys are still out there.
+    let env_path = cwd.join(".env");
+    if env_path.exists()
+        && let Ok(contents) = std::fs::read_to_string(&env_path)
+    {
+        let has_inline = contents.lines().any(|l| {
+            let t = l.trim_start();
+            (t.starts_with("MURK_KEY=") || t.starts_with("export MURK_KEY="))
+                && !t.starts_with("MURK_KEY_FILE=")
+                && !t.starts_with("export MURK_KEY_FILE=")
+        });
+        if has_inline {
+            findings.push(Finding {
+                category: "dotenv",
+                message: "inline MURK_KEY in .env (dead config, risk of commit)".into(),
+                fix: Some("remove the MURK_KEY= line and re-run `murk init`".into()),
+            });
         }
     }
-    std::process::exit(1);
+
+    // ── .env is not in .gitignore ──
+    // Soft guardrail: an untracked .env is fine for local dev, but a .env
+    // that isn't excluded from git has probably slipped into a commit
+    // somewhere. Ask git directly via `check-ignore` so we respect nested
+    // .gitignore files, global excludes, and negated rules.
+    if env_path.exists()
+        && cwd.join(".git").exists()
+        && let Ok(output) = std::process::Command::new("git")
+            .args(["check-ignore", "--quiet", ".env"])
+            .current_dir(&cwd)
+            .status()
+        && !output.success()
+    {
+        findings.push(Finding {
+            category: "gitignore",
+            message: ".env is not excluded from git".into(),
+            fix: Some("add `.env` to .gitignore so it cannot be committed".into()),
+        });
+    }
+
+    // ── Key file is inside the working tree ──
+    // `murk init` puts the key file under ~/.config/murk/keys by default,
+    // which is outside any repo. But MURK_KEY_FILE can be set to anywhere,
+    // and a user who put it next to the vault has just opted in to
+    // committing their private key. Fail loudly.
+    if let Ok((_, source)) = murk_cli::resolve_key_with_source(".murk")
+        && let murk_cli::KeySource::EnvFile(path) | murk_cli::KeySource::Auto(path) = source
+        && let Ok(abs) = std::fs::canonicalize(&path)
+        && let Ok(repo) = std::fs::canonicalize(&cwd)
+        && abs.starts_with(&repo)
+    {
+        findings.push(Finding {
+            category: "keyfile",
+            message: format!("key file {} is inside the working tree", abs.display()),
+            fix: Some(
+                "move it out of the repo (e.g. ~/.config/murk/keys/) and update MURK_KEY_FILE"
+                    .into(),
+            ),
+        });
+    }
+
+    // ── ssh-rsa in ~/.ssh ──
+    // Not a repo check strictly, but if a user is going to reach for an SSH
+    // key next, we want them to notice they have an rsa one ready to go.
+    // Skip for now — this is an environment check that doesn't really fit
+    // the "repo hygiene" frame.
+
+    if findings.is_empty() {
+        eprintln!("{} repo hygiene looks clean", "ok".green().bold());
+        return;
+    }
+
+    report_findings(&findings, "repo");
 }
 
 fn cmd_completion_generate(shell: clap_complete::Shell) {
@@ -2514,6 +2586,7 @@ fn main() {
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
         Command::Verify { vault } => cmd_verify(&murk_cli::resolve_vault_path(&vault)),
+        Command::Doctor => cmd_doctor(),
         Command::Skeleton { output, vault } => {
             cmd_skeleton(output.as_deref(), &murk_cli::resolve_vault_path(&vault));
         }
