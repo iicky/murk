@@ -1,0 +1,21 @@
+name: "murk CodeQL config"
+
+# Why this file exists:
+# CodeQL's rust/cleartext-logging rule flags any taint flow from user input to
+# a stdout/stderr write or file write as "cleartext logging of sensitive
+# information". That rule is designed for web apps where errors ship to log
+# aggregators and user input may contain secrets. For a local CLI:
+#
+#   - eprintln! to the user's own terminal is not a log file
+#   - error messages that echo the offending input are strictly better UX
+#   - persisting the github username to the vault's github_pins map is
+#     intentional state for TOFU key-rotation detection, not a leak
+#
+# The two findings CodeQL raises in `die()` and the `save_vault` call inside
+# the github: branch of cmd_authorize are both false positives for this
+# codebase. Rather than dismiss them individually every release, we exclude
+# the rule repo-wide.
+
+query-filters:
+  - exclude:
+      id: rust/cleartext-logging
