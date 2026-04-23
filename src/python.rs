@@ -28,6 +28,9 @@ struct Vault {
 impl Vault {
     /// Get a single decrypted secret value.
     /// Returns the scoped override if one exists, otherwise the shared value.
+    ///
+    /// The returned `String` is a plain Python-owned copy — once it crosses
+    /// the FFI boundary the plaintext is outside murk's zeroization.
     fn get(&self, key: &str) -> Option<String> {
         if let Some(value) = self
             .decrypted
@@ -35,15 +38,17 @@ impl Vault {
             .get(key)
             .and_then(|m| m.get(&self.pubkey))
         {
-            return Some(value.clone());
+            return Some(value.to_string());
         }
-        self.decrypted.values.get(key).cloned()
+        self.decrypted.values.get(key).map(|v| v.to_string())
     }
 
     /// Export all secrets as a dict. Scoped values override shared values.
     fn export(&self) -> HashMap<String, String> {
+        // Python dicts own plain Strings — zeroization ends at the FFI boundary.
         export::resolve_secrets(&self.inner, &self.decrypted, &self.pubkey, &[])
             .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
             .collect()
     }
 

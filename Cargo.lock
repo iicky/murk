@@ -1405,6 +1405,7 @@ dependencies = [
  "tempfile",
  "ureq",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]

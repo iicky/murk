@@ -410,8 +410,9 @@ fn prompt(label: &str, default: Option<&str>) -> String {
 }
 
 /// Generate a BIP39 keypair, write key to ~/.config/murk/keys/, reference in .env.
-/// Returns (secret_key, pubkey).
-fn generate_and_write_key(vault_name: &str) -> (String, String) {
+/// Returns (secret_key, pubkey). Secret key is wrapped in `Zeroizing` so the
+/// plaintext clears when the caller drops it.
+fn generate_and_write_key(vault_name: &str) -> (zeroize::Zeroizing<String>, String) {
     eprintln!("{} generating keypair...", "◆".magenta());
     let (phrase, secret_key, pubkey) = try_or_die(recovery::generate());
 
@@ -446,7 +447,7 @@ fn generate_and_write_key(vault_name: &str) -> (String, String) {
             .yellow()
             .bold()
     );
-    eprintln!("  {}", phrase.bold());
+    eprintln!("  {}", phrase.as_str().bold());
     eprintln!();
     eprintln!(
         "  {}",
@@ -946,9 +947,10 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
 
     if json {
         let raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        // serde_json copies into its own owned String, so zeroization ends here.
         let map: serde_json::Map<String, serde_json::Value> = raw
             .iter()
-            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.to_string())))
             .collect();
         println!("{}", serde_json::to_string_pretty(&map).unwrap());
     } else {
@@ -958,7 +960,7 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
                 eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
                 continue;
             }
-            println!("export {k}='{escaped}'");
+            println!("export {k}='{}'", escaped.as_str());
         }
     }
 }
@@ -993,11 +995,11 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                 k,
                 if scoped { " (scoped)" } else { "" }
             ),
-            vec![(k.to_string(), value)],
+            vec![(k.to_string(), value)] as Vec<(String, zeroize::Zeroizing<String>)>,
         )
     } else {
         // All keys: KEY=VALUE format.
-        let mut entries: Vec<(String, String)> = if scoped {
+        let mut entries: Vec<(String, zeroize::Zeroizing<String>)> = if scoped {
             current
                 .scoped
                 .iter()
@@ -1027,11 +1029,11 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
 
     let single_key = key.is_some();
     let buffer = if single_key {
-        format!("{}{}", header, entries[0].1)
+        format!("{}{}", header, entries[0].1.as_str())
     } else {
         let mut buf = header;
         for (k, v) in &entries {
-            buf.push_str(&format!("{k}={v}\n"));
+            buf.push_str(&format!("{k}={}\n", v.as_str()));
         }
         buf
     };
@@ -1102,25 +1104,26 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
             return;
         }
 
-        let old_value = if scoped {
+        let old_value: Option<zeroize::Zeroizing<String>> = if scoped {
             current.scoped.get(k).and_then(|m| m.get(&pubkey)).cloned()
         } else {
             current.values.get(k).cloned()
         };
 
-        if old_value.as_deref() == Some(new_value) {
+        if old_value.as_ref().map(|v| v.as_str()) == Some(new_value) {
             eprintln!("{} no changes", "◆".magenta());
             return;
         }
 
         if scoped {
-            current
-                .scoped
-                .entry(k.into())
-                .or_default()
-                .insert(pubkey.clone(), new_value.to_string());
+            current.scoped.entry(k.into()).or_default().insert(
+                pubkey.clone(),
+                zeroize::Zeroizing::new(new_value.to_string()),
+            );
         } else {
-            current.values.insert(k.into(), new_value.to_string());
+            current
+                .values
+                .insert(k.into(), zeroize::Zeroizing::new(new_value.to_string()));
         }
 
         save_vault(vault_path, &mut vault, &original, &current);
@@ -1158,7 +1161,8 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         }
 
         // Compute diff.
-        let old_entries: std::collections::BTreeMap<String, String> = entries.into_iter().collect();
+        let old_entries: std::collections::BTreeMap<String, zeroize::Zeroizing<String>> =
+            entries.into_iter().collect();
         let mut added = 0usize;
         let mut updated = 0usize;
         let mut removed = 0usize;
@@ -1166,16 +1170,18 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         // Add or update.
         for (k, v) in &new_entries {
             match old_entries.get(k) {
-                Some(old_v) if old_v == v => {} // Unchanged.
+                Some(old_v) if old_v.as_str() == v.as_str() => {} // Unchanged.
                 Some(_) => {
                     if scoped {
                         current
                             .scoped
                             .entry(k.clone())
                             .or_default()
-                            .insert(pubkey.clone(), v.clone());
+                            .insert(pubkey.clone(), zeroize::Zeroizing::new(v.clone()));
                     } else {
-                        current.values.insert(k.clone(), v.clone());
+                        current
+                            .values
+                            .insert(k.clone(), zeroize::Zeroizing::new(v.clone()));
                     }
                     updated += 1;
                 }
@@ -1185,9 +1191,11 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                             .scoped
                             .entry(k.clone())
                             .or_default()
-                            .insert(pubkey.clone(), v.clone());
+                            .insert(pubkey.clone(), zeroize::Zeroizing::new(v.clone()));
                     } else {
-                        current.values.insert(k.clone(), v.clone());
+                        current
+                            .values
+                            .insert(k.clone(), zeroize::Zeroizing::new(v.clone()));
                     }
                     // Ensure schema entry exists for new keys.
                     vault
@@ -1435,7 +1443,7 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
         .output()
         .unwrap_or_else(|e| die(&format_args!("running git: {e}"), 1));
 
-    let old_values: HashMap<String, String> = if output.status.success() {
+    let old_values: HashMap<String, zeroize::Zeroizing<String>> = if output.status.success() {
         let old_contents = String::from_utf8_lossy(&output.stdout);
         match murk_cli::parse_and_decrypt_values(&old_contents, &identity) {
             Ok(values) => {
@@ -1455,25 +1463,26 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
             Err(e) => die(&format_args!("parsing vault at {git_ref}: {e}"), 1),
         }
     } else {
-        HashMap::new()
+        HashMap::<String, zeroize::Zeroizing<String>>::new()
     };
 
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
-    let current_values: HashMap<String, String> =
+    let current_values: HashMap<String, zeroize::Zeroizing<String>> =
         murk_cli::resolve_secrets(&_vault, &current_murk, &pubkey, &[])
             .into_iter()
             .collect();
     let entries = murk_cli::diff_secrets(&old_values, &current_values);
 
     if json {
+        // serde_json copies into its own owned String; zeroization ends at this boundary.
         let list: Vec<serde_json::Value> = entries
             .iter()
             .map(|e| {
                 serde_json::json!({
                     "key": e.key,
                     "kind": format!("{:?}", e.kind).to_lowercase(),
-                    "old_value": e.old_value,
-                    "new_value": e.new_value,
+                    "old_value": e.old_value.as_ref().map(|v| v.as_str()),
+                    "new_value": e.new_value.as_ref().map(|v| v.as_str()),
                 })
             })
             .collect();
@@ -1487,27 +1496,19 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
     }
 
     for entry in &entries {
+        let old = entry.old_value.as_ref().map_or("", |v| v.as_str());
+        let new = entry.new_value.as_ref().map_or("", |v| v.as_str());
         match entry.kind {
             DiffKind::Added => {
                 if show_values {
-                    println!(
-                        "{} {} = {}",
-                        "+".magenta().bold(),
-                        entry.key.bold(),
-                        entry.new_value.as_deref().unwrap_or("")
-                    );
+                    println!("{} {} = {}", "+".magenta().bold(), entry.key.bold(), new);
                 } else {
                     println!("{} {}", "+".magenta().bold(), entry.key.bold());
                 }
             }
             DiffKind::Removed => {
                 if show_values {
-                    println!(
-                        "{} {} = {}",
-                        "-".red().bold(),
-                        entry.key.bold(),
-                        entry.old_value.as_deref().unwrap_or("")
-                    );
+                    println!("{} {} = {}", "-".red().bold(), entry.key.bold(), old);
                 } else {
                     println!("{} {}", "-".red().bold(), entry.key.bold());
                 }
@@ -1518,9 +1519,9 @@ fn cmd_diff(git_ref: &str, show_values: bool, json: bool, vault_path: &str) {
                         "{} {} {} {} {}",
                         "~".yellow().bold(),
                         entry.key.bold(),
-                        entry.old_value.as_deref().unwrap_or(""),
+                        old,
                         "→".dimmed(),
-                        entry.new_value.as_deref().unwrap_or("")
+                        new
                     );
                 } else {
                     println!("{} {}", "~".yellow().bold(), entry.key.bold());
@@ -1897,7 +1898,7 @@ fn cmd_restore() {
         die(&"recovery phrase is required", 1);
     }
 
-    println!("{}", try_or_die(recovery::recover(&phrase)));
+    println!("{}", try_or_die(recovery::recover(&phrase)).as_str());
 }
 
 fn cmd_recover() {
@@ -1915,7 +1916,7 @@ fn cmd_recover() {
 
     println!(
         "{}",
-        try_or_die(recovery::phrase_from_key(secret_key.expose_secret()))
+        try_or_die(recovery::phrase_from_key(secret_key.expose_secret())).as_str()
     );
 }
 

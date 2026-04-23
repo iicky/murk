@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// Current vault format version.
 pub const VAULT_VERSION: &str = "2.0";
@@ -78,13 +79,14 @@ pub struct Meta {
 
 #[derive(Debug, Clone)]
 pub struct Murk {
-    /// Decrypted shared values.
-    pub values: HashMap<String, String>,
+    /// Decrypted shared values. Wrapped in `Zeroizing` so plaintext is cleared
+    /// from memory when the `Murk` is dropped.
+    pub values: HashMap<String, Zeroizing<String>>,
     /// Pubkey → display name (from meta).
     pub recipients: HashMap<String, String>,
     /// Scoped overrides: key → { pubkey → decrypted value }.
     /// Only contains entries decryptable by the current identity.
-    pub scoped: HashMap<String, HashMap<String, String>>,
+    pub scoped: HashMap<String, HashMap<String, Zeroizing<String>>>,
     /// True if the vault uses a legacy unkeyed MAC (sha256/sha256v2).
     pub legacy_mac: bool,
     /// Pinned GitHub key fingerprints (carried from meta).

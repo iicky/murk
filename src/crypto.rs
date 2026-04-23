@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use zeroize::Zeroizing;
 
 /// Errors that can occur during crypto operations.
 #[derive(Debug)]
@@ -156,11 +157,18 @@ pub fn encrypt(plaintext: &[u8], recipients: &[MurkRecipient]) -> Result<Vec<u8>
 }
 
 /// Decrypt ciphertext using an identity (age or SSH key).
-pub fn decrypt(ciphertext: &[u8], identity: &MurkIdentity) -> Result<Vec<u8>, CryptoError> {
+///
+/// Returns the plaintext wrapped in `Zeroizing<Vec<u8>>` so the buffer is
+/// cleared when dropped. Defense-in-depth against plaintext lingering in
+/// freed heap memory.
+pub fn decrypt(
+    ciphertext: &[u8],
+    identity: &MurkIdentity,
+) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
     let decryptor = age::Decryptor::new_buffered(ciphertext)
         .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
 
-    let mut plaintext = vec![];
+    let mut plaintext = Zeroizing::new(vec![]);
     let mut reader = decryptor
         .decrypt(std::iter::once(identity.as_dyn()))
         .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
@@ -194,7 +202,7 @@ mod tests {
         let ciphertext = encrypt(plaintext, &[recipient]).unwrap();
         let decrypted = decrypt(&ciphertext, &identity).unwrap();
 
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(&decrypted[..], plaintext);
     }
 
     #[test]
@@ -213,8 +221,8 @@ mod tests {
         // Both recipients can decrypt
         let id_a = parse_identity(&secret_a).unwrap();
         let id_b = parse_identity(&secret_b).unwrap();
-        assert_eq!(decrypt(&ciphertext, &id_a).unwrap(), plaintext);
-        assert_eq!(decrypt(&ciphertext, &id_b).unwrap(), plaintext);
+        assert_eq!(&decrypt(&ciphertext, &id_a).unwrap()[..], plaintext);
+        assert_eq!(&decrypt(&ciphertext, &id_b).unwrap()[..], plaintext);
     }
 
     #[test]
@@ -311,7 +319,7 @@ mod tests {
         let plaintext = b"ssh secrets";
         let ciphertext = encrypt(plaintext, &[recipient]).unwrap();
         let decrypted = decrypt(&ciphertext, &id).unwrap();
-        assert_eq!(decrypted, plaintext);
+        assert_eq!(&decrypted[..], plaintext);
     }
 
     #[test]
@@ -334,7 +342,7 @@ mod tests {
 
         // Both can decrypt.
         let age_id = parse_identity(&age_secret).unwrap();
-        assert_eq!(decrypt(&ciphertext, &age_id).unwrap(), plaintext);
-        assert_eq!(decrypt(&ciphertext, &ssh_id).unwrap(), plaintext);
+        assert_eq!(&decrypt(&ciphertext, &age_id).unwrap()[..], plaintext);
+        assert_eq!(&decrypt(&ciphertext, &ssh_id).unwrap()[..], plaintext);
     }
 }

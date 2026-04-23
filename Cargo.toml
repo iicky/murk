@@ -43,6 +43,7 @@ clap_complete = "4.6.1"
 fs2 = "0.4.3"
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 walkdir = "2.5.0"
+zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

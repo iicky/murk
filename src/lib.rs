@@ -77,6 +77,7 @@ pub fn is_valid_key_name(key: &str) -> bool {
 
 use age::secrecy::ExposeSecret;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use zeroize::Zeroizing;
 
 // Re-export polymorphic types for consumers.
 pub use crypto::{MurkIdentity, MurkRecipient};
@@ -110,11 +111,28 @@ pub fn encrypt_value(
 }
 
 /// Decrypt a base64-encoded ciphertext and return plaintext bytes.
-pub fn decrypt_value(encoded: &str, identity: &crypto::MurkIdentity) -> Result<Vec<u8>, MurkError> {
+///
+/// The returned buffer is zeroized on drop.
+pub fn decrypt_value(
+    encoded: &str,
+    identity: &crypto::MurkIdentity,
+) -> Result<Zeroizing<Vec<u8>>, MurkError> {
     let ciphertext = BASE64.decode(encoded).map_err(|e| {
         MurkError::Crypto(crypto::CryptoError::Decrypt(format!("invalid base64: {e}")))
     })?;
     Ok(crypto::decrypt(&ciphertext, identity)?)
+}
+
+/// Validate decrypted bytes as UTF-8 and return a zeroizing `String`.
+///
+/// The returned `String` and the input `&[u8]` are both zeroized when dropped
+/// (assuming the caller holds the bytes inside a `Zeroizing`), so plaintext
+/// never escapes to a non-zeroed buffer.
+pub(crate) fn plaintext_bytes_to_zeroizing_string(
+    bytes: &[u8],
+) -> Result<Zeroizing<String>, std::str::Utf8Error> {
+    let s = std::str::from_utf8(bytes)?;
+    Ok(Zeroizing::new(s.to_owned()))
 }
 
 /// Read a vault file from disk.
@@ -225,7 +243,7 @@ pub fn decrypt_vault(
     };
 
     // Decrypt shared values (skip scoped-only entries with empty shared ciphertext).
-    let mut values = HashMap::new();
+    let mut values: HashMap<String, Zeroizing<String>> = HashMap::new();
     for (key, entry) in &vault.secrets {
         if entry.shared.is_empty() {
             continue;
@@ -235,21 +253,23 @@ pub fn decrypt_vault(
                 "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
             ))
         })?;
-        let value = String::from_utf8(plaintext)
+        let value = plaintext_bytes_to_zeroizing_string(&plaintext)
             .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
         values.insert(key.clone(), value);
     }
 
     // Decrypt our scoped (mote) overrides.
-    let mut scoped = HashMap::new();
+    let mut scoped: HashMap<String, HashMap<String, Zeroizing<String>>> = HashMap::new();
     for (key, entry) in &vault.secrets {
         if let Some(encoded) = entry.scoped.get(&pubkey)
-            && let Ok(value) = decrypt_value(encoded, identity)
-                .and_then(|pt| String::from_utf8(pt).map_err(|e| MurkError::Secret(e.to_string())))
+            && let Ok(value) = decrypt_value(encoded, identity).and_then(|pt| {
+                plaintext_bytes_to_zeroizing_string(&pt)
+                    .map_err(|e| MurkError::Secret(e.to_string()))
+            })
         {
             scoped
                 .entry(key.clone())
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(pubkey.clone(), value);
         }
     }
@@ -692,7 +712,7 @@ mod tests {
 
         let encoded = encrypt_value(b"hello world", &[recipient]).unwrap();
         let decrypted = decrypt_value(&encoded, &identity).unwrap();
-        assert_eq!(decrypted, b"hello world");
+        assert_eq!(&decrypted[..], b"hello world");
     }
 
     #[test]
@@ -716,8 +736,14 @@ mod tests {
         // Both can decrypt.
         let id_a = make_identity(&secret_a);
         let id_b = make_identity(&secret_b);
-        assert_eq!(decrypt_value(&encoded, &id_a).unwrap(), b"shared secret");
-        assert_eq!(decrypt_value(&encoded, &id_b).unwrap(), b"shared secret");
+        assert_eq!(
+            &decrypt_value(&encoded, &id_a).unwrap()[..],
+            b"shared secret"
+        );
+        assert_eq!(
+            &decrypt_value(&encoded, &id_b).unwrap()[..],
+            b"shared secret"
+        );
     }
 
     #[test]
@@ -836,7 +862,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "original".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("original"))]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -849,13 +875,15 @@ mod tests {
         assert_eq!(vault.secrets["KEY1"].shared, shared);
 
         let mut changed = current.clone();
-        changed.values.insert("KEY1".into(), "modified".into());
+        changed
+            .values
+            .insert("KEY1".into(), crate::testutil::secret("modified"));
         save_vault(path.to_str().unwrap(), &mut vault, &original, &changed).unwrap();
 
         assert_ne!(vault.secrets["KEY1"].shared, shared);
 
         let decrypted = decrypt_value(&vault.secrets["KEY1"].shared, &identity).unwrap();
-        assert_eq!(decrypted, b"modified");
+        assert_eq!(&decrypted[..], b"modified");
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -891,7 +919,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -899,7 +927,9 @@ mod tests {
         };
 
         let mut current = original.clone();
-        current.values.insert("KEY2".into(), "val2".into());
+        current
+            .values
+            .insert("KEY2".into(), crate::testutil::secret("val2"));
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
 
@@ -947,8 +977,8 @@ mod tests {
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
             values: HashMap::from([
-                ("KEY1".into(), "val1".into()),
-                ("KEY2".into(), "val2".into()),
+                ("KEY1".into(), crate::testutil::secret("val1")),
+                ("KEY2".into(), crate::testutil::secret("val2")),
             ]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
@@ -999,7 +1029,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey1.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1010,7 +1040,7 @@ mod tests {
         current_recipients.insert(pubkey1.clone(), "alice".into());
         current_recipients.insert(pubkey2.clone(), "bob".into());
         let current = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: current_recipients,
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1023,7 +1053,7 @@ mod tests {
 
         let identity1 = make_identity(&secret1);
         let decrypted = decrypt_value(&vault.secrets["KEY1"].shared, &identity1).unwrap();
-        assert_eq!(decrypted, b"val1");
+        assert_eq!(&decrypted[..], b"val1");
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1060,7 +1090,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "shared_val".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("shared_val"))]),
             recipients: recipients_map.clone(),
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1070,14 +1100,14 @@ mod tests {
         // Add a scoped override.
         let mut current = original.clone();
         let mut key_scoped = HashMap::new();
-        key_scoped.insert(pubkey.clone(), "my_override".into());
+        key_scoped.insert(pubkey.clone(), crate::testutil::secret("my_override"));
         current.scoped.insert("KEY1".into(), key_scoped);
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
 
         assert!(vault.secrets["KEY1"].scoped.contains_key(&pubkey));
         let scoped_val = decrypt_value(&vault.secrets["KEY1"].scoped[&pubkey], &identity).unwrap();
-        assert_eq!(scoped_val, b"my_override");
+        assert_eq!(&scoped_val[..], b"my_override");
 
         // Now remove the scoped override.
         let original_with_scoped = current.clone();
@@ -1132,7 +1162,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1197,7 +1227,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1214,7 +1244,7 @@ mod tests {
 
         assert!(result.is_ok());
         let (_, murk, _) = result.unwrap();
-        assert_eq!(murk.values["KEY1"], "val1");
+        assert_eq!(murk.values["KEY1"].as_str(), "val1");
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1255,7 +1285,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(other_pubkey.clone(), "other".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
@@ -1369,7 +1399,7 @@ mod tests {
         let mut recipients_map = HashMap::new();
         recipients_map.insert(pubkey.clone(), "alice".into());
         let original = types::Murk {
-            values: HashMap::from([("KEY1".into(), "val1".into())]),
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
             scoped: HashMap::new(),
             legacy_mac: false,
