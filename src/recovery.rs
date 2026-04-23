@@ -1,4 +1,5 @@
 use bech32::{Bech32, Hrp};
+use zeroize::Zeroizing;
 
 /// Errors that can occur during recovery phrase operations.
 #[derive(Debug)]
@@ -26,12 +27,15 @@ const AGE_SECRET_KEY_HRP: Hrp = Hrp::parse_unchecked("age-secret-key-");
 /// 24 BIP39 words encode 256 bits (32 bytes) — exactly the size of an
 /// age x25519 secret key. The mnemonic is a direct encoding of the key
 /// bytes with no derivation step. Same words, same key, always.
-pub fn generate() -> Result<(String, String, String), RecoveryError> {
-    let entropy: [u8; 32] = rand::random();
-    let mnemonic =
-        bip39::Mnemonic::from_entropy(&entropy).map_err(|e| RecoveryError::Bip39(e.to_string()))?;
+///
+/// The mnemonic and secret key are returned in `Zeroizing` wrappers so the
+/// plaintext is cleared from memory when dropped.
+pub fn generate() -> Result<(Zeroizing<String>, Zeroizing<String>, String), RecoveryError> {
+    let entropy = Zeroizing::new([0u8; 32].map(|_| rand::random::<u8>()));
+    let mnemonic = bip39::Mnemonic::from_entropy(&*entropy)
+        .map_err(|e| RecoveryError::Bip39(e.to_string()))?;
 
-    let secret_key = bytes_to_age_key(&entropy)?;
+    let secret_key = bytes_to_age_key(&*entropy)?;
 
     let identity = crate::crypto::parse_identity(&secret_key)
         .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
@@ -39,38 +43,39 @@ pub fn generate() -> Result<(String, String, String), RecoveryError> {
         .pubkey_string()
         .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
 
-    Ok((mnemonic.to_string(), secret_key, pubkey))
+    Ok((Zeroizing::new(mnemonic.to_string()), secret_key, pubkey))
 }
 
 /// Re-derive the BIP39 24-word mnemonic from an existing MURK_KEY.
 /// Decodes the Bech32 key back to raw bytes, then encodes as a mnemonic.
-pub fn phrase_from_key(secret_key: &str) -> Result<String, RecoveryError> {
+pub fn phrase_from_key(secret_key: &str) -> Result<Zeroizing<String>, RecoveryError> {
     // age keys are uppercase; bech32 decoding requires lowercase.
-    let lowercase = secret_key.to_lowercase();
+    let lowercase = Zeroizing::new(secret_key.to_lowercase());
     let (_, key_bytes) =
         bech32::decode(&lowercase).map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
+    let key_bytes = Zeroizing::new(key_bytes);
     let mnemonic = bip39::Mnemonic::from_entropy(&key_bytes)
         .map_err(|e| RecoveryError::Bip39(e.to_string()))?;
-    Ok(mnemonic.to_string())
+    Ok(Zeroizing::new(mnemonic.to_string()))
 }
 
 /// Recover an age secret key from a BIP39 24-word mnemonic phrase.
 /// Returns the same MURK_KEY that was originally generated.
-pub fn recover(phrase: &str) -> Result<String, RecoveryError> {
+pub fn recover(phrase: &str) -> Result<Zeroizing<String>, RecoveryError> {
     let mnemonic = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, phrase)
         .map_err(|e| RecoveryError::Bip39(e.to_string()))?;
 
-    let entropy = mnemonic.to_entropy();
+    let entropy = Zeroizing::new(mnemonic.to_entropy());
     bytes_to_age_key(&entropy)
 }
 
 /// Bech32-encode raw key bytes as an AGE-SECRET-KEY-1... string.
 /// This matches exactly how the age crate encodes keys internally.
-fn bytes_to_age_key(key_bytes: &[u8]) -> Result<String, RecoveryError> {
+fn bytes_to_age_key(key_bytes: &[u8]) -> Result<Zeroizing<String>, RecoveryError> {
     let encoded = bech32::encode::<Bech32>(AGE_SECRET_KEY_HRP, key_bytes)
         .map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
 
-    let key_str = encoded.to_uppercase();
+    let key_str = Zeroizing::new(encoded.to_uppercase());
 
     // Validate by round-tripping through the age crate.
     crate::crypto::parse_identity(&key_str)

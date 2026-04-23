@@ -1,5 +1,7 @@
 //! Secret CRUD operations on the in-memory `Murk` state.
 
+use zeroize::Zeroizing;
+
 use crate::{crypto, now_utc, types};
 
 /// Add or update a secret in the working state.
@@ -20,9 +22,10 @@ pub fn add_secret(
         murk.scoped
             .entry(key.into())
             .or_default()
-            .insert(pubkey, value.into());
+            .insert(pubkey, Zeroizing::new(value.to_owned()));
     } else {
-        murk.values.insert(key.into(), value.into());
+        murk.values
+            .insert(key.into(), Zeroizing::new(value.to_owned()));
     }
 
     let is_new = !vault.schema.contains_key(key);
@@ -68,7 +71,7 @@ pub fn get_secret<'a>(murk: &'a types::Murk, key: &str, pubkey: &str) -> Option<
     if let Some(value) = murk.scoped.get(key).and_then(|m| m.get(pubkey)) {
         return Some(value.as_str());
     }
-    murk.values.get(key).map(String::as_str)
+    murk.values.get(key).map(|v| v.as_str())
 }
 
 /// Return key names from the vault schema, optionally filtered by tags.
@@ -93,7 +96,8 @@ pub fn import_secrets(
     let now = now_utc();
     let mut imported = Vec::new();
     for (key, value) in pairs {
-        murk.values.insert(key.clone(), value.clone());
+        murk.values
+            .insert(key.clone(), Zeroizing::new(value.clone()));
 
         if let Some(entry) = vault.schema.get_mut(key.as_str()) {
             entry.updated = Some(now.clone());
@@ -169,7 +173,7 @@ mod tests {
         );
 
         assert!(needs_hint);
-        assert_eq!(murk.values["KEY"], "value");
+        assert_eq!(murk.values["KEY"].as_str(), "value");
         assert!(vault.schema.contains_key("KEY"));
         assert!(vault.schema["KEY"].description.is_empty());
     }
@@ -215,7 +219,7 @@ mod tests {
         );
 
         assert!(!murk.values.contains_key("KEY"));
-        assert_eq!(murk.scoped["KEY"][&pubkey], "scoped_val");
+        assert_eq!(murk.scoped["KEY"][&pubkey].as_str(), "scoped_val");
     }
 
     #[test]
@@ -288,9 +292,9 @@ mod tests {
             },
         );
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "val".into());
+        murk.values.insert("KEY".into(), secret("val"));
         let mut scoped = HashMap::new();
-        scoped.insert("age1pk".into(), "scoped_val".into());
+        scoped.insert("age1pk".into(), secret("scoped_val"));
         murk.scoped.insert("KEY".into(), scoped);
 
         remove_secret(&mut vault, &mut murk, "KEY");
@@ -303,7 +307,7 @@ mod tests {
     #[test]
     fn get_secret_shared_value() {
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "shared_val".into());
+        murk.values.insert("KEY".into(), secret("shared_val"));
 
         assert_eq!(get_secret(&murk, "KEY", "age1pk"), Some("shared_val"));
     }
@@ -311,9 +315,9 @@ mod tests {
     #[test]
     fn get_secret_scoped_overrides_shared() {
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "shared_val".into());
+        murk.values.insert("KEY".into(), secret("shared_val"));
         let mut scoped = HashMap::new();
-        scoped.insert("age1pk".into(), "scoped_val".into());
+        scoped.insert("age1pk".into(), secret("scoped_val"));
         murk.scoped.insert("KEY".into(), scoped);
 
         assert_eq!(get_secret(&murk, "KEY", "age1pk"), Some("scoped_val"));
@@ -476,7 +480,7 @@ mod tests {
             &[],
             &identity,
         );
-        assert_eq!(murk.values["KEY"], "shared_val");
+        assert_eq!(murk.values["KEY"].as_str(), "shared_val");
 
         add_secret(
             &mut vault,
@@ -489,8 +493,8 @@ mod tests {
             &identity,
         );
         // Shared value still exists, scoped override added.
-        assert_eq!(murk.values["KEY"], "shared_val");
-        assert_eq!(murk.scoped["KEY"][&pubkey], "scoped_val");
+        assert_eq!(murk.values["KEY"].as_str(), "shared_val");
+        assert_eq!(murk.scoped["KEY"][&pubkey].as_str(), "scoped_val");
     }
 
     #[test]
@@ -510,7 +514,7 @@ mod tests {
             &[],
             &identity,
         );
-        assert_eq!(murk.values["KEY"], "");
+        assert_eq!(murk.values["KEY"].as_str(), "");
     }
 
     #[test]
@@ -525,8 +529,8 @@ mod tests {
         let imported = import_secrets(&mut vault, &mut murk, &pairs);
 
         assert_eq!(imported, vec!["KEY1", "KEY2"]);
-        assert_eq!(murk.values["KEY1"], "val1");
-        assert_eq!(murk.values["KEY2"], "val2");
+        assert_eq!(murk.values["KEY1"].as_str(), "val1");
+        assert_eq!(murk.values["KEY2"].as_str(), "val2");
         assert!(vault.schema.contains_key("KEY1"));
         assert!(vault.schema.contains_key("KEY2"));
     }
@@ -548,7 +552,7 @@ mod tests {
         let pairs = vec![("KEY1".into(), "new_val".into())];
         import_secrets(&mut vault, &mut murk, &pairs);
 
-        assert_eq!(murk.values["KEY1"], "new_val");
+        assert_eq!(murk.values["KEY1"].as_str(), "new_val");
         assert_eq!(vault.schema["KEY1"].description, "existing desc");
     }
 

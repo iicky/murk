@@ -420,7 +420,7 @@ mod tests {
         );
         let mut murk = empty_murk();
         let mut scoped = HashMap::new();
-        scoped.insert(pk2.clone(), "scoped_val".into());
+        scoped.insert(pk2.clone(), secret("scoped_val"));
         murk.scoped.insert("KEY".into(), scoped);
 
         revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
@@ -470,10 +470,10 @@ mod tests {
         );
         let mut murk = empty_murk();
         murk.scoped
-            .insert("DB_URL".into(), HashMap::from([(pk2.clone(), "v".into())]));
+            .insert("DB_URL".into(), HashMap::from([(pk2.clone(), secret("v"))]));
         murk.scoped.insert(
             "API_KEY".into(),
-            HashMap::from([(pk2.clone(), "v2".into())]),
+            HashMap::from([(pk2.clone(), secret("v2"))]),
         );
 
         let result = revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();

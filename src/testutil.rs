@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
+use zeroize::Zeroizing;
+
 /// Process-global lock for tests that mutate env vars (MURK_KEY, MURK_KEY_FILE).
 pub static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -49,4 +51,9 @@ pub fn empty_murk() -> types::Murk {
         legacy_mac: false,
         github_pins: HashMap::new(),
     }
+}
+
+/// Wrap a string in `Zeroizing` for test inserts into `Murk.values` / `Murk.scoped`.
+pub fn secret(s: &str) -> Zeroizing<String> {
+    Zeroizing::new(s.to_string())
 }

@@ -2,17 +2,26 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use zeroize::Zeroizing;
+
 use crate::types;
 
 /// Merge scoped overrides over shared values and filter by tag.
 /// Returns raw (unescaped) values suitable for env var injection.
+///
+/// Values are wrapped in `Zeroizing` so plaintext is cleared from memory
+/// when the returned map is dropped.
 pub fn resolve_secrets(
     vault: &types::Vault,
     murk: &types::Murk,
     pubkey: &str,
     tags: &[String],
-) -> BTreeMap<String, String> {
-    let mut values = murk.values.clone();
+) -> BTreeMap<String, Zeroizing<String>> {
+    let mut values = murk
+        .values
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<HashMap<String, Zeroizing<String>>>();
 
     // Apply scoped overrides.
     for (key, scoped_map) in &murk.scoped {
@@ -36,14 +45,14 @@ pub fn resolve_secrets(
     };
 
     let mut result = BTreeMap::new();
-    for (k, v) in &values {
+    for (k, v) in values {
         if allowed_keys
             .as_ref()
             .is_some_and(|a| !a.contains(k.as_str()))
         {
             continue;
         }
-        result.insert(k.clone(), v.clone());
+        result.insert(k, v);
     }
     result
 }
@@ -55,10 +64,10 @@ pub fn export_secrets(
     murk: &types::Murk,
     pubkey: &str,
     tags: &[String],
-) -> BTreeMap<String, String> {
+) -> BTreeMap<String, Zeroizing<String>> {
     resolve_secrets(vault, murk, pubkey, tags)
         .into_iter()
-        .map(|(k, v)| (k, v.replace('\'', "'\\''")))
+        .map(|(k, v)| (k, Zeroizing::new(v.replace('\'', "'\\''"))))
         .collect()
 }
 
@@ -69,14 +78,15 @@ pub fn export_secrets(
 pub fn decrypt_vault_values(
     vault: &types::Vault,
     identity: &crate::crypto::MurkIdentity,
-) -> HashMap<String, String> {
+) -> HashMap<String, Zeroizing<String>> {
     let pubkey = identity.pubkey_string().unwrap_or_default();
     let mut values = HashMap::new();
     for (key, entry) in &vault.secrets {
         // Decrypt shared value.
         if !entry.shared.is_empty()
             && let Ok(value) = crate::decrypt_value(&entry.shared, identity).and_then(|pt| {
-                String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
+                crate::plaintext_bytes_to_zeroizing_string(&pt)
+                    .map_err(|e| crate::error::MurkError::Secret(e.to_string()))
             })
         {
             values.insert(key.clone(), value);
@@ -84,7 +94,8 @@ pub fn decrypt_vault_values(
         // Scoped override takes priority.
         if let Some(encoded) = entry.scoped.get(&pubkey)
             && let Ok(value) = crate::decrypt_value(encoded, identity).and_then(|pt| {
-                String::from_utf8(pt).map_err(|e| crate::error::MurkError::Secret(e.to_string()))
+                crate::plaintext_bytes_to_zeroizing_string(&pt)
+                    .map_err(|e| crate::error::MurkError::Secret(e.to_string()))
             })
         {
             values.insert(key.clone(), value);
@@ -100,7 +111,7 @@ pub fn decrypt_vault_values(
 pub fn parse_and_decrypt_values(
     vault_contents: &str,
     identity: &crate::crypto::MurkIdentity,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, Zeroizing<String>>, String> {
     let vault = crate::vault::parse(vault_contents).map_err(|e| e.to_string())?;
     Ok(decrypt_vault_values(&vault, identity))
 }
@@ -114,18 +125,22 @@ pub enum DiffKind {
 }
 
 /// A single entry in a secret diff.
+///
+/// `old_value` and `new_value` are held in `Zeroizing` so plaintext is cleared
+/// when the entry is dropped. Formatting/printing callers should take care not
+/// to retain their own unzeroed copies.
 #[derive(Debug)]
 pub struct DiffEntry {
     pub key: String,
     pub kind: DiffKind,
-    pub old_value: Option<String>,
-    pub new_value: Option<String>,
+    pub old_value: Option<Zeroizing<String>>,
+    pub new_value: Option<Zeroizing<String>>,
 }
 
 /// Compare two sets of secret values and return the differences.
 pub fn diff_secrets(
-    old: &HashMap<String, String>,
-    new: &HashMap<String, String>,
+    old: &HashMap<String, Zeroizing<String>>,
+    new: &HashMap<String, Zeroizing<String>>,
 ) -> Vec<DiffEntry> {
     let mut all_keys: Vec<&str> = old
         .keys()
@@ -151,7 +166,7 @@ pub fn diff_secrets(
                 old_value: Some(v.clone()),
                 new_value: None,
             }),
-            (Some(old_v), Some(new_v)) if old_v != new_v => entries.push(DiffEntry {
+            (Some(old_v), Some(new_v)) if **old_v != **new_v => entries.push(DiffEntry {
                 key: key.into(),
                 kind: DiffKind::Changed,
                 old_value: Some(old_v.clone()),
@@ -175,23 +190,14 @@ pub fn format_diff_lines(entries: &[DiffEntry], show_values: bool) -> Vec<String
                 DiffKind::Changed => "~",
             };
             if show_values {
+                let old = entry.old_value.as_ref().map_or("", |v| v.as_str());
+                let new = entry.new_value.as_ref().map_or("", |v| v.as_str());
                 match entry.kind {
-                    DiffKind::Added => format!(
-                        "{symbol} {} = {}",
-                        entry.key,
-                        entry.new_value.as_deref().unwrap_or("")
-                    ),
-                    DiffKind::Removed => format!(
-                        "{symbol} {} = {}",
-                        entry.key,
-                        entry.old_value.as_deref().unwrap_or("")
-                    ),
-                    DiffKind::Changed => format!(
-                        "{symbol} {} {} → {}",
-                        entry.key,
-                        entry.old_value.as_deref().unwrap_or(""),
-                        entry.new_value.as_deref().unwrap_or("")
-                    ),
+                    DiffKind::Added => format!("{symbol} {} = {}", entry.key, new),
+                    DiffKind::Removed => format!("{symbol} {} = {}", entry.key, old),
+                    DiffKind::Changed => {
+                        format!("{symbol} {} {} → {}", entry.key, old, new)
+                    }
                 }
             } else {
                 format!("{symbol} {}", entry.key)
@@ -220,11 +226,11 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("FOO".into(), "bar".into());
+        murk.values.insert("FOO".into(), secret("bar"));
 
         let exports = export_secrets(&vault, &murk, "age1pk", &[]);
         assert_eq!(exports.len(), 1);
-        assert_eq!(exports["FOO"], "bar");
+        assert_eq!(exports["FOO"].as_str(), "bar");
     }
 
     #[test]
@@ -241,13 +247,13 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "shared".into());
+        murk.values.insert("KEY".into(), secret("shared"));
         let mut scoped = HashMap::new();
-        scoped.insert("age1pk".into(), "override".into());
+        scoped.insert("age1pk".into(), secret("override"));
         murk.scoped.insert("KEY".into(), scoped);
 
         let exports = export_secrets(&vault, &murk, "age1pk", &[]);
-        assert_eq!(exports["KEY"], "override");
+        assert_eq!(exports["KEY"].as_str(), "override");
     }
 
     #[test]
@@ -273,12 +279,12 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("A".into(), "val_a".into());
-        murk.values.insert("B".into(), "val_b".into());
+        murk.values.insert("A".into(), secret("val_a"));
+        murk.values.insert("B".into(), secret("val_b"));
 
         let exports = export_secrets(&vault, &murk, "age1pk", &["db".into()]);
         assert_eq!(exports.len(), 1);
-        assert_eq!(exports["A"], "val_a");
+        assert_eq!(exports["A"].as_str(), "val_a");
     }
 
     #[test]
@@ -295,15 +301,15 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "it's a test".into());
+        murk.values.insert("KEY".into(), secret("it's a test"));
 
         let exports = export_secrets(&vault, &murk, "age1pk", &[]);
-        assert_eq!(exports["KEY"], "it'\\''s a test");
+        assert_eq!(exports["KEY"].as_str(), "it'\\''s a test");
     }
 
     #[test]
     fn diff_secrets_no_changes() {
-        let old = HashMap::from([("K".into(), "V".into())]);
+        let old = HashMap::from([("K".into(), secret("V"))]);
         let new = old.clone();
         assert!(diff_secrets(&old, &new).is_empty());
     }
@@ -311,46 +317,52 @@ mod tests {
     #[test]
     fn diff_secrets_added() {
         let old = HashMap::new();
-        let new = HashMap::from([("KEY".into(), "val".into())]);
+        let new = HashMap::from([("KEY".into(), secret("val"))]);
         let entries = diff_secrets(&old, &new);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind, DiffKind::Added);
         assert_eq!(entries[0].key, "KEY");
-        assert_eq!(entries[0].new_value.as_deref(), Some("val"));
+        assert_eq!(entries[0].new_value.as_deref(), Some(&String::from("val")));
     }
 
     #[test]
     fn diff_secrets_removed() {
-        let old = HashMap::from([("KEY".into(), "val".into())]);
+        let old = HashMap::from([("KEY".into(), secret("val"))]);
         let new = HashMap::new();
         let entries = diff_secrets(&old, &new);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind, DiffKind::Removed);
-        assert_eq!(entries[0].old_value.as_deref(), Some("val"));
+        assert_eq!(entries[0].old_value.as_deref(), Some(&String::from("val")));
     }
 
     #[test]
     fn diff_secrets_changed() {
-        let old = HashMap::from([("KEY".into(), "old_val".into())]);
-        let new = HashMap::from([("KEY".into(), "new_val".into())]);
+        let old = HashMap::from([("KEY".into(), secret("old_val"))]);
+        let new = HashMap::from([("KEY".into(), secret("new_val"))]);
         let entries = diff_secrets(&old, &new);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind, DiffKind::Changed);
-        assert_eq!(entries[0].old_value.as_deref(), Some("old_val"));
-        assert_eq!(entries[0].new_value.as_deref(), Some("new_val"));
+        assert_eq!(
+            entries[0].old_value.as_deref(),
+            Some(&String::from("old_val"))
+        );
+        assert_eq!(
+            entries[0].new_value.as_deref(),
+            Some(&String::from("new_val"))
+        );
     }
 
     #[test]
     fn diff_secrets_mixed() {
         let old = HashMap::from([
-            ("KEEP".into(), "same".into()),
-            ("REMOVE".into(), "gone".into()),
-            ("CHANGE".into(), "old".into()),
+            ("KEEP".into(), secret("same")),
+            ("REMOVE".into(), secret("gone")),
+            ("CHANGE".into(), secret("old")),
         ]);
         let new = HashMap::from([
-            ("KEEP".into(), "same".into()),
-            ("ADD".into(), "new".into()),
-            ("CHANGE".into(), "new".into()),
+            ("KEEP".into(), secret("same")),
+            ("ADD".into(), secret("new")),
+            ("CHANGE".into(), secret("new")),
         ]);
         let entries = diff_secrets(&old, &new);
         assert_eq!(entries.len(), 3);
@@ -365,9 +377,9 @@ mod tests {
     fn diff_secrets_sorted_by_key() {
         let old = HashMap::new();
         let new = HashMap::from([
-            ("Z".into(), "z".into()),
-            ("A".into(), "a".into()),
-            ("M".into(), "m".into()),
+            ("Z".into(), secret("z")),
+            ("A".into(), secret("a")),
+            ("M".into(), secret("m")),
         ]);
         let entries = diff_secrets(&old, &new);
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
@@ -383,19 +395,19 @@ mod tests {
                 key: "NEW_KEY".into(),
                 kind: DiffKind::Added,
                 old_value: None,
-                new_value: Some("secret".into()),
+                new_value: Some(secret("secret")),
             },
             DiffEntry {
                 key: "OLD_KEY".into(),
                 kind: DiffKind::Removed,
-                old_value: Some("old".into()),
+                old_value: Some(secret("old")),
                 new_value: None,
             },
             DiffEntry {
                 key: "MOD_KEY".into(),
                 kind: DiffKind::Changed,
-                old_value: Some("v1".into()),
-                new_value: Some("v2".into()),
+                old_value: Some(secret("v1")),
+                new_value: Some(secret("v2")),
             },
         ];
         let lines = format_diff_lines(&entries, false);
@@ -409,13 +421,13 @@ mod tests {
                 key: "KEY".into(),
                 kind: DiffKind::Added,
                 old_value: None,
-                new_value: Some("new_val".into()),
+                new_value: Some(secret("new_val")),
             },
             DiffEntry {
                 key: "KEY2".into(),
                 kind: DiffKind::Changed,
-                old_value: Some("old".into()),
-                new_value: Some("new".into()),
+                old_value: Some(secret("old")),
+                new_value: Some(secret("new")),
             },
         ];
         let lines = format_diff_lines(&entries, true);
@@ -445,11 +457,11 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("FOO".into(), "bar".into());
+        murk.values.insert("FOO".into(), secret("bar"));
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved["FOO"], "bar");
+        assert_eq!(resolved["FOO"].as_str(), "bar");
     }
 
     #[test]
@@ -466,10 +478,10 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "it's a test".into());
+        murk.values.insert("KEY".into(), secret("it's a test"));
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
-        assert_eq!(resolved["KEY"], "it's a test");
+        assert_eq!(resolved["KEY"].as_str(), "it's a test");
     }
 
     #[test]
@@ -486,13 +498,13 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "shared".into());
+        murk.values.insert("KEY".into(), secret("shared"));
         let mut scoped = HashMap::new();
-        scoped.insert("age1pk".into(), "override".into());
+        scoped.insert("age1pk".into(), secret("override"));
         murk.scoped.insert("KEY".into(), scoped);
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
-        assert_eq!(resolved["KEY"], "override");
+        assert_eq!(resolved["KEY"].as_str(), "override");
     }
 
     #[test]
@@ -518,12 +530,12 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("A".into(), "val_a".into());
-        murk.values.insert("B".into(), "val_b".into());
+        murk.values.insert("A".into(), secret("val_a"));
+        murk.values.insert("B".into(), secret("val_b"));
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &["db".into()]);
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved["A"], "val_a");
+        assert_eq!(resolved["A"].as_str(), "val_a");
     }
 
     #[test]
@@ -551,12 +563,12 @@ mod tests {
 
         let mut murk = empty_murk();
         // Only REAL has a value, ORPHAN does not.
-        murk.values.insert("REAL".into(), "real_val".into());
+        murk.values.insert("REAL".into(), secret("real_val"));
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &["db".into()]);
         // ORPHAN should not appear since it has no value.
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved["REAL"], "real_val");
+        assert_eq!(resolved["REAL"].as_str(), "real_val");
         assert!(!resolved.contains_key("ORPHAN"));
     }
 
@@ -575,19 +587,19 @@ mod tests {
         );
 
         let mut murk = empty_murk();
-        murk.values.insert("KEY".into(), "shared".into());
+        murk.values.insert("KEY".into(), secret("shared"));
         // Scoped override for a pubkey NOT in vault.recipients.
         let mut scoped = HashMap::new();
-        scoped.insert("age1outsider".into(), "outsider_val".into());
+        scoped.insert("age1outsider".into(), secret("outsider_val"));
         murk.scoped.insert("KEY".into(), scoped);
 
         // The outsider's override should still be applied (resolve doesn't gate on recipient list).
         let resolved = resolve_secrets(&vault, &murk, "age1outsider", &[]);
-        assert_eq!(resolved["KEY"], "outsider_val");
+        assert_eq!(resolved["KEY"].as_str(), "outsider_val");
 
         // Alice gets the shared value since she has no scoped override.
         let resolved_alice = resolve_secrets(&vault, &murk, "age1alice", &[]);
-        assert_eq!(resolved_alice["KEY"], "shared");
+        assert_eq!(resolved_alice["KEY"].as_str(), "shared");
     }
 
     // ── New edge-case tests ──
@@ -625,8 +637,8 @@ mod tests {
 
         let values = crate::export::decrypt_vault_values(&vault, &identity);
         assert_eq!(values.len(), 2);
-        assert_eq!(values["KEY1"], "val1");
-        assert_eq!(values["KEY2"], "val2");
+        assert_eq!(values["KEY1"].as_str(), "val1");
+        assert_eq!(values["KEY2"].as_str(), "val2");
     }
 
     #[test]
@@ -695,8 +707,8 @@ mod tests {
         let json = serde_json::to_string(&vault).unwrap();
         let values = parse_and_decrypt_values(&json, &identity).unwrap();
         assert_eq!(values.len(), 2);
-        assert_eq!(values["KEY1"], "val1");
-        assert_eq!(values["KEY2"], "val2");
+        assert_eq!(values["KEY1"].as_str(), "val1");
+        assert_eq!(values["KEY2"].as_str(), "val2");
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use zeroize::Zeroizing;
+
 /// A single scan finding: a secret key was found in a file.
 #[derive(Debug)]
 pub struct ScanFinding {
@@ -18,7 +20,7 @@ pub struct ScanFinding {
 /// `min_length` are skipped to reduce false positives.
 pub fn scan_for_leaks(
     paths: &[&str],
-    secrets: &BTreeMap<String, String>,
+    secrets: &BTreeMap<String, Zeroizing<String>>,
     min_length: usize,
 ) -> Vec<ScanFinding> {
     let mut findings = Vec::new();
@@ -82,7 +84,10 @@ mod tests {
         .unwrap();
 
         let mut secrets = BTreeMap::new();
-        secrets.insert("DB_PASSWORD".into(), "supersecretvalue123".into());
+        secrets.insert(
+            "DB_PASSWORD".into(),
+            Zeroizing::new("supersecretvalue123".to_string()),
+        );
 
         let findings = scan_for_leaks(&[dir.path().to_str().unwrap()], &secrets, 8);
         assert_eq!(findings.len(), 1);
@@ -95,7 +100,7 @@ mod tests {
         std::fs::write(dir.path().join("file.txt"), "abc").unwrap();
 
         let mut secrets = BTreeMap::new();
-        secrets.insert("SHORT".into(), "abc".into());
+        secrets.insert("SHORT".into(), Zeroizing::new("abc".to_string()));
 
         let findings = scan_for_leaks(&[dir.path().to_str().unwrap()], &secrets, 8);
         assert!(findings.is_empty());
@@ -107,7 +112,10 @@ mod tests {
         std::fs::write(dir.path().join("test.murk"), "supersecretvalue123").unwrap();
 
         let mut secrets = BTreeMap::new();
-        secrets.insert("KEY".into(), "supersecretvalue123".into());
+        secrets.insert(
+            "KEY".into(),
+            Zeroizing::new("supersecretvalue123".to_string()),
+        );
 
         let findings = scan_for_leaks(&[dir.path().to_str().unwrap()], &secrets, 8);
         assert!(findings.is_empty());
@@ -121,7 +129,10 @@ mod tests {
         std::fs::write(hidden.join("leaked.txt"), "supersecretvalue123").unwrap();
 
         let mut secrets = BTreeMap::new();
-        secrets.insert("KEY".into(), "supersecretvalue123".into());
+        secrets.insert(
+            "KEY".into(),
+            Zeroizing::new("supersecretvalue123".to_string()),
+        );
 
         let findings = scan_for_leaks(&[dir.path().to_str().unwrap()], &secrets, 8);
         assert!(findings.is_empty());
@@ -147,8 +158,8 @@ mod tests {
         .unwrap();
 
         let mut secrets = BTreeMap::new();
-        secrets.insert("K1".into(), "secretvalue1".into());
-        secrets.insert("K2".into(), "secretvalue2".into());
+        secrets.insert("K1".into(), Zeroizing::new("secretvalue1".to_string()));
+        secrets.insert("K2".into(), Zeroizing::new("secretvalue2".to_string()));
 
         let findings = scan_for_leaks(&[dir.path().to_str().unwrap()], &secrets, 8);
         assert_eq!(findings.len(), 2);
