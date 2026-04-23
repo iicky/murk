@@ -1904,14 +1904,19 @@ fn cmd_restore() {
 fn cmd_recover() {
     let secret_key = resolve_key();
 
-    // SSH keys don't have BIP39 recovery phrases — only age keys do.
+    // SSH keys and plugin identities don't have BIP39 recovery phrases.
     let identity =
         murk_cli::crypto::parse_identity(secret_key.expose_secret()).unwrap_or_else(|e| die(&e, 1));
-    if matches!(identity, MurkIdentity::Ssh(_)) {
-        die(
+    match identity {
+        MurkIdentity::Ssh(_) => die(
             &"recovery phrases are for age keys only. SSH keys are managed by your SSH agent — back up ~/.ssh instead",
             1,
-        );
+        ),
+        MurkIdentity::Plugin { .. } => die(
+            &"plugin identities (YubiKey, Secure Enclave, FIDO2) do not have recovery phrases. BIP39 words encode the raw 32 key bytes, but hardware-backed keys never leave the device — there are no bytes to encode. Recovery means enrolling a backup hardware device at setup and adding its pubkey as a recipient with `murk authorize`",
+            1,
+        ),
+        MurkIdentity::Age(_) => {}
     }
 
     println!(
