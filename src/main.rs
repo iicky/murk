@@ -764,7 +764,7 @@ fn cmd_generate(
         );
     }
 
-    let bytes: Vec<u8> = (0..length).map(|_| rand::random()).collect();
+    let bytes: Vec<u8> = (0..length).map(|_| rand::random::<u8>()).collect();
 
     let value = if hex {
         bytes.iter().fold(String::new(), |mut s, b| {
@@ -841,7 +841,7 @@ fn cmd_rotate(
     let mut rotated = 0;
     for k in &keys_to_rotate {
         let new_value = if generate {
-            let bytes: Vec<u8> = (0..length).map(|_| rand::random()).collect();
+            let bytes: Vec<u8> = (0..length).map(|_| rand::random::<u8>()).collect();
             if hex {
                 bytes.iter().fold(String::new(), |mut s, b| {
                     use std::fmt::Write;
