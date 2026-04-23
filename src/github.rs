@@ -88,6 +88,7 @@ pub fn parse_github_keys(
             let normalized = match &recipient {
                 MurkRecipient::Ssh(r) => r.to_string(),
                 MurkRecipient::Age(_) => unreachable!("SSH key parsed as age key"),
+                MurkRecipient::Plugin(_) => unreachable!("SSH key parsed as plugin recipient"),
             };
             keys.push((recipient, normalized));
         }

@@ -1,4 +1,10 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
+
+use age::cli_common::UiCallbacks;
+use age::plugin::{
+    Identity as PluginIdentity, IdentityPluginV1, Recipient as PluginRecipient, RecipientPluginV1,
+};
 use zeroize::Zeroizing;
 
 /// Errors that can occur during crypto operations.
@@ -21,11 +27,14 @@ impl std::fmt::Display for CryptoError {
 
 /// A recipient that can receive age-encrypted data.
 ///
-/// Wraps either an age x25519 recipient or an SSH public key recipient.
+/// Wraps an age x25519 recipient, an SSH public key recipient, or a plugin
+/// recipient like `age1yubikey1...`. Plugin recipients dispatch to an external
+/// `age-plugin-<name>` binary during encryption.
 #[derive(Clone)]
 pub enum MurkRecipient {
     Age(age::x25519::Recipient),
     Ssh(age::ssh::Recipient),
+    Plugin(PluginRecipient),
 }
 
 impl std::fmt::Debug for MurkRecipient {
@@ -33,34 +42,47 @@ impl std::fmt::Debug for MurkRecipient {
         match self {
             MurkRecipient::Age(r) => write!(f, "Age({r})"),
             MurkRecipient::Ssh(r) => write!(f, "Ssh({r})"),
-        }
-    }
-}
-
-impl MurkRecipient {
-    /// Borrow as a trait object for passing to age's encryptor.
-    pub fn as_dyn(&self) -> &dyn age::Recipient {
-        match self {
-            MurkRecipient::Age(r) => r,
-            MurkRecipient::Ssh(r) => r,
+            MurkRecipient::Plugin(r) => write!(f, "Plugin({r})"),
         }
     }
 }
 
 /// An identity that can decrypt age-encrypted data.
 ///
-/// Wraps either an age x25519 identity or an SSH private key identity.
+/// Plugin identities (`AGE-PLUGIN-<NAME>-1...`) carry the recipient pubkey
+/// alongside the pointer so `pubkey_string` does not require spawning the
+/// plugin binary. Decryption spawns `age-plugin-<name>` via
+/// [`IdentityPluginV1`] to access the hardware-backed key.
 #[derive(Clone)]
 pub enum MurkIdentity {
     Age(age::x25519::Identity),
     Ssh(age::ssh::Identity),
+    Plugin {
+        identity: PluginIdentity,
+        pubkey: String,
+    },
+}
+
+/// Debug prints only the identity *kind*, never key material, to keep
+/// accidental logs from leaking secrets.
+impl std::fmt::Debug for MurkIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MurkIdentity::Age(_) => write!(f, "Age(<redacted>)"),
+            MurkIdentity::Ssh(_) => write!(f, "Ssh(<redacted>)"),
+            MurkIdentity::Plugin { pubkey, identity } => {
+                write!(f, "Plugin({} → {pubkey})", identity.plugin())
+            }
+        }
+    }
 }
 
 impl MurkIdentity {
     /// Return the public key string for this identity.
     ///
-    /// For age keys: `age1...`
-    /// For SSH keys: `ssh-ed25519 AAAA...` or `ssh-rsa AAAA...`
+    /// For age keys: `age1...`. For SSH keys: `ssh-ed25519 AAAA...` or
+    /// `ssh-rsa AAAA...`. For plugin keys: the `age1<plugin>1...` recipient
+    /// that was parsed from the identity file's `# public key:` header.
     pub fn pubkey_string(&self) -> Result<String, CryptoError> {
         match self {
             MurkIdentity::Age(id) => Ok(id.to_public().to_string()),
@@ -70,72 +92,156 @@ impl MurkIdentity {
                 })?;
                 Ok(recipient.to_string())
             }
+            MurkIdentity::Plugin { pubkey, .. } => Ok(pubkey.clone()),
         }
     }
 
-    /// Borrow as a trait object for passing to age's decryptor.
-    fn as_dyn(&self) -> &dyn age::Identity {
+    /// Plugin name (e.g. `"yubikey"`, `"se"`) if this is a plugin identity.
+    pub fn plugin_name(&self) -> Option<&str> {
         match self {
-            MurkIdentity::Age(id) => id,
-            MurkIdentity::Ssh(id) => id,
+            MurkIdentity::Plugin { identity, .. } => Some(identity.plugin()),
+            _ => None,
         }
     }
 }
 
 /// Parse a public key string into a `MurkRecipient`.
 ///
-/// Tries x25519 (`age1...`) first, then SSH (`ssh-ed25519 ...` / `ssh-rsa ...`).
+/// Tries x25519 (`age1...`), then SSH (`ssh-ed25519 ...` / `ssh-rsa ...`),
+/// then age plugin recipients (`age1<plugin>1...`).
 pub fn parse_recipient(pubkey: &str) -> Result<MurkRecipient, CryptoError> {
-    // Try age x25519 first.
     if let Ok(r) = pubkey.parse::<age::x25519::Recipient>() {
         return Ok(MurkRecipient::Age(r));
     }
-
-    // Try SSH.
     if let Ok(r) = pubkey.parse::<age::ssh::Recipient>() {
         return Ok(MurkRecipient::Ssh(r));
     }
-
+    if let Ok(r) = pubkey.parse::<PluginRecipient>() {
+        return Ok(MurkRecipient::Plugin(r));
+    }
     Err(CryptoError::InvalidKey(format!(
-        "not a valid age or SSH public key: {pubkey}"
+        "not a valid age, SSH, or plugin public key: {pubkey}"
     )))
 }
 
-/// Parse a secret key string into a `MurkIdentity`.
+/// Parse a secret key or identity-file contents into a `MurkIdentity`.
 ///
-/// Tries age (`AGE-SECRET-KEY-1...`) first, then SSH PEM format.
-/// Encrypted SSH keys are rejected with a clear error.
-pub fn parse_identity(secret_key: &str) -> Result<MurkIdentity, CryptoError> {
-    // Try age x25519 first.
-    if let Ok(id) = secret_key.parse::<age::x25519::Identity>() {
+/// Accepts three shapes:
+/// - A bare age secret key (`AGE-SECRET-KEY-1...`)
+/// - An SSH PEM-encoded private key (unencrypted only; encrypted keys are rejected)
+/// - A plugin identity file — multi-line text with a `# public key: age1...`
+///   header followed by an `AGE-PLUGIN-<NAME>-1...` pointer, as produced by
+///   tools like `age-plugin-yubikey --identity`
+///
+/// Comments and blank lines are permitted anywhere.
+pub fn parse_identity(input: &str) -> Result<MurkIdentity, CryptoError> {
+    let trimmed = input.trim();
+    if let Ok(id) = trimmed.parse::<age::x25519::Identity>() {
         return Ok(MurkIdentity::Age(id));
     }
 
-    // Try SSH PEM.
-    let reader = std::io::BufReader::new(secret_key.as_bytes());
-    match age::ssh::Identity::from_buffer(reader, None) {
-        Ok(id) => match &id {
-            age::ssh::Identity::Unencrypted(_) => Ok(MurkIdentity::Ssh(id)),
-            age::ssh::Identity::Encrypted(_) => Err(CryptoError::InvalidKey(
-                "encrypted SSH keys are not yet supported — use an unencrypted key or an age key"
-                    .into(),
-            )),
-            age::ssh::Identity::Unsupported(k) => Err(CryptoError::InvalidKey(format!(
-                "unsupported SSH key type: {k:?}"
-            ))),
-        },
-        Err(_) => Err(CryptoError::InvalidKey(
-            "not a valid age secret key or SSH private key".into(),
-        )),
+    // SSH PEM has its own framing; feed the full input.
+    let reader = std::io::BufReader::new(input.as_bytes());
+    if let Ok(id) = age::ssh::Identity::from_buffer(reader, None) {
+        match id {
+            age::ssh::Identity::Unencrypted(_) => return Ok(MurkIdentity::Ssh(id)),
+            age::ssh::Identity::Encrypted(_) => {
+                return Err(CryptoError::InvalidKey(
+                    "encrypted SSH keys are not yet supported — use an unencrypted key or an age key"
+                        .into(),
+                ));
+            }
+            age::ssh::Identity::Unsupported(k) => {
+                return Err(CryptoError::InvalidKey(format!(
+                    "unsupported SSH key type: {k:?}"
+                )));
+            }
+        }
     }
+
+    // Identity-file form: walk lines, capture `# public key:` header, then
+    // accept a following plugin pointer.
+    let mut pubkey: Option<String> = None;
+    for line in input.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line
+            .strip_prefix('#')
+            .map(str::trim)
+            .and_then(|s| s.strip_prefix("public key:"))
+        {
+            pubkey = Some(rest.trim().to_string());
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Ok(identity) = line.parse::<PluginIdentity>() {
+            let pk = pubkey.ok_or_else(|| {
+                CryptoError::InvalidKey(
+                    "plugin identity is missing its `# public key: age1...` header. Save the \
+                     plugin output (the header line PLUS the AGE-PLUGIN-... line) to a file and \
+                     set MURK_KEY_FILE to its path — setting MURK_KEY to just the identity \
+                     string is not enough, because murk needs the recipient pubkey"
+                        .into(),
+                )
+            })?;
+            parse_recipient(&pk).map_err(|e| {
+                CryptoError::InvalidKey(format!(
+                    "`# public key:` header in identity file is not a valid recipient: {e}"
+                ))
+            })?;
+            return Ok(MurkIdentity::Plugin {
+                identity,
+                pubkey: pk,
+            });
+        }
+        // Unrecognised non-comment line — retry as an age key for trailing-whitespace tolerance.
+        if let Ok(id) = line.parse::<age::x25519::Identity>() {
+            return Ok(MurkIdentity::Age(id));
+        }
+        break;
+    }
+
+    Err(CryptoError::InvalidKey(
+        "not a valid age secret key, SSH private key, or plugin identity file".into(),
+    ))
 }
 
 /// Encrypt plaintext bytes to one or more recipients.
+///
+/// Plugin recipients are grouped by plugin name and dispatched via
+/// [`RecipientPluginV1`]. Native (age/ssh) recipients pass through directly.
 pub fn encrypt(plaintext: &[u8], recipients: &[MurkRecipient]) -> Result<Vec<u8>, CryptoError> {
-    let recipient_refs: Vec<&dyn age::Recipient> =
-        recipients.iter().map(MurkRecipient::as_dyn).collect();
+    let mut native: Vec<&dyn age::Recipient> = vec![];
+    let mut grouped: HashMap<String, Vec<PluginRecipient>> = HashMap::new();
 
-    let encryptor = age::Encryptor::with_recipients(recipient_refs.into_iter())
+    for r in recipients {
+        match r {
+            MurkRecipient::Age(r) => native.push(r),
+            MurkRecipient::Ssh(r) => native.push(r),
+            MurkRecipient::Plugin(r) => grouped
+                .entry(r.plugin().to_string())
+                .or_default()
+                .push(r.clone()),
+        }
+    }
+
+    let mut plugins: Vec<RecipientPluginV1<UiCallbacks>> = vec![];
+    for (name, plugin_recipients) in grouped {
+        let plugin = RecipientPluginV1::new(&name, &plugin_recipients, &[], UiCallbacks)
+            .map_err(|e| CryptoError::Encrypt(format!("age-plugin-{name} unavailable: {e}")))?;
+        plugins.push(plugin);
+    }
+
+    let mut all_refs: Vec<&dyn age::Recipient> = native;
+    for plugin in &plugins {
+        all_refs.push(plugin);
+    }
+
+    let encryptor = age::Encryptor::with_recipients(all_refs.into_iter())
         .map_err(|e| CryptoError::Encrypt(e.to_string()))?;
 
     let mut ciphertext = vec![];
@@ -156,11 +262,14 @@ pub fn encrypt(plaintext: &[u8], recipients: &[MurkRecipient]) -> Result<Vec<u8>
     Ok(ciphertext)
 }
 
-/// Decrypt ciphertext using an identity (age or SSH key).
+/// Decrypt ciphertext using an identity (age, SSH, or plugin).
 ///
 /// Returns the plaintext wrapped in `Zeroizing<Vec<u8>>` so the buffer is
 /// cleared when dropped. Defense-in-depth against plaintext lingering in
 /// freed heap memory.
+///
+/// For plugin identities this spawns `age-plugin-<name>` and may prompt
+/// the user (YubiKey touch, Touch ID, PIN entry) via [`UiCallbacks`].
 pub fn decrypt(
     ciphertext: &[u8],
     identity: &MurkIdentity,
@@ -169,8 +278,30 @@ pub fn decrypt(
         .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
 
     let mut plaintext = Zeroizing::new(vec![]);
+
+    // Hold the plugin object outside the match so the &dyn borrow stays valid.
+    let plugin_holder: Option<IdentityPluginV1<UiCallbacks>> = match identity {
+        MurkIdentity::Plugin { identity, .. } => Some(
+            IdentityPluginV1::new(
+                identity.plugin(),
+                std::slice::from_ref(identity),
+                UiCallbacks,
+            )
+            .map_err(|e| {
+                CryptoError::Decrypt(format!("age-plugin-{} unavailable: {e}", identity.plugin()))
+            })?,
+        ),
+        _ => None,
+    };
+
+    let id_ref: &dyn age::Identity = match identity {
+        MurkIdentity::Age(id) => id,
+        MurkIdentity::Ssh(id) => id,
+        MurkIdentity::Plugin { .. } => plugin_holder.as_ref().expect("constructed above"),
+    };
+
     let mut reader = decryptor
-        .decrypt(std::iter::once(identity.as_dyn()))
+        .decrypt(std::iter::once(id_ref))
         .map_err(|e| CryptoError::Decrypt(e.to_string()))?;
 
     reader
@@ -241,6 +372,67 @@ mod tests {
     fn invalid_key_strings() {
         assert!(parse_recipient("sine-loco").is_err());
         assert!(parse_identity("nihil-et-nemo").is_err());
+    }
+
+    // ── Plugin identity tests ──
+
+    /// Build a syntactically-valid plugin identity + recipient pair for a
+    /// given plugin name. Uses bech32 with dummy entropy — these tests verify
+    /// parsing and dispatch, not plugin interop.
+    fn make_plugin_pair(plugin: &str) -> (String, String) {
+        use bech32::{Bech32, Hrp};
+        let entropy = [0u8; 20];
+        let identity_hrp = Hrp::parse(&format!("age-plugin-{plugin}-")).unwrap();
+        let identity = bech32::encode::<Bech32>(identity_hrp, &entropy)
+            .unwrap()
+            .to_uppercase();
+        let recipient_hrp = Hrp::parse(&format!("age1{plugin}")).unwrap();
+        let recipient = bech32::encode::<Bech32>(recipient_hrp, &entropy).unwrap();
+        (identity, recipient)
+    }
+
+    #[test]
+    fn parse_identity_plugin_file() {
+        let (identity_str, pubkey_str) = make_plugin_pair("yubikey");
+        let file = format!(
+            "# created: 2024-01-01T00:00:00-00:00\n# public key: {pubkey_str}\n{identity_str}\n"
+        );
+        let id = parse_identity(&file).expect("parses plugin identity file");
+        match &id {
+            MurkIdentity::Plugin { identity, pubkey } => {
+                assert_eq!(identity.plugin(), "yubikey");
+                assert_eq!(pubkey, &pubkey_str);
+            }
+            _ => panic!("expected Plugin variant, got {id:?}"),
+        }
+        assert_eq!(id.pubkey_string().unwrap(), pubkey_str);
+    }
+
+    #[test]
+    fn parse_identity_plugin_file_missing_pubkey_header() {
+        let (identity_str, _) = make_plugin_pair("yubikey");
+        let err = parse_identity(&format!("{identity_str}\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("public key") && err.contains("MURK_KEY_FILE"),
+            "expected pubkey + MURK_KEY_FILE guidance, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_recipient_plugin_yubikey() {
+        let (_, pubkey_str) = make_plugin_pair("yubikey");
+        let r = parse_recipient(&pubkey_str).unwrap();
+        assert!(matches!(r, MurkRecipient::Plugin(_)));
+    }
+
+    #[test]
+    fn plugin_identity_trailing_whitespace_tolerated() {
+        let (identity_str, pubkey_str) = make_plugin_pair("yubikey");
+        let file = format!("\n\n# public key: {pubkey_str}\n{identity_str}\n\n");
+        let id = parse_identity(&file).expect("parses with extra whitespace");
+        assert_eq!(id.plugin_name(), Some("yubikey"));
     }
 
     // ── New edge-case tests ──

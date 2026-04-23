@@ -48,9 +48,24 @@ pub fn generate() -> Result<(Zeroizing<String>, Zeroizing<String>, String), Reco
 
 /// Re-derive the BIP39 24-word mnemonic from an existing MURK_KEY.
 /// Decodes the Bech32 key back to raw bytes, then encodes as a mnemonic.
+///
+/// Plugin identities (`AGE-PLUGIN-*`) have no recovery phrase because BIP39
+/// words encode the raw 32 key bytes and hardware-backed keys never leave
+/// the device. Back up a second hardware device as a vault recipient instead.
 pub fn phrase_from_key(secret_key: &str) -> Result<Zeroizing<String>, RecoveryError> {
+    let trimmed = secret_key.trim();
+    if trimmed.to_ascii_uppercase().contains("AGE-PLUGIN-") {
+        return Err(RecoveryError::InvalidKey(
+            "plugin identities (YubiKey, Secure Enclave, FIDO2) do not have recovery phrases. \
+             BIP39 words encode the raw 32 key bytes, but hardware-backed keys never leave the \
+             device — there are no bytes to encode. Recovery means enrolling a backup hardware \
+             device at setup and adding its pubkey as a recipient with `murk authorize`"
+                .into(),
+        ));
+    }
+
     // age keys are uppercase; bech32 decoding requires lowercase.
-    let lowercase = Zeroizing::new(secret_key.to_lowercase());
+    let lowercase = Zeroizing::new(trimmed.to_lowercase());
     let (_, key_bytes) =
         bech32::decode(&lowercase).map_err(|e| RecoveryError::InvalidKey(e.to_string()))?;
     let key_bytes = Zeroizing::new(key_bytes);
