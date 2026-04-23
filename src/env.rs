@@ -121,20 +121,20 @@ pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySou
     if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
         return Ok((SecretString::from(k), KeySource::EnvVar));
     }
+    // File paths return full contents (not trimmed) so that plugin identity
+    // files — which contain a `# public key: age1...` header above an
+    // `AGE-PLUGIN-...-1...` pointer — round-trip intact through parse_identity.
     if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
         let p = std::path::Path::new(&path);
         let contents = read_secret_file(p, "MURK_KEY_FILE")?;
         return Ok((
-            SecretString::from(contents.trim().to_string()),
+            SecretString::from(contents),
             KeySource::EnvFile(p.to_path_buf()),
         ));
     }
     if let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists()) {
         let contents = read_secret_file(&path, "key file")?;
-        return Ok((
-            SecretString::from(contents.trim().to_string()),
-            KeySource::Auto(path),
-        ));
+        return Ok((SecretString::from(contents), KeySource::Auto(path)));
     }
     Err(
         "MURK_KEY not set. Run `murk init` to generate a key, set MURK_KEY_FILE to point at one, or ask a recipient to authorize you. If your .env contains an inline MURK_KEY or MURK_KEY_FILE, run `direnv allow` (or `source .env`) so it is exported to the environment — murk no longer reads .env directly."
@@ -626,7 +626,9 @@ mod tests {
 
         let secret = result.unwrap();
         use age::secrecy::ExposeSecret;
-        assert_eq!(secret.expose_secret(), "AGE-SECRET-KEY-1FROMFILE");
+        // File contents pass through unmodified so plugin identity files
+        // (multi-line with `# public key:` header) round-trip intact.
+        assert_eq!(secret.expose_secret().trim(), "AGE-SECRET-KEY-1FROMFILE");
     }
 
     #[test]
@@ -716,8 +718,12 @@ mod tests {
         // Confirms the murk-82q fix: even if .env sits in CWD with an inline
         // MURK_KEY, resolve_key_with_source must not pick it up. The runtime
         // only trusts the environment and the vault-keyed auto lookup.
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        //
+        // Lock order: ENV_LOCK before CWD_LOCK, matching every other test
+        // that grabs both. Reversing the order deadlocks against parallel
+        // tests that hold ENV_LOCK while waiting for CWD_LOCK.
         let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join("murk_test_resolve_ignores_dotenv");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

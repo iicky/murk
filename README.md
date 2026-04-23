@@ -251,11 +251,46 @@ See [SPEC.md](SPEC.md) for the full specification.
 
 **Key storage** — your secret key lives in `~/.config/murk/keys/` with `chmod 600` permissions, outside your repository. The `.env` file in your project contains only a `MURK_KEY_FILE` reference to this path, not the key itself. Similar to SSH keys in `~/.ssh`, but murk also exposes secrets via `export` and `exec` into subprocess environments. If a machine is compromised, rotate your key and re-authorize with a new one.
 
+**Hardware-backed keys** — for stronger protection, point `MURK_KEY_FILE` at an age plugin identity file (YubiKey, Apple Secure Enclave, FIDO2, etc.) so the private key lives in hardware and never exists as bytes on disk. See [hardware identities](#hardware-identities) below.
+
 **Access control is advisory** — any authorized recipient can decrypt all shared secrets. Per-key access metadata in the schema is cosmetic and not enforced cryptographically. If a recipient has `MURK_KEY` and is in the recipient list, they can read everything in the shared layer. Use scoped secrets (motes) for values that should stay private to one recipient.
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for the full threat model.
 
 **AI agents** — if you're using murk with AI coding agents, see [docs/ai-agents.md](docs/ai-agents.md) for safe patterns.
+
+## Hardware identities
+
+By default `murk init` generates a raw age key and stores it under `~/.config/murk/keys/`. That's fine for development, but the key lives on disk as plaintext — anyone with read access to the file can decrypt everything.
+
+For production use, point `MURK_KEY_FILE` at an [age plugin identity file](https://github.com/FiloSottile/age#plugins) so the private key lives in tamper-resistant hardware and only consents to decrypt with a physical action (touch, Touch ID, PIN):
+
+| Hardware | Plugin |
+| --- | --- |
+| YubiKey, Nitrokey, any PIV-capable smart card | [`age-plugin-yubikey`](https://github.com/str4d/age-plugin-yubikey) |
+| Apple Secure Enclave (Touch ID) | [`age-plugin-se`](https://github.com/remko/age-plugin-se) |
+| Any FIDO2 security key | [`age-plugin-fido2-hmac`](https://github.com/olastor/age-plugin-fido2-hmac) |
+| OpenPGP Card | [`age-plugin-openpgp-card`](https://crates.io/crates/age-plugin-openpgp-card) |
+
+Example setup with a YubiKey:
+
+```bash
+# Install the plugin, then generate an identity bound to the YubiKey
+brew install age-plugin-yubikey
+age-plugin-yubikey --generate > ~/.config/murk/yubikey.txt
+
+# Point murk at the identity file
+echo 'export MURK_KEY_FILE=~/.config/murk/yubikey.txt' >> .env
+
+# Authorize the YubiKey's public key on your vault
+murk authorize $(grep 'public key' ~/.config/murk/yubikey.txt | awk '{print $NF}')
+```
+
+The identity file contains a `# public key: age1yubikey1...` header followed by an `AGE-PLUGIN-YUBIKEY-1...` pointer. murk reads the pubkey from the header (no plugin call needed for scoped secret lookup) and invokes the plugin only when actually decrypting — at which point the YubiKey prompts you to tap it.
+
+**No BIP39 recovery for hardware identities.** The whole point of hardware-backed keys is that the raw key bytes never leave the device, so there are no bytes to encode as a recovery phrase. Instead, enroll a second hardware device at setup and add both pubkeys as recipients (`murk authorize <backup-pubkey>`) — if you lose one, the backup still decrypts.
+
+**`MURK_KEY` vs `MURK_KEY_FILE`.** Setting `MURK_KEY` to a raw `AGE-SECRET-KEY-1...` string in `.env` works, but the key is then plaintext on disk. Prefer `MURK_KEY_FILE` pointing at either a file under `~/.config/murk/keys/` (convenience) or a hardware-backed plugin identity file (strongly recommended for production).
 
 ## License
 
