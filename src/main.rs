@@ -664,8 +664,12 @@ fn cmd_add(
 }
 
 fn cmd_import(file: &str, force: bool, vault_path: &str) {
-    let contents = fs::read_to_string(file)
-        .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1));
+    // Wrap the raw file contents in Zeroizing so the plaintext is wiped
+    // from memory as soon as parsing completes, not when the function returns.
+    let contents = zeroize::Zeroizing::new(
+        fs::read_to_string(file)
+            .unwrap_or_else(|e| die(&format_args!("cannot read {file}: {e}"), 1)),
+    );
 
     // Warn about MURK_* keys that will be skipped during import.
     for line in contents.lines() {
@@ -688,8 +692,9 @@ fn cmd_import(file: &str, force: bool, vault_path: &str) {
 
     let all_pairs = murk_cli::parse_env(&contents);
 
-    // Filter out keys that aren't valid shell identifiers.
-    let mut pairs = Vec::new();
+    // Filter out keys that aren't valid shell identifiers. Values stay
+    // wrapped in Zeroizing end-to-end.
+    let mut pairs: Vec<(String, zeroize::Zeroizing<String>)> = Vec::new();
     for (key, value) in &all_pairs {
         if is_valid_key_name(key) {
             pairs.push((key.clone(), value.clone()));
@@ -1028,14 +1033,14 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
     };
 
     let single_key = key.is_some();
-    let buffer = if single_key {
-        format!("{}{}", header, entries[0].1.as_str())
+    let buffer: zeroize::Zeroizing<String> = if single_key {
+        zeroize::Zeroizing::new(format!("{}{}", header, entries[0].1.as_str()))
     } else {
         let mut buf = header;
         for (k, v) in &entries {
             buf.push_str(&format!("{k}={}\n", v.as_str()));
         }
-        buf
+        zeroize::Zeroizing::new(buf)
     };
 
     // Prefer XDG_RUNTIME_DIR (typically tmpfs, not written to disk) over /tmp.
@@ -1081,9 +1086,12 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         die(&"editor exited with error — aborting", 1);
     }
 
-    // Read back the edited content.
-    let edited = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| die(&format_args!("reading tempfile: {e}"), 1));
+    // Read back the edited content. Wrap in Zeroizing so the plaintext
+    // buffer is wiped as soon as parsing finishes.
+    let edited = zeroize::Zeroizing::new(
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| die(&format_args!("reading tempfile: {e}"), 1)),
+    );
 
     // Securely wipe the tempfile (overwrite with zeros before unlinking).
     overwrite_and_remove(&path);
@@ -1092,12 +1100,15 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
     if single_key {
         let k = key.unwrap();
         // Strip comment header, trim trailing newline.
-        let new_value: String = edited
-            .lines()
-            .filter(|l| !l.starts_with('#'))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let new_value = new_value.trim_end_matches('\n');
+        let mut new_value: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(
+            edited
+                .lines()
+                .filter(|l| !l.starts_with('#'))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let trimmed_len = new_value.trim_end_matches('\n').len();
+        new_value.truncate(trimmed_len);
 
         if new_value.is_empty() {
             eprintln!("{} empty value — no changes", "◆".magenta());
@@ -1110,20 +1121,19 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
             current.values.get(k).cloned()
         };
 
-        if old_value.as_ref().map(|v| v.as_str()) == Some(new_value) {
+        if old_value.as_ref().map(|v| v.as_str()) == Some(new_value.as_str()) {
             eprintln!("{} no changes", "◆".magenta());
             return;
         }
 
         if scoped {
-            current.scoped.entry(k.into()).or_default().insert(
-                pubkey.clone(),
-                zeroize::Zeroizing::new(new_value.to_string()),
-            );
-        } else {
             current
-                .values
-                .insert(k.into(), zeroize::Zeroizing::new(new_value.to_string()));
+                .scoped
+                .entry(k.into())
+                .or_default()
+                .insert(pubkey.clone(), new_value);
+        } else {
+            current.values.insert(k.into(), new_value);
         }
 
         save_vault(vault_path, &mut vault, &original, &current);
@@ -1135,7 +1145,7 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         );
     } else {
         // Multi-key: parse KEY=VALUE lines, diff against original.
-        let mut new_entries: std::collections::BTreeMap<String, String> =
+        let mut new_entries: std::collections::BTreeMap<String, zeroize::Zeroizing<String>> =
             std::collections::BTreeMap::new();
         for line in edited.lines() {
             let trimmed = line.trim();
@@ -1157,7 +1167,7 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                 eprintln!("{} skipping invalid key name: {}", "⚠".yellow(), k.bold());
                 continue;
             }
-            new_entries.insert(k.to_string(), v.to_string());
+            new_entries.insert(k.to_string(), zeroize::Zeroizing::new(v.to_string()));
         }
 
         // Compute diff.
@@ -1177,11 +1187,9 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                             .scoped
                             .entry(k.clone())
                             .or_default()
-                            .insert(pubkey.clone(), zeroize::Zeroizing::new(v.clone()));
+                            .insert(pubkey.clone(), v.clone());
                     } else {
-                        current
-                            .values
-                            .insert(k.clone(), zeroize::Zeroizing::new(v.clone()));
+                        current.values.insert(k.clone(), v.clone());
                     }
                     updated += 1;
                 }
@@ -1191,11 +1199,9 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
                             .scoped
                             .entry(k.clone())
                             .or_default()
-                            .insert(pubkey.clone(), zeroize::Zeroizing::new(v.clone()));
+                            .insert(pubkey.clone(), v.clone());
                     } else {
-                        current
-                            .values
-                            .insert(k.clone(), zeroize::Zeroizing::new(v.clone()));
+                        current.values.insert(k.clone(), v.clone());
                     }
                     // Ensure schema entry exists for new keys.
                     vault

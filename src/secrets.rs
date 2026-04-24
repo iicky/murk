@@ -88,16 +88,18 @@ pub fn list_keys<'a>(vault: &'a types::Vault, tags: &[String]) -> Vec<&'a str> {
 ///
 /// For each `(key, value)` pair, inserts the value into murk and ensures a
 /// schema entry exists. Returns the list of imported key names.
+///
+/// Values arrive already wrapped in [`Zeroizing`] so callers do not have to
+/// hold plaintext in a bare `String` across the import boundary.
 pub fn import_secrets(
     vault: &mut types::Vault,
     murk: &mut types::Murk,
-    pairs: &[(String, String)],
+    pairs: &[(String, Zeroizing<String>)],
 ) -> Vec<String> {
     let now = now_utc();
     let mut imported = Vec::new();
     for (key, value) in pairs {
-        murk.values
-            .insert(key.clone(), Zeroizing::new(value.clone()));
+        murk.values.insert(key.clone(), value.clone());
 
         if let Some(entry) = vault.schema.get_mut(key.as_str()) {
             entry.updated = Some(now.clone());
@@ -523,8 +525,8 @@ mod tests {
         let mut murk = empty_murk();
 
         let pairs = vec![
-            ("KEY1".into(), "val1".into()),
-            ("KEY2".into(), "val2".into()),
+            ("KEY1".into(), Zeroizing::new("val1".into())),
+            ("KEY2".into(), Zeroizing::new("val2".into())),
         ];
         let imported = import_secrets(&mut vault, &mut murk, &pairs);
 
@@ -549,7 +551,7 @@ mod tests {
         );
         let mut murk = empty_murk();
 
-        let pairs = vec![("KEY1".into(), "new_val".into())];
+        let pairs = vec![("KEY1".into(), Zeroizing::new("new_val".into()))];
         import_secrets(&mut vault, &mut murk, &pairs);
 
         assert_eq!(murk.values["KEY1"].as_str(), "new_val");

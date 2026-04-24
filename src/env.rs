@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::Path;
 
 use age::secrecy::SecretString;
+use zeroize::Zeroizing;
 
 /// Shell-escape a string using single quotes, safe for embedding in shell scripts.
 /// If the value is a simple identifier (alphanumeric, `-`, `_`, `.`, `/`), returns it bare.
@@ -149,7 +150,10 @@ pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
 
 /// Parse a .env file into key-value pairs.
 /// Skips comments, blank lines, `MURK_*` keys, and strips quotes and `export` prefixes.
-pub fn parse_env(contents: &str) -> Vec<(String, String)> {
+///
+/// Values are wrapped in [`Zeroizing`] so that the plaintext is wiped from memory
+/// as soon as the caller drops them.
+pub fn parse_env(contents: &str) -> Vec<(String, Zeroizing<String>)> {
     let mut pairs = Vec::new();
 
     for line in contents.lines() {
@@ -179,7 +183,7 @@ pub fn parse_env(contents: &str) -> Vec<(String, String)> {
             continue;
         }
 
-        pairs.push((key.into(), value.into()));
+        pairs.push((key.into(), Zeroizing::new(value.to_string())));
     }
 
     pairs
@@ -464,71 +468,78 @@ mod tests {
         assert!(parse_env(input).is_empty());
     }
 
+    /// Compare parsed pairs against plain `(key, value)` expectations by
+    /// unwrapping the `Zeroizing` value wrappers.
+    fn assert_pairs(pairs: Vec<(String, Zeroizing<String>)>, expected: &[(&str, &str)]) {
+        let actual: Vec<(String, String)> =
+            pairs.into_iter().map(|(k, v)| (k, (*v).clone())).collect();
+        let want: Vec<(String, String)> = expected
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        assert_eq!(actual, want);
+    }
+
     #[test]
     fn parse_env_basic() {
-        let input = "FOO=bar\nBAZ=qux\n";
-        let pairs = parse_env(input);
-        assert_eq!(
-            pairs,
-            vec![("FOO".into(), "bar".into()), ("BAZ".into(), "qux".into())]
+        assert_pairs(
+            parse_env("FOO=bar\nBAZ=qux\n"),
+            &[("FOO", "bar"), ("BAZ", "qux")],
         );
     }
 
     #[test]
     fn parse_env_double_quotes() {
-        let pairs = parse_env("KEY=\"hello world\"\n");
-        assert_eq!(pairs, vec![("KEY".into(), "hello world".into())]);
+        assert_pairs(
+            parse_env("KEY=\"hello world\"\n"),
+            &[("KEY", "hello world")],
+        );
     }
 
     #[test]
     fn parse_env_single_quotes() {
-        let pairs = parse_env("KEY='hello world'\n");
-        assert_eq!(pairs, vec![("KEY".into(), "hello world".into())]);
+        assert_pairs(parse_env("KEY='hello world'\n"), &[("KEY", "hello world")]);
     }
 
     #[test]
     fn parse_env_export_prefix() {
-        let pairs = parse_env("export FOO=bar\n");
-        assert_eq!(pairs, vec![("FOO".into(), "bar".into())]);
+        assert_pairs(parse_env("export FOO=bar\n"), &[("FOO", "bar")]);
     }
 
     #[test]
     fn parse_env_skips_murk_keys() {
         let input = "MURK_KEY=secret\nMURK_KEY_FILE=/path\nMURK_VAULT=.murk\nKEEP=yes\n";
-        let pairs = parse_env(input);
-        assert_eq!(pairs, vec![("KEEP".into(), "yes".into())]);
+        assert_pairs(parse_env(input), &[("KEEP", "yes")]);
     }
 
     #[test]
     fn parse_env_equals_in_value() {
-        let pairs = parse_env("URL=postgres://host?opt=1\n");
-        assert_eq!(pairs, vec![("URL".into(), "postgres://host?opt=1".into())]);
+        assert_pairs(
+            parse_env("URL=postgres://host?opt=1\n"),
+            &[("URL", "postgres://host?opt=1")],
+        );
     }
 
     #[test]
     fn parse_env_no_equals_skipped() {
-        let pairs = parse_env("not-a-valid-line\nKEY=val\n");
-        assert_eq!(pairs, vec![("KEY".into(), "val".into())]);
+        assert_pairs(parse_env("not-a-valid-line\nKEY=val\n"), &[("KEY", "val")]);
     }
 
     // ── New edge-case tests ──
 
     #[test]
     fn parse_env_empty_value() {
-        let pairs = parse_env("KEY=\n");
-        assert_eq!(pairs, vec![("KEY".into(), String::new())]);
+        assert_pairs(parse_env("KEY=\n"), &[("KEY", "")]);
     }
 
     #[test]
     fn parse_env_trailing_whitespace() {
-        let pairs = parse_env("KEY=value   \n");
-        assert_eq!(pairs, vec![("KEY".into(), "value".into())]);
+        assert_pairs(parse_env("KEY=value   \n"), &[("KEY", "value")]);
     }
 
     #[test]
     fn parse_env_unicode_value() {
-        let pairs = parse_env("KEY=hello🔐world\n");
-        assert_eq!(pairs, vec![("KEY".into(), "hello🔐world".into())]);
+        assert_pairs(parse_env("KEY=hello🔐world\n"), &[("KEY", "hello🔐world")]);
     }
 
     #[test]
@@ -540,19 +551,14 @@ mod tests {
     #[test]
     fn parse_env_mixed_quotes_unmatched() {
         // Mismatched quotes are not stripped.
-        let pairs = parse_env("KEY=\"hello'\n");
-        assert_eq!(pairs, vec![("KEY".into(), "\"hello'".into())]);
+        assert_pairs(parse_env("KEY=\"hello'\n"), &[("KEY", "\"hello'")]);
     }
 
     #[test]
     fn parse_env_multiple_murk_vars() {
         // All three MURK_ vars are skipped, other vars kept.
         let input = "MURK_KEY=x\nMURK_KEY_FILE=y\nMURK_VAULT=z\nA=1\nB=2\n";
-        let pairs = parse_env(input);
-        assert_eq!(
-            pairs,
-            vec![("A".into(), "1".into()), ("B".into(), "2".into())]
-        );
+        assert_pairs(parse_env(input), &[("A", "1"), ("B", "2")]);
     }
 
     /// Helper: acquire both locks and cd to a clean temp dir.
