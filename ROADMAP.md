@@ -5,8 +5,6 @@ murk is pre-1.0. This roadmap covers planned directions, not commitments. Priori
 ## Near-term (2026)
 
 - Hardening pass: race-safe file opens, permission enforcement, adversarial tests
-- GitHub key pinning (TOFU) for `github:username` authorization
-- Lower-exposure execution modes for `murk exec` (`--only`, `--clean-env`)
 - Fuzz testing via OSS-Fuzz
 - SLSA Level 3 provenance
 

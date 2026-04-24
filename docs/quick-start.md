@@ -20,25 +20,25 @@ This creates your keypair and prints 24 recovery words. **Write them down.** If 
 
 Your key is stored in `~/.config/murk/keys/`, not in the repo.
 
-## 3. Share your public key
+## 3. Get authorized
+
+Ask whoever maintains the vault to authorize you. The easiest path is GitHub — no manual key exchange:
 
 ```bash
-murk recover
-```
-
-Wait — that's for recovery. To get your public key for authorization:
-
-```bash
-cat ~/.config/murk/keys/*.pub 2>/dev/null || murk info 2>/dev/null
-```
-
-Actually, the easiest path: ask the team lead to run:
-
-```bash
+# (run by a current recipient, not you)
 murk circle authorize github:YOUR_USERNAME
 ```
 
-This fetches your SSH public keys from GitHub and adds you to the vault. No manual key exchange needed.
+This fetches your SSH public keys from `https://github.com/YOUR_USERNAME.keys` and adds them as recipients. murk pins the fingerprints on first authorize, so if your GitHub keys change later the next `authorize github:YOU` will flag the diff before accepting new keys.
+
+If GitHub isn't an option, send them your raw age pubkey instead. Run `murk init` a second time in the project directory — when the vault already exists and you are not yet authorized, it prints the pubkey you need to share:
+
+```
+⚠ not authorized — share your public key to get added:
+  age1…
+```
+
+They authorize it with `murk circle authorize age1… --name you@example.com`.
 
 ## 4. Pull and use secrets
 

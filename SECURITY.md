@@ -20,7 +20,7 @@ For a detailed analysis of what murk protects and what it doesn't, see [THREAT_M
 
 ## Known Issues
 
-**SSH-RSA timing sidechannel (RUSTSEC-2023-0071)** — The `rsa` crate used by age's SSH-RSA support is affected by the Marvin Attack, a timing sidechannel. murk accepts `ssh-rsa` recipients via `circle authorize`, `ssh:` paths, and `github:username`. The risk is low for a local CLI (the attack requires many decryption queries against a server), but if your threat model includes timing oracles, use ed25519 keys instead of RSA. No upstream fix is available yet.
+**SSH-RSA timing sidechannel (RUSTSEC-2023-0071)** — The `rsa` crate used by age's SSH-RSA support is affected by the Marvin Attack, a timing sidechannel. murk rejects `ssh-rsa` recipients by default: `circle authorize`, `ssh:` paths, and `github:username` all refuse to authorize RSA keys unless the caller passes `--allow-ssh-rsa`. The risk is low for a local CLI (the attack requires many decryption queries against a server), but the default-closed posture keeps weak keys out of the recipient list. Prefer ed25519 keys. No upstream fix is available yet.
 
 ## Supply Chain
 

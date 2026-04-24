@@ -68,19 +68,19 @@ Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_
 ## Quick start
 
 ```bash
-# Initialize — generates your key and recovery phrase
+# Initialize — generates your key, recovery phrase, and a vault
 murk init
 
 # Add secrets (prompts for value, hidden input)
 murk add DATABASE_URL
 murk add OPENAI_KEY
 
-# Use with direnv — source .env for the key, then decrypt
-echo -e 'dotenv\neval $(murk export)' > .envrc
+# Wire up direnv so secrets load automatically on cd
+murk env
 direnv allow
 ```
 
-Your key is stored in `~/.config/murk/keys/` with restricted permissions. The `.env` file in your project just contains a `MURK_KEY_FILE` reference — no secrets in the repo directory.
+Your key is stored in `~/.config/murk/keys/` with restricted permissions and is auto-discovered by the CLI based on the vault's absolute path. The `.env` file in your project contains a `MURK_KEY_FILE` reference for shells that don't use direnv — no secrets in the repo directory.
 
 Without direnv, use `murk exec`:
 
@@ -204,15 +204,20 @@ murk restore
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
 | `murk exec CMD...` | Run a command with secrets in the environment (`--only`, `--clean-env`) |
+| `murk env` | Write a `.envrc` for direnv integration |
 | `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
-| `murk circle` | List recipients |
-| `murk circle authorize PUBKEY [--name NAME]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
-| `murk circle revoke RECIPIENT` | Remove a recipient |
+| `murk verify` | Check MAC, recipients, and key access without decrypting secrets |
+| `murk doctor` | Scan the surrounding repo for hygiene issues |
 | `murk scan [PATHS...]` | Scan files for leaked secret values |
 | `murk skeleton` | Export schema-only vault with no secrets or recipients |
+| `murk circle` | List recipients |
+| `murk circle authorize PUBKEY [--name NAME] [--allow-ssh-rsa]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
+| `murk circle revoke RECIPIENT` | Remove a recipient |
+| `murk setup-merge-driver` | Configure git to merge `.murk` vaults without decrypting |
+| `murk completion SHELL` | Generate or install shell completions |
 | `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
 
