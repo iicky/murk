@@ -20,7 +20,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Key names are public.** The `.murk` header stores key names, descriptions, and examples in plaintext. An attacker with repo access knows you have `STRIPE_SECRET_KEY`, `DATABASE_URL`, etc. This is a design trade-off that enables `murk info` to work without a key and keeps git diffs readable. If your threat model requires hiding what services you use, murk does not address this.
 
-**In-memory secret exposure.** Decrypted secret values are held as plain `String` in memory during `export`, `exec`, and `get` operations. They are not zeroized on drop. In long-running processes, core dumps, or swap files, decrypted values may be recoverable. The secret key itself uses `SecretString` with zeroize-on-drop, but the values it decrypts do not. This is a known limitation — mitigating it would require threading `SecretString` through all value paths, which is not practical with the current age API.
+**In-memory secret exposure.** Decrypted secret values are wrapped in `zeroize::Zeroizing<String>` so that plaintext is wiped from memory when the wrapper is dropped. The secret key itself uses age's `SecretString`, which also zeroizes on drop. Zeroization is best-effort: transient buffers inside the age decryption path, the shell-escape output used by `murk export`, `serde_json` serialization, and OS-level copies (stdout, child process environments, swap, core dumps) can still retain plaintext that murk cannot reach. If your threat model includes swap forensics or memory dumps of live processes, treat decrypted values as recoverable.
 
 **Historical access after revocation.** Revoking a recipient re-encrypts the vault going forward, but old `.murk` versions remain in git history. The revoked recipient can still decrypt any version they previously had access to. Always rotate credentials after revocation. murk warns about this at revocation time.
 
@@ -66,7 +66,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **You trust that the GitHub username belongs to who you think it does.** There is no out-of-band verification. If you authorize `github:alice` you are trusting that the GitHub user "alice" is your teammate Alice. For most teams this is reasonable — you already trust teammates' GitHub accounts for code review and merge access.
 
-**No TOFU (Trust On First Use) pinning.** murk does not remember which keys were previously fetched for a username. If a user rotates their SSH keys on GitHub, a subsequent `authorize` would add the new keys. Revocation of old keys must be done manually via `murk revoke`.
+**TOFU (Trust On First Use) pinning.** The first successful `murk authorize github:username` records the SHA-256 fingerprints of the fetched keys in the encrypted vault meta. Subsequent `authorize` calls against the same username refuse to proceed if any fingerprint has been added or removed upstream, unless `--force` is passed. This detects GitHub key rotation — whether benign (a teammate rotated their key) or malicious (an attacker added a key to a compromised GitHub account) — and surfaces the diff for a human to decide. The pin covers the full upstream key set, including `ssh-rsa` keys that murk will not authorize, so rotation is still detected even when no new recipient ends up in the vault.
 
 **SSH keys in the vault are just longer pubkey strings.** The vault format is unchanged — `vault.recipients` stores `ssh-ed25519 AAAA...` strings alongside `age1...` strings. All existing integrity protections (MAC, per-value encryption) apply equally to SSH recipients.
 
@@ -114,7 +114,7 @@ gh attestation verify murk-v*.tar.gz --owner iicky
 | Recovery phrase exposed | Attacker can derive the secret key | Same as key leak |
 | Repository made public | Key names and encrypted values exposed; values remain safe if keys are secure | Rotate secrets as a precaution if key names alone are sensitive |
 | Recipient revoked | Revoked user retains access to historical versions in git | Rotate all secrets that the revoked user had access to |
-| GitHub account compromised | Attacker could be authorized via `github:username` if the vault owner runs authorize after compromise | Verify teammate identity before authorizing; revoke and rotate if compromise is suspected |
+| GitHub account compromised | Attacker could be authorized via `github:username` if the vault owner runs authorize after compromise. TOFU pinning detects subsequent key changes for an already-authorized user | Verify teammate identity before the first authorize; investigate the diff when `authorize github:user` reports pinned-key changes; revoke and rotate if compromise is suspected |
 | SSH private key leaked | Attacker can decrypt all secrets the SSH key was a recipient for | Revoke the compromised SSH key from the vault, rotate secrets |
 
 ## Cryptographic properties
