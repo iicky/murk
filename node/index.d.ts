@@ -5,9 +5,20 @@ export declare class Vault {
   /**
    * Get a single decrypted secret value.
    * Returns the scoped override if one exists, otherwise the shared value.
+   *
+   * Internally, vault state stores values in `Zeroizing<String>` so plaintext
+   * is wiped from memory when dropped. Crossing the napi boundary into a
+   * JavaScript `String` requires copying the plaintext into a regular Rust
+   * `String`; the V8 garbage collector owns it from there and zeroize cannot
+   * follow. This is a known leak in the JS bindings — see THREAT_MODEL.md.
    */
   get(key: string): string | null
-  /** Export all secrets as an object. Scoped values override shared values. */
+  /**
+   * Export all secrets as an object. Scoped values override shared values.
+   *
+   * See `get` for the zeroize caveat — the returned `HashMap` holds plain
+   * `String` plaintext, not `Zeroizing<String>`.
+   */
   export(): Record<string, string>
   /** List all key names. */
   keys(): Array<string>

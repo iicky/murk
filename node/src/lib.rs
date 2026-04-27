@@ -25,19 +25,29 @@ pub struct Vault {
 impl Vault {
     /// Get a single decrypted secret value.
     /// Returns the scoped override if one exists, otherwise the shared value.
+    ///
+    /// Internally, vault state stores values in `Zeroizing<String>` so plaintext
+    /// is wiped from memory when dropped. Crossing the napi boundary into a
+    /// JavaScript `String` requires copying the plaintext into a regular Rust
+    /// `String`; the V8 garbage collector owns it from there and zeroize cannot
+    /// follow. This is a known leak in the JS bindings — see THREAT_MODEL.md.
     #[napi]
     pub fn get(&self, key: String) -> Option<String> {
         if let Some(value) = self.murk.scoped.get(&key).and_then(|m| m.get(&self.pubkey)) {
-            return Some(value.clone());
+            return Some(value.to_string());
         }
-        self.murk.values.get(&key).cloned()
+        self.murk.values.get(&key).map(|v| v.to_string())
     }
 
     /// Export all secrets as an object. Scoped values override shared values.
+    ///
+    /// See `get` for the zeroize caveat — the returned `HashMap` holds plain
+    /// `String` plaintext, not `Zeroizing<String>`.
     #[napi]
     pub fn export(&self) -> HashMap<String, String> {
         murk_cli::resolve_secrets(&self.vault, &self.murk, &self.pubkey, &[])
             .into_iter()
+            .map(|(k, v)| (k, v.to_string()))
             .collect()
     }
 
