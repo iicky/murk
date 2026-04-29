@@ -26,11 +26,10 @@ pub fn disable_core_dumps() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn disables_core_dumps() {
         disable_core_dumps();

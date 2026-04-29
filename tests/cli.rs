@@ -2777,7 +2777,12 @@ fn authorize_ssh_file_empty() {
 /// Helper: write an editor script that replaces the file content.
 /// On Unix, writes a shell script. On Windows, writes a .cmd batch file.
 /// `body` is the shell command (Unix). `win_body` is the batch equivalent.
-fn write_editor_script(dir: &TempDir, name: &str, body: &str, _win_body: &str) -> String {
+fn write_editor_script(
+    dir: &TempDir,
+    name: &str,
+    #[cfg_attr(windows, allow(unused_variables))] body: &str,
+    #[cfg_attr(unix, allow(unused_variables))] win_body: &str,
+) -> String {
     #[cfg(unix)]
     {
         let script = dir.path().join(name);
