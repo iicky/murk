@@ -41,7 +41,7 @@ mod tests {
         };
         // SAFETY: getrlimit writes into `&mut current` for the duration of
         // the call.
-        let rc = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut current) };
+        let rc = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &raw mut current) };
         assert_eq!(rc, 0, "getrlimit failed");
         assert_eq!(current.rlim_cur, 0);
         assert_eq!(current.rlim_max, 0);

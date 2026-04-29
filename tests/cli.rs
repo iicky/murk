@@ -902,7 +902,7 @@ fn recover_shows_phrase() {
 
     // Recovery phrase is 24 words on stdout.
     let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
-    let word_count = stdout.trim().split_whitespace().count();
+    let word_count = stdout.split_whitespace().count();
     assert_eq!(
         word_count, 24,
         "recovery phrase should be 24 words, got {word_count}"
@@ -928,7 +928,7 @@ fn recover_without_key_fails() {
 #[test]
 fn recipients_lists_creator() {
     let dir = TempDir::new().unwrap();
-    let (key, pubkey) = init_vault(&dir);
+    let (key, _pubkey) = init_vault(&dir);
 
     murk(&dir, &key)
         .args(["circle", "--vault", "test.murk"])
@@ -2777,7 +2777,7 @@ fn authorize_ssh_file_empty() {
 /// Helper: write an editor script that replaces the file content.
 /// On Unix, writes a shell script. On Windows, writes a .cmd batch file.
 /// `body` is the shell command (Unix). `win_body` is the batch equivalent.
-fn write_editor_script(dir: &TempDir, name: &str, body: &str, win_body: &str) -> String {
+fn write_editor_script(dir: &TempDir, name: &str, body: &str, _win_body: &str) -> String {
     #[cfg(unix)]
     {
         let script = dir.path().join(name);
