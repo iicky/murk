@@ -1,6 +1,7 @@
 //! GitHub SSH key fetching for `murk authorize github:username`.
 
 use std::fmt::Write;
+use std::time::Duration;
 
 use base64::Engine;
 
@@ -50,10 +51,25 @@ pub fn fetch_keys(username: &str) -> Result<Vec<(MurkRecipient, String)>, GitHub
 
     let url = format!("https://github.com/{username}.keys");
 
-    let body = ureq::get(&url)
+    // Defense-in-depth against a compromised or MITM'd upstream:
+    // - max_redirects(0) refuses redirects so we cannot be steered to an
+    //   internal host or cloud metadata service via a 30x response.
+    // - timeout_global caps the whole exchange.
+    // - body limit caps memory; GitHub allows up to 256 keys per user, ~2 KB
+    //   each in the worst case, so 1 MB is generous but bounded.
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .max_redirects(0)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into();
+
+    let body = agent
+        .get(&url)
         .call()
         .map_err(|e| GitHubError::Fetch(format!("{url}: {e}")))?
-        .into_body()
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
         .read_to_string()
         .map_err(|e| GitHubError::Fetch(format!("reading response: {e}")))?;
 
