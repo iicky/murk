@@ -25,6 +25,7 @@ pub mod error;
 pub(crate) mod export;
 pub(crate) mod git;
 pub mod github;
+pub mod hardening;
 pub(crate) mod info;
 pub(crate) mod init;
 pub(crate) mod merge;

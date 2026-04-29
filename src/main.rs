@@ -2447,6 +2447,7 @@ fn cmd_completion_install(shell: clap_complete::Shell) {
 }
 
 fn main() {
+    murk_cli::hardening::disable_core_dumps();
     let cli = Cli::parse();
 
     match cli.command {
