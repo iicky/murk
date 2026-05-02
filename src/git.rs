@@ -85,7 +85,9 @@ mod tests {
 
     #[test]
     fn setup_merge_driver_creates_gitattributes() {
-        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_git_setup");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -113,7 +115,9 @@ mod tests {
 
     #[test]
     fn setup_merge_driver_appends_gitattributes() {
-        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_git_append");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -142,7 +146,9 @@ mod tests {
 
     #[test]
     fn setup_merge_driver_already_exists() {
-        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_git_exists");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

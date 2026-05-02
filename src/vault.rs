@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn error_from_io() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let vault_err: VaultError = io_err.into();
         assert!(matches!(vault_err, VaultError::Io(_)));
     }
@@ -393,10 +393,10 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let vault_path = dir.join("test.murk");
 
-        let _lock = lock(&vault_path).unwrap();
+        let lock = lock(&vault_path).unwrap();
         assert!(lock_path(&vault_path).exists());
 
-        drop(_lock);
+        drop(lock);
         fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -455,6 +455,8 @@ pub fn write_envrc(vault_name: &str) -> Result<EnvrcStatus, String> {
 mod tests {
     use super::*;
 
+    use age::secrecy::ExposeSecret;
+
     use crate::testutil::{CWD_LOCK, ENV_LOCK};
 
     #[test]
@@ -573,8 +575,12 @@ mod tests {
         std::path::PathBuf,
         std::path::PathBuf,
     ) {
-        let env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = std::env::temp_dir().join(format!("murk_test_{name}"));
         let _ = std::fs::create_dir_all(&tmp);
         let prev = std::env::current_dir().unwrap();
@@ -597,7 +603,6 @@ mod tests {
         resolve_key_sandbox_teardown(&tmp, &prev);
 
         let secret = result.unwrap();
-        use age::secrecy::ExposeSecret;
         assert_eq!(secret.expose_secret(), key);
     }
 
@@ -631,7 +636,6 @@ mod tests {
         resolve_key_sandbox_teardown(&tmp, &prev);
 
         let secret = result.unwrap();
-        use age::secrecy::ExposeSecret;
         // File contents pass through unmodified so plugin identity files
         // (multi-line with `# public key:` header) round-trip intact.
         assert_eq!(secret.expose_secret().trim(), "AGE-SECRET-KEY-1FROMFILE");
@@ -693,15 +697,17 @@ mod tests {
         resolve_key_sandbox_teardown(&tmp, &prev);
 
         let secret = result.unwrap();
-        use age::secrecy::ExposeSecret;
         assert_eq!(secret.expose_secret(), direct_key);
     }
 
     #[cfg(unix)]
     #[test]
     fn warn_env_permissions_no_warning_on_secure_file() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::os::unix::fs::PermissionsExt;
+
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let dir = std::env::temp_dir().join("murk_test_perms");
         let _ = std::fs::remove_dir_all(&dir);
@@ -728,8 +734,12 @@ mod tests {
         // Lock order: ENV_LOCK before CWD_LOCK, matching every other test
         // that grabs both. Reversing the order deadlocks against parallel
         // tests that hold ENV_LOCK while waiting for CWD_LOCK.
-        let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _env_lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_resolve_ignores_dotenv");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -771,7 +781,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_true() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_has_key_true");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -787,7 +799,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_false() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_has_key_false");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -803,7 +817,9 @@ mod tests {
 
     #[test]
     fn dotenv_has_murk_key_no_file() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_has_key_nofile");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -818,7 +834,9 @@ mod tests {
 
     #[test]
     fn write_key_to_dotenv_creates_new() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_write_key_new");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -836,7 +854,9 @@ mod tests {
 
     #[test]
     fn write_key_to_dotenv_replaces_existing() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_write_key_replace");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -863,8 +883,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn write_key_to_dotenv_permissions_are_600() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::os::unix::fs::PermissionsExt;
+
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let dir = std::env::temp_dir().join("murk_test_write_key_perms");
         let _ = std::fs::remove_dir_all(&dir);
@@ -897,7 +920,9 @@ mod tests {
 
     #[test]
     fn write_envrc_creates_new() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_envrc_new");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -916,7 +941,9 @@ mod tests {
 
     #[test]
     fn write_envrc_appends() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_envrc_append");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -937,7 +964,9 @@ mod tests {
 
     #[test]
     fn write_envrc_already_present() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_envrc_present");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -1002,6 +1031,7 @@ mod tests {
         let path = dir.path().join("tight.key");
         let mut f = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .mode(0o600)
             .open(&path)
@@ -1031,7 +1061,9 @@ mod tests {
 
     #[test]
     fn write_envrc_escapes_vault_name() {
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = std::env::temp_dir().join("murk_test_envrc_escape");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();

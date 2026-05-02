@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn error_source_io() {
-        let e = MurkError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test"));
+        let e = MurkError::Io(std::io::Error::other("test"));
         assert!(std::error::Error::source(&e).is_some());
     }
 

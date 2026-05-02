@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("◆"));
         assert!(lines[0].contains("alice"));
-        assert!(lines[1].starts_with(" "));
+        assert!(lines[1].starts_with(' '));
         assert!(lines[1].contains("bob"));
     }
 

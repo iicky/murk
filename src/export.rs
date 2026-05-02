@@ -623,7 +623,7 @@ mod tests {
         vault.secrets.insert(
             "KEY1".into(),
             types::SecretEntry {
-                shared: crate::encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
             },
         );
@@ -692,7 +692,7 @@ mod tests {
         vault.secrets.insert(
             "KEY1".into(),
             types::SecretEntry {
-                shared: crate::encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
             },
         );

@@ -299,8 +299,8 @@ mod tests {
         let result = check_pins("alice", &keys, &old_pins);
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("+"));
-        assert!(msg.contains("-"));
+        assert!(msg.contains('+'));
+        assert!(msg.contains('-'));
     }
 
     #[test]

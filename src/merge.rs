@@ -1084,7 +1084,7 @@ mod tests {
 
         let r = merge_vaults(&base, &ours, &theirs);
         // Theirs modified shared, ours removed — conflicts for both secrets and schema.
-        assert!(r.conflicts.len() >= 1);
+        assert!(!r.conflicts.is_empty());
         assert!(r.conflicts.iter().any(|c| c.reason.contains("removed")));
     }
 

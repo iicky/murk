@@ -25,6 +25,7 @@ pub mod error;
 pub(crate) mod export;
 pub(crate) mod git;
 pub mod github;
+pub mod hardening;
 pub(crate) mod info;
 pub(crate) mod init;
 pub(crate) mod merge;
@@ -840,7 +841,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
-        let shared = encrypt_value(b"original", &[recipient.clone()]).unwrap();
+        let shared = encrypt_value(b"original", std::slice::from_ref(&recipient)).unwrap();
         let mut vault = types::Vault {
             version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
@@ -897,7 +898,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
-        let shared = encrypt_value(b"val1", &[recipient.clone()]).unwrap();
+        let shared = encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap();
         let mut vault = types::Vault {
             version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
@@ -961,14 +962,14 @@ mod tests {
         vault.secrets.insert(
             "KEY1".into(),
             types::SecretEntry {
-                shared: encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
             },
         );
         vault.secrets.insert(
             "KEY2".into(),
             types::SecretEntry {
-                shared: encrypt_value(b"val2", &[recipient.clone()]).unwrap(),
+                shared: encrypt_value(b"val2", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
             },
         );
@@ -1007,7 +1008,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
-        let shared = encrypt_value(b"val1", &[recipient1.clone()]).unwrap();
+        let shared = encrypt_value(b"val1", std::slice::from_ref(&recipient1)).unwrap();
         let mut vault = types::Vault {
             version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
@@ -1068,7 +1069,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.murk");
 
-        let shared = encrypt_value(b"shared_val", &[recipient.clone()]).unwrap();
+        let shared = encrypt_value(b"shared_val", std::slice::from_ref(&recipient)).unwrap();
         let mut vault = types::Vault {
             version: types::VAULT_VERSION.into(),
             created: "2026-02-28T00:00:00Z".into(),
@@ -1129,7 +1130,9 @@ mod tests {
 
     #[test]
     fn load_vault_validates_mac() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1154,7 +1157,7 @@ mod tests {
         vault.secrets.insert(
             "KEY1".into(),
             types::SecretEntry {
-                shared: encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
             },
         );
@@ -1185,7 +1188,7 @@ mod tests {
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
-        let err = result.err().expect("expected MAC validation to fail");
+        let err = result.expect_err("expected MAC validation to fail");
         assert!(
             err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
@@ -1196,7 +1199,9 @@ mod tests {
 
     #[test]
     fn load_vault_succeeds_with_valid_mac() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1251,7 +1256,9 @@ mod tests {
 
     #[test]
     fn load_vault_not_a_recipient() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, _pubkey) = generate_keypair();
         let (other_secret, other_pubkey) = generate_keypair();
@@ -1301,9 +1308,8 @@ mod tests {
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
-        let err = match result {
-            Err(e) => e,
-            Ok(_) => panic!("expected load_vault to fail for non-recipient"),
+        let Err(err) = result else {
+            panic!("expected load_vault to fail for non-recipient");
         };
         // Non-recipient can't decrypt meta, so integrity check fails first.
         let msg = err.to_string();
@@ -1319,7 +1325,9 @@ mod tests {
 
     #[test]
     fn load_vault_zero_secrets() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, pubkey) = generate_keypair();
 
@@ -1367,7 +1375,9 @@ mod tests {
 
     #[test]
     fn load_vault_stripped_meta_with_secrets_fails() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1420,7 +1430,7 @@ mod tests {
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
-        let err = result.err().expect("expected MAC validation to fail");
+        let err = result.expect_err("expected MAC validation to fail");
         assert!(
             err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
@@ -1431,7 +1441,9 @@ mod tests {
 
     #[test]
     fn load_vault_empty_mac_with_secrets_fails() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let (secret, pubkey) = generate_keypair();
         let recipient = make_recipient(&pubkey);
@@ -1455,7 +1467,7 @@ mod tests {
         vault.secrets.insert(
             "KEY1".into(),
             types::SecretEntry {
-                shared: encrypt_value(b"val1", &[recipient.clone()]).unwrap(),
+                shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
             },
         );
@@ -1481,7 +1493,7 @@ mod tests {
         let result = load_vault(path.to_str().unwrap());
         unsafe { std::env::remove_var("MURK_KEY") };
 
-        let err = result.err().expect("expected MAC validation to fail");
+        let err = result.expect_err("expected MAC validation to fail");
         assert!(
             err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"

@@ -444,7 +444,7 @@ mod tests {
             entries: vec![],
         };
         let lines = format_info_lines(&info, false);
-        assert!(lines.iter().any(|l| l.contains("3")));
+        assert!(lines.iter().any(|l| l.contains('3')));
     }
 
     #[test]

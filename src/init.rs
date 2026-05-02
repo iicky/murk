@@ -177,7 +177,9 @@ mod tests {
 
     #[test]
     fn discover_existing_key_from_env() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (secret, pubkey) = generate_keypair();
         unsafe { env::set_var("MURK_KEY", &secret) };
         let result = discover_existing_key();
@@ -193,8 +195,12 @@ mod tests {
         // murk-82q: discover_existing_key must not read .env from CWD, even
         // in the init flow. A .env sitting in the current directory with an
         // inline MURK_KEY is explicitly *not* a trusted input source.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             env::remove_var("MURK_KEY");
             env::remove_var("MURK_KEY_FILE");
@@ -219,7 +225,9 @@ mod tests {
 
     #[test]
     fn discover_existing_key_from_env_file_var() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             env::remove_var("MURK_KEY");
         }
@@ -247,8 +255,12 @@ mod tests {
 
     #[test]
     fn discover_existing_key_neither_set() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _cwd = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { env::remove_var("MURK_KEY") };
 
         // Use a dir with no .env.
@@ -265,7 +277,9 @@ mod tests {
 
     #[test]
     fn discover_existing_key_invalid_key() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { env::set_var("MURK_KEY", "not-a-valid-age-key") };
         let result = discover_existing_key();
         unsafe { env::remove_var("MURK_KEY") };
