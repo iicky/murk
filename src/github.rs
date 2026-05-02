@@ -55,11 +55,18 @@ pub fn fetch_keys(username: &str) -> Result<Vec<(MurkRecipient, String)>, GitHub
     // - max_redirects(0) refuses redirects so we cannot be steered to an
     //   internal host or cloud metadata service via a 30x response.
     // - timeout_global caps the whole exchange.
+    // - proxy(None) ignores HTTP_PROXY/HTTPS_PROXY/ALL_PROXY env vars. ureq v3
+    //   honours them by default via Config::default(); a malicious proxy in the
+    //   user's environment could otherwise MITM key fetches before TOFU pinning
+    //   takes effect on first authorize.
+    // - ureq v3 does not retry transient errors by default, so a network
+    //   failure fails closed without quietly hammering the network.
     // - body limit caps memory; GitHub allows up to 256 keys per user, ~2 KB
     //   each in the worst case, so 1 MB is generous but bounded.
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
         .timeout_global(Some(Duration::from_secs(30)))
+        .proxy(None)
         .build()
         .into();
 
