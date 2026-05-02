@@ -8,7 +8,8 @@ on:
       - "node/**"
       - ".github/workflows/node.yaml"
 
-permissions: read-all
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
