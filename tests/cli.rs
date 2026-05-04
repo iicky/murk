@@ -2498,6 +2498,147 @@ fn agent_plan_emits_schema_only() {
 }
 
 #[test]
+fn agent_exec_requires_only() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["agent", "exec", "--vault", "test.murk", "--", "env"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn agent_exec_injects_only_specified_keys() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("topsecret\n")
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+            "--",
+            "env",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("DB_URL=postgres://prod"));
+    assert!(!stdout.contains("API_KEY=topsecret"));
+}
+
+#[test]
+fn agent_exec_clears_inherited_environment() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .env("UNRELATED_VAR", "should-not-appear")
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+            "--",
+            "env",
+        ])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(!stdout.contains("UNRELATED_VAR=should-not-appear"));
+    assert!(!stdout.contains("MURK_KEY="));
+    assert!(!stdout.contains("MURK_KEY_FILE="));
+    assert!(stdout.contains("DB_URL=postgres://prod"));
+    // PATH preserved so the subprocess can run.
+    assert!(stdout.contains("PATH="));
+}
+
+#[test]
+fn agent_exec_announces_keys_on_stderr() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+            "--",
+            "true",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("agent exec"))
+        .stderr(predicate::str::contains("DB_URL"));
+}
+
+#[test]
+fn agent_exec_unknown_key_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DOES_NOT_EXIST",
+            "--vault",
+            "test.murk",
+            "--",
+            "env",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn agent_plan_works_without_murk_key() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);

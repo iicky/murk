@@ -16,6 +16,13 @@ murk gives agents access to secrets without exposing them in plaintext.
    murk exec -- npm run migrate
    ```
 
+   When the agent itself is invoking the command, use `murk agent exec`. It requires explicit `--only` keys, clears the inherited environment, and strips `MURK_KEY` — so the run can only see the secrets you named:
+   ```bash
+   murk agent exec --only DATABASE_URL -- npm test
+   murk agent exec --only DATABASE_URL --only PG_PASSWORD -- ./migrate.sh
+   murk agent exec --only STRIPE_SECRET_KEY -- python scripts/refund.py
+   ```
+
 4. **Use `murk agent plan` for schema prompting.** Agents don't need secret values to understand what's available. `agent plan` emits key names, descriptions, examples, and tags as text or JSON — no decryption, no `MURK_KEY`, no recipient metadata:
    ```bash
    murk agent plan            # human-readable

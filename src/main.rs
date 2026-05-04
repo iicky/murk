@@ -379,6 +379,21 @@ enum AgentCommand {
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
+
+    /// Run a command with strict agent-safe defaults (clears the inherited
+    /// environment, strips MURK_KEY, requires --only)
+    #[command(trailing_var_arg = true)]
+    Exec {
+        /// Inject these specific keys (required — agent mode fails closed)
+        #[arg(long, required = true)]
+        only: Vec<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+        /// Command and arguments to execute
+        #[arg(required = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2193,6 +2208,22 @@ fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     }
 }
 
+fn cmd_agent_exec(command: &[String], only: &[String], vault_path: &str) {
+    // Announce the exposure boundary on stderr before exec replaces the
+    // process. After execve the subprocess owns stderr and we cannot print.
+    eprintln!(
+        "{} agent exec — clean env, injecting {} key{}",
+        "◆".magenta(),
+        only.len(),
+        if only.len() == 1 { "" } else { "s" }
+    );
+    for key in only {
+        eprintln!("  {}", key.dimmed());
+    }
+
+    cmd_exec(command, only, &[], /* clean_env */ true, vault_path);
+}
+
 fn cmd_agent_plan(tags: &[String], json: bool, output: Option<&str>, vault_path: &str) {
     let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
     let plan = murk_cli::agent_plan(&vault, tags);
@@ -2665,6 +2696,11 @@ fn main() {
                 output.as_deref(),
                 &murk_cli::resolve_vault_path(&vault),
             ),
+            AgentCommand::Exec {
+                only,
+                vault,
+                command,
+            } => cmd_agent_exec(&command, &only, &murk_cli::resolve_vault_path(&vault)),
         },
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));
