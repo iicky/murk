@@ -16,16 +16,15 @@ murk gives agents access to secrets without exposing them in plaintext.
    murk exec -- npm run migrate
    ```
 
-4. **Use `murk info` for schema prompting.** Agents don't need secret values to understand what's available. `murk info` and `murk info --json` show key names, descriptions, and examples — no decryption needed, no `MURK_KEY` required:
+4. **Use `murk agent plan` for schema prompting.** Agents don't need secret values to understand what's available. `agent plan` emits key names, descriptions, examples, and tags as text or JSON — no decryption, no `MURK_KEY`, no recipient metadata:
    ```bash
-   murk info --json
+   murk agent plan            # human-readable
+   murk agent plan --json     # machine-readable
+   murk agent plan --tag db   # filter by tag
    ```
-   Feed this into agent system prompts so they know what secrets exist and how to reference them, without ever seeing the values.
+   Paste the output into agent system prompts so they know what env vars exist and how to reference them, without ever seeing the values.
 
-5. **Use `murk skeleton` to share schema.** For distributing vault structure to agents or new team members without any encrypted data:
-   ```bash
-   murk skeleton -o skeleton.murk
-   ```
+   Reach for `murk info` when you want a fuller picture (recipients, your key source, scoped overrides). Reach for `murk skeleton` when you want a distributable vault file shaped like the real one but with `recipients` / `secrets` / `meta` blanked.
 
 ## What's next
 

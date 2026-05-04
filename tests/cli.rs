@@ -2408,6 +2408,132 @@ fn skeleton_strips_secrets_and_recipients() {
 }
 
 #[test]
+fn agent_plan_emits_schema_only() {
+    let dir = TempDir::new().unwrap();
+    let (key, pubkey) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "--desc",
+            "Database connection string",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "DB_URL",
+            "Database connection string",
+            "--example",
+            "postgres://localhost/db",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // JSON: must include the key, must NOT leak recipient or ciphertext.
+    let json_out = murk(&dir, &key)
+        .args(["agent", "plan", "--json", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    assert!(json_out.status.success());
+
+    let plan: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(plan["vault_name"], "test.murk");
+    assert_eq!(plan["entries"][0]["key"], "DB_URL");
+    assert_eq!(
+        plan["entries"][0]["description"],
+        "Database connection string"
+    );
+    assert_eq!(plan["entries"][0]["example"], "postgres://localhost/db");
+    assert_eq!(plan["entries"][0]["tags"][0], "db");
+
+    // The whole document must not contain the secret value, the recipient
+    // pubkey, or the encrypted meta blob.
+    let raw = String::from_utf8(json_out.stdout).unwrap();
+    assert!(!raw.contains("postgres://prod"));
+    assert!(!raw.contains(&pubkey));
+    assert!(!raw.contains("recipient"));
+    assert!(!raw.contains("\"meta\""));
+
+    // Text mode: aligned columns, header, no value leak.
+    let text_out = murk(&dir, &key)
+        .args(["agent", "plan", "--vault", "test.murk"])
+        .output()
+        .unwrap();
+    assert!(text_out.status.success());
+    let text = String::from_utf8(text_out.stdout).unwrap();
+    assert!(text.contains("vault: test.murk"));
+    assert!(text.contains("DB_URL"));
+    assert!(text.contains("(e.g. postgres://localhost/db)"));
+    assert!(!text.contains("postgres://prod"));
+
+    // -o writes to a file and reports via stderr.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "plan",
+            "--json",
+            "-o",
+            "plan.json",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("wrote agent plan to"));
+
+    let written = fs::read_to_string(dir.path().join("plan.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(parsed["entries"][0]["key"], "DB_URL");
+}
+
+#[test]
+fn agent_plan_works_without_murk_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "add",
+            "API_TOKEN",
+            "--desc",
+            "External API token",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("secret123\n")
+        .assert()
+        .success();
+
+    // Run without MURK_KEY in the environment — agent plan only reads schema.
+    let mut cmd = Command::cargo_bin("murk").unwrap();
+    cmd.current_dir(dir.path())
+        .env_remove("MURK_KEY")
+        .env_remove("MURK_KEY_FILE")
+        .env("HOME", dir.path())
+        .args(["agent", "plan", "--json", "--vault", "test.murk"]);
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(plan["entries"][0]["key"], "API_TOKEN");
+}
+
+#[test]
 fn completion_generates_output() {
     Command::cargo_bin("murk")
         .unwrap()

@@ -316,6 +316,12 @@ enum Command {
     /// Check the surrounding repo for hygiene issues
     Doctor,
 
+    /// Agent-oriented commands (schema-only output for AI agent prompts)
+    Agent {
+        #[command(subcommand)]
+        sub: AgentCommand,
+    },
+
     /// Export schema-only vault with no secrets or recipients
     Skeleton {
         /// Output file (prints to stdout if omitted)
@@ -353,6 +359,25 @@ enum CompletionAction {
     Install {
         /// Shell to install completions for
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentCommand {
+    /// Emit schema-only context safe to paste into an AI agent prompt
+    Plan {
+        /// Filter by tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Output file (prints to stdout if omitted)
+        #[arg(long, short)]
+        output: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
     },
 }
 
@@ -2168,6 +2193,31 @@ fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     }
 }
 
+fn cmd_agent_plan(tags: &[String], json: bool, output: Option<&str>, vault_path: &str) {
+    let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
+    let plan = murk_cli::agent_plan(&vault, tags);
+
+    let rendered = if json {
+        let mut s = serde_json::to_string_pretty(&plan).unwrap();
+        s.push('\n');
+        s
+    } else {
+        murk_cli::format_agent_plan_text(&plan)
+    };
+
+    match output {
+        Some(path) => {
+            fs::write(path, &rendered).unwrap_or_else(|e| die(&e, 1));
+            eprintln!(
+                "{} wrote agent plan to {}",
+                "ok".green().bold(),
+                path.bold()
+            );
+        }
+        None => print!("{rendered}"),
+    }
+}
+
 /// A single finding produced by a check command (`verify`, `doctor`, ...).
 /// Each check either passes silently or pushes a `Finding` describing what's
 /// wrong and how to fix it. See `docs/cli-style.md` for the output contract.
@@ -2603,6 +2653,19 @@ fn main() {
         Command::Skeleton { output, vault } => {
             cmd_skeleton(output.as_deref(), &murk_cli::resolve_vault_path(&vault));
         }
+        Command::Agent { sub } => match sub {
+            AgentCommand::Plan {
+                tag,
+                json,
+                output,
+                vault,
+            } => cmd_agent_plan(
+                &tag,
+                json,
+                output.as_deref(),
+                &murk_cli::resolve_vault_path(&vault),
+            ),
+        },
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));
         }
