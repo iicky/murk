@@ -17,6 +17,7 @@
 )]
 
 // Domain modules — pub(crate) unless main.rs needs direct path access.
+pub(crate) mod agent;
 pub(crate) mod codename;
 pub mod crypto;
 pub mod edit;
@@ -44,6 +45,7 @@ mod python;
 pub mod testutil;
 
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
+pub use agent::{AgentPlan, AgentPlanKey, agent_plan, format_agent_plan_text};
 pub use env::{
     EnvrcStatus, KeySource, dotenv_has_murk_key, key_file_path, parse_env, resolve_key,
     resolve_key_for_vault, resolve_key_with_source, warn_env_permissions, write_envrc,
