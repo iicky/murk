@@ -262,6 +262,18 @@ Writes a `.envrc` for direnv integration. Creates the file if missing, appends t
 
 ---
 
+### `murk agent plan [--tag TAG] [--json] [-o FILE] [--vault NAME]`
+
+Emits schema-only context safe to paste into an AI agent prompt — key names, descriptions, examples, and tags. No decryption and no `MURK_KEY` required; the output contains no secret values, recipient pubkeys, vault name, or meta blob. `--tag` filters by tag (repeatable). `--json` outputs JSON. Prints to stdout, or writes to a file with `-o`.
+
+---
+
+### `murk agent exec --only KEY [--vault NAME] COMMAND...`
+
+`murk exec` with strict agent-safe defaults: clears the inherited environment, strips `MURK_KEY` so the child process cannot read the vault, and requires explicit `--only` keys (repeatable). Agent mode fails closed — there is no inject-everything path. See `docs/ai-agents.md`.
+
+---
+
 ### `murk import [FILE] [--vault NAME]`
 
 Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning.
