@@ -217,9 +217,11 @@ murk restore
 | `murk circle authorize PUBKEY [--name NAME] [--allow-ssh-rsa]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
 | `murk setup-merge-driver` | Configure git to merge `.murk` vaults without decrypting |
-| `murk completion SHELL` | Generate or install shell completions |
+| `murk completion generate\|install SHELL` | Generate or install shell completions |
 | `murk restore` | Recover key from BIP39 phrase |
 | `murk recover` | Show recovery phrase for current key |
+
+Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `info`, and `exec` filter by `--tag`; `ls`, `export`, `info`, and `diff` support `--json`. See `murk <command> --help` for the full flag list.
 
 ## Design
 

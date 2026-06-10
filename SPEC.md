@@ -137,7 +137,7 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "mac": "blake3:abc123...",
+  "mac": "blake3v2:abc123...",
   "hmac_key": "0a1b2c3d..."
 }
 ```
@@ -157,10 +157,11 @@ The MAC is a BLAKE3 keyed hash covering, in order:
    - The shared ciphertext, followed by `\x00`
    - For each scoped entry (sorted by pubkey): the pubkey followed by `\x01`, the scoped ciphertext followed by `\x00`
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
+4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`
 
-The resulting digest is prefixed with `blake3:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
+The resulting digest is prefixed with `blake3v2:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage) and `sha256v2:` (v2, unkeyed) are accepted for backward compatibility. On save, murk always writes `blake3:` with a fresh key.
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), and `blake3:` (v3, no schema coverage) are accepted for backward compatibility. On save, murk always writes `blake3v2:` with a fresh key.
 
 Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
@@ -180,7 +181,7 @@ Interactive setup. Prompts for a display name. Then:
 
 ---
 
-### `murk add KEY [--scoped] [--desc DESC] [--vault NAME]`
+### `murk add KEY [--scoped] [--desc DESC] [--tag TAG] [--vault NAME]`
 
 Adds or updates a secret. Prompts for the value interactively (hidden input via rpassword) or reads from stdin when piped.
 
@@ -216,9 +217,9 @@ Prints a single decrypted value to stdout. Scoped values take priority over shar
 
 ---
 
-### `murk ls [--vault NAME]`
+### `murk ls [--tag TAG] [--json] [--vault NAME]`
 
-Lists key names, one per line.
+Lists key names, one per line. `--tag` filters by tag (repeatable). `--json` outputs JSON.
 
 ---
 
@@ -228,9 +229,17 @@ Sets the description for a key in the plaintext schema. Does not touch encrypted
 
 ---
 
-### `murk export [--vault NAME]`
+### `murk edit [KEY] [--scoped] [--vault NAME]`
 
-Prints all secrets as `export KEY=VALUE` statements to stdout. Scoped values override shared values for the current identity. Errors go to stderr.
+Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits scoped overrides (motes) instead of shared values.
+
+The plaintext buffer is written to a mode-0600 temp file (preferring `XDG_RUNTIME_DIR`), then overwritten with zeros and deleted after the editor exits. An empty value or non-zero editor exit aborts without saving.
+
+---
+
+### `murk export [--tag TAG] [--json] [--vault NAME]`
+
+Prints all secrets as `export KEY=VALUE` statements to stdout. Scoped values override shared values for the current identity. Errors go to stderr. `--tag` filters by tag (repeatable). `--json` outputs JSON instead of shell exports.
 
 Primary usage via direnv:
 
@@ -241,15 +250,27 @@ eval "$(murk export)"
 
 ---
 
+### `murk exec [--only KEY] [--tag TAG] [--clean-env] COMMAND...`
+
+Runs a command with decrypted secrets injected as environment variables. Scoped values override shared values. `--only` injects only the named keys (repeatable), `--tag` filters by tag, `--clean-env` strips the inherited environment so the child sees only murk secrets plus a minimal base. On Unix, murk replaces itself with the command via `exec`.
+
+---
+
+### `murk env [--vault NAME]`
+
+Writes a `.envrc` for direnv integration. Creates the file if missing, appends the murk export line if absent, and leaves it untouched when already present.
+
+---
+
 ### `murk import [FILE] [--vault NAME]`
 
 Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning.
 
 ---
 
-### `murk info [--vault NAME]`
+### `murk info [--tag TAG] [--json] [--vault NAME]`
 
-Prints the public schema. Works without `MURK_KEY`. With a valid key, also shows recipient names and count.
+Prints the public schema. Works without `MURK_KEY`. With a valid key, also shows recipient names and count. `--tag` filters by tag (repeatable). `--json` outputs JSON.
 
 ---
 
@@ -283,9 +304,9 @@ Removes a recipient by pubkey or display name. Re-encrypts all shared secrets wi
 
 ---
 
-### `murk diff [REF] [--vault NAME]`
+### `murk diff [REF] [--show-values] [--json] [--vault NAME]`
 
-Shows which secrets changed between the current vault and a git ref (defaults to `HEAD`).
+Shows which secrets changed between the current vault and a git ref (defaults to `HEAD`). `--show-values` prints the actual values, not just key names. `--json` outputs JSON.
 
 ---
 
@@ -298,6 +319,36 @@ Git merge driver for `.murk` files. Merges non-conflicting secret changes automa
 ### `murk setup-merge-driver`
 
 Configures git to use `murk merge-driver` for `.murk` files via `.gitattributes` and `.git/config`.
+
+---
+
+### `murk verify [--vault NAME]`
+
+Verifies vault integrity (MAC) and runs safety checks without exporting secrets. Exits 1 on any finding.
+
+---
+
+### `murk doctor`
+
+Checks the surrounding repo for hygiene issues — inline keys in `.env`, key files sitting next to the vault, state that would be bad to commit. Runs without a vault. Exits 1 on findings.
+
+---
+
+### `murk skeleton [-o FILE] [--vault NAME]`
+
+Exports a schema-only copy of the vault — key names, descriptions, examples, and tags, with no secrets and no recipients. Prints to stdout, or writes to a file with `-o`.
+
+---
+
+### `murk scan [PATHS]... [--vault NAME]`
+
+Scans files for leaked secret values. Decrypts the vault and searches text files under the given paths (defaults to the current directory) for value substrings. Skips hidden directories, `target/`, `node_modules/`, lockfiles, vault files, and binary files; values shorter than 8 characters are skipped to avoid false positives. Exits 1 if any leak is found.
+
+---
+
+### `murk completion generate|install SHELL`
+
+Prints shell completions to stdout (`generate`) or installs them to the shell's standard completion path (`install`). Supports bash, zsh, fish, elvish, and powershell.
 
 ---
 
