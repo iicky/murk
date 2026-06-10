@@ -1177,12 +1177,11 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         }
 
         save_vault(vault_path, &mut vault, &original, &current);
-        eprintln!(
-            "{} updated {}{}",
-            "◆".magenta(),
-            k.bold(),
-            if scoped { " (scoped)" } else { "" }
-        );
+        if scoped {
+            eprintln!("{} updated {} (scoped)", "✦".yellow(), k.bold());
+        } else {
+            eprintln!("{} updated {}", "◆".magenta(), k.bold());
+        }
     } else {
         // Multi-key: parse KEY=VALUE lines, diff against original.
         let mut new_entries: std::collections::BTreeMap<String, zeroize::Zeroizing<String>> =
@@ -2365,7 +2364,7 @@ fn cmd_verify(vault_path: &str) {
         return;
     }
 
-    eprintln!("{} vault integrity verified (MAC ok)", "ok".green().bold());
+    eprintln!("{} vault integrity verified", "ok".green().bold());
     report_findings(&findings, "vault");
 }
 
