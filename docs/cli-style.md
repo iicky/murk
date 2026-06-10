@@ -34,6 +34,7 @@ colon-free.
 | Marker | Color   | Use                                           |
 |--------|---------|-----------------------------------------------|
 | `◆`    | magenta | completed action / branding dot               |
+| `✦`    | yellow  | scoped (mote) variant of `◆` — scoped add/update, scoped recipients in info |
 | `⚠`    | yellow  | inline warning inside a list item             |
 | `✕`    | red     | failed check inside a list item               |
 | `*`    | plain   | "this entry is you" marker in `circle` / info |
