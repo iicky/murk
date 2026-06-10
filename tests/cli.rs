@@ -2983,3 +2983,85 @@ fn edit_tempfile_cleaned_up() {
     // after the edit (the original tempfile was wiped).
     assert!(marker.exists());
 }
+
+// ── scan ──
+
+#[test]
+fn scan_detects_leaked_secret() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_PASSWORD", "--vault", "test.murk"])
+        .write_stdin("supersecretvalue123\n")
+        .assert()
+        .success();
+
+    // Leak the secret value into a plain text file.
+    fs::write(
+        dir.path().join("config.yml"),
+        "db_password: supersecretvalue123\n",
+    )
+    .unwrap();
+
+    murk(&dir, &key)
+        .args(["scan", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("DB_PASSWORD"))
+        .stderr(predicate::str::contains("config.yml"))
+        .stderr(predicate::str::contains("1 leaked secret found"));
+}
+
+#[test]
+fn scan_clean_repo_reports_nothing() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_PASSWORD", "--vault", "test.murk"])
+        .write_stdin("supersecretvalue123\n")
+        .assert()
+        .success();
+
+    // No file contains the plaintext value — the vault itself is skipped.
+    murk(&dir, &key)
+        .args(["scan", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no leaked secrets found"));
+}
+
+#[test]
+fn scan_reports_multiple_leaks() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_PASSWORD", "--vault", "test.murk"])
+        .write_stdin("supersecretvalue123\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["add", "API_TOKEN", "--vault", "test.murk"])
+        .write_stdin("tokenvalue456789\n")
+        .assert()
+        .success();
+
+    fs::write(
+        dir.path().join("config.yml"),
+        "db_password: supersecretvalue123\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("notes.txt"), "token is tokenvalue456789\n").unwrap();
+
+    murk(&dir, &key)
+        .args(["scan", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("DB_PASSWORD"))
+        .stderr(predicate::str::contains("API_TOKEN"))
+        .stderr(predicate::str::contains("notes.txt"))
+        .stderr(predicate::str::contains("2 leaked secrets found"));
+}
