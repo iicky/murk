@@ -17,11 +17,13 @@ pub fn resolve_secrets(
     pubkey: &str,
     tags: &[String],
 ) -> BTreeMap<String, Zeroizing<String>> {
+    // Collect straight into the result map — no intermediate map holding
+    // extra copies of plaintext.
     let mut values = murk
         .values
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
-        .collect::<HashMap<String, Zeroizing<String>>>();
+        .collect::<BTreeMap<String, Zeroizing<String>>>();
 
     // Apply scoped overrides.
     for (key, scoped_map) in &murk.scoped {
@@ -31,30 +33,16 @@ pub fn resolve_secrets(
     }
 
     // Filter by tag.
-    let allowed_keys: Option<std::collections::HashSet<&str>> = if tags.is_empty() {
-        None
-    } else {
-        Some(
-            vault
-                .schema
-                .iter()
-                .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
-                .map(|(k, _)| k.as_str())
-                .collect(),
-        )
-    };
-
-    let mut result = BTreeMap::new();
-    for (k, v) in values {
-        if allowed_keys
-            .as_ref()
-            .is_some_and(|a| !a.contains(k.as_str()))
-        {
-            continue;
-        }
-        result.insert(k, v);
+    if !tags.is_empty() {
+        let allowed: std::collections::HashSet<&str> = vault
+            .schema
+            .iter()
+            .filter(|(_, e)| e.tags.iter().any(|t| tags.contains(t)))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        values.retain(|k, _| allowed.contains(k.as_str()));
     }
-    result
+    values
 }
 
 /// Build shell-escaped export key-value pairs for `eval $(murk export)`.
