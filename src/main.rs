@@ -1329,15 +1329,31 @@ fn cmd_exec(
     let build_cmd = |cmd: &mut process::Command| {
         if clean_env {
             cmd.env_clear();
-            // Preserve essential vars for the subprocess to function.
-            if let Ok(path) = std::env::var("PATH") {
-                cmd.env("PATH", path);
-            }
-            if let Ok(home) = std::env::var("HOME") {
-                cmd.env("HOME", home);
-            }
-            if let Ok(term) = std::env::var("TERM") {
-                cmd.env("TERM", term);
+            // Preserve the minimum vars subprocesses need to function.
+            // On Windows, cmd.exe and the stdlib break without SystemRoot
+            // and friends.
+            #[cfg(windows)]
+            let preserve: &[&str] = &[
+                "PATH",
+                "PATHEXT",
+                "SystemRoot",
+                "SystemDrive",
+                "ComSpec",
+                "WINDIR",
+                "TEMP",
+                "TMP",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "USERPROFILE",
+                "HOMEDRIVE",
+                "HOMEPATH",
+            ];
+            #[cfg(not(windows))]
+            let preserve: &[&str] = &["PATH", "HOME", "TERM"];
+            for var in preserve {
+                if let Ok(val) = std::env::var(var) {
+                    cmd.env(var, val);
+                }
             }
         } else {
             cmd.env_remove("MURK_KEY");

@@ -2448,7 +2448,7 @@ fn agent_plan_emits_schema_only() {
     assert!(json_out.status.success());
 
     let plan: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
-    assert_eq!(plan["vault_name"], "test.murk");
+    assert!(plan.get("vault_name").is_none());
     assert_eq!(plan["entries"][0]["key"], "DB_URL");
     assert_eq!(
         plan["entries"][0]["description"],
@@ -2458,21 +2458,24 @@ fn agent_plan_emits_schema_only() {
     assert_eq!(plan["entries"][0]["tags"][0], "db");
 
     // The whole document must not contain the secret value, the recipient
-    // pubkey, or the encrypted meta blob.
+    // pubkey, the encrypted meta blob, or the vault name.
     let raw = String::from_utf8(json_out.stdout).unwrap();
     assert!(!raw.contains("postgres://prod"));
     assert!(!raw.contains(&pubkey));
     assert!(!raw.contains("recipient"));
     assert!(!raw.contains("\"meta\""));
+    assert!(!raw.contains("test.murk"));
+    assert!(!raw.contains("vault_name"));
 
-    // Text mode: aligned columns, header, no value leak.
+    // Text mode: aligned columns, header, no vault name or value leak.
     let text_out = murk(&dir, &key)
         .args(["agent", "plan", "--vault", "test.murk"])
         .output()
         .unwrap();
     assert!(text_out.status.success());
     let text = String::from_utf8(text_out.stdout).unwrap();
-    assert!(text.contains("vault: test.murk"));
+    assert!(text.contains("plan: 1 key"));
+    assert!(!text.contains("test.murk"));
     assert!(text.contains("DB_URL"));
     assert!(text.contains("(e.g. postgres://localhost/db)"));
     assert!(!text.contains("postgres://prod"));

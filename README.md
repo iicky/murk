@@ -204,6 +204,8 @@ murk restore
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
 | `murk exec CMD...` | Run a command with secrets in the environment (`--only`, `--clean-env`) |
+| `murk agent plan` | Emit schema-only context for AI agent prompts (no key required) |
+| `murk agent exec --only KEY -- CMD...` | Run a command with strict agent-safe defaults (clean env, no `MURK_KEY`) |
 | `murk env` | Write a `.envrc` for direnv integration |
 | `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |

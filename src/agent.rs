@@ -15,7 +15,6 @@ use crate::types::Vault;
 /// Schema-only view of a vault, suitable for agent prompt context.
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentPlan {
-    pub vault_name: String,
     pub entries: Vec<AgentPlanKey>,
 }
 
@@ -46,17 +45,13 @@ pub fn agent_plan(vault: &Vault, tags: &[String]) -> AgentPlan {
         })
         .collect();
 
-    AgentPlan {
-        vault_name: vault.vault_name.clone(),
-        entries,
-    }
+    AgentPlan { entries }
 }
 
 /// Format an `AgentPlan` as plain text (no ANSI). Columns are aligned.
 pub fn format_agent_plan_text(plan: &AgentPlan) -> String {
     let mut out = format!(
-        "vault: {} ({} key{})\n",
-        plan.vault_name,
+        "plan: {} key{}\n",
         plan.entries.len(),
         if plan.entries.len() == 1 { "" } else { "s" }
     );
@@ -156,7 +151,6 @@ mod tests {
     fn plan_includes_all_keys_when_no_tag_filter() {
         let vault = make_vault();
         let plan = agent_plan(&vault, &[]);
-        assert_eq!(plan.vault_name, "myapp");
         assert_eq!(plan.entries.len(), 2);
     }
 
@@ -176,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn json_does_not_leak_recipients_or_meta() {
+    fn json_does_not_leak_recipients_meta_or_vault_name() {
         let vault = make_vault();
         let plan = agent_plan(&vault, &[]);
         let json = serde_json::to_string(&plan).unwrap();
@@ -184,6 +178,8 @@ mod tests {
         assert!(!json.contains("encrypted-meta-blob"));
         assert!(!json.contains("recipient"));
         assert!(!json.contains("\"meta\""));
+        assert!(!json.contains("myapp"));
+        assert!(!json.contains("vault_name"));
     }
 
     #[test]
@@ -191,7 +187,8 @@ mod tests {
         let vault = make_vault();
         let plan = agent_plan(&vault, &[]);
         let text = format_agent_plan_text(&plan);
-        assert!(text.contains("vault: myapp (2 keys)"));
+        assert!(text.contains("plan: 2 keys"));
+        assert!(!text.contains("myapp"));
         assert!(text.contains("DATABASE_URL"));
         assert!(text.contains("Postgres connection string"));
         assert!(text.contains("(e.g. postgres://localhost/db)"));
@@ -204,7 +201,7 @@ mod tests {
         vault.schema = BTreeMap::new();
         let plan = agent_plan(&vault, &[]);
         let text = format_agent_plan_text(&plan);
-        assert!(text.contains("vault: myapp (0 keys)"));
+        assert!(text.contains("plan: 0 keys"));
     }
 
     #[test]
@@ -213,6 +210,7 @@ mod tests {
         vault.schema.remove("STRIPE_SECRET_KEY");
         let plan = agent_plan(&vault, &[]);
         let text = format_agent_plan_text(&plan);
-        assert!(text.contains("(1 key)"));
+        assert!(text.contains("plan: 1 key"));
+        assert!(!text.contains("1 keys"));
     }
 }
