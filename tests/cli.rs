@@ -1,58 +1,10 @@
 use std::fs;
 
-use assert_cmd::Command;
 use assert_fs::TempDir;
 use predicates::prelude::*;
 
-/// Helper: run `murk init` in a temp dir and return (murk_key, pubkey).
-/// Reads the key from the key file referenced in .env.
-fn init_vault(dir: &TempDir) -> (String, String) {
-    Command::cargo_bin("murk")
-        .unwrap()
-        .args(["init", "--vault", "test.murk"])
-        .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .write_stdin("testuser\n")
-        .assert()
-        .success();
-
-    let env_contents = fs::read_to_string(dir.path().join(".env")).unwrap();
-
-    // .env now contains MURK_KEY_FILE='<path>' — read the key from that file.
-    let murk_key = if let Some(path) = env_contents.lines().find_map(|l| {
-        l.strip_prefix("export MURK_KEY_FILE=")
-            .or_else(|| l.strip_prefix("MURK_KEY_FILE="))
-    }) {
-        let path = path.trim().trim_matches('\'');
-        fs::read_to_string(path).unwrap().trim().to_string()
-    } else if let Some(key) = env_contents.lines().find_map(|l| {
-        l.strip_prefix("export MURK_KEY=")
-            .or_else(|| l.strip_prefix("MURK_KEY="))
-    }) {
-        // Backward compat: direct key in .env
-        key.to_string()
-    } else {
-        panic!("no MURK_KEY or MURK_KEY_FILE found in .env");
-    };
-
-    assert!(murk_key.starts_with("AGE-SECRET-KEY-"));
-
-    let pubkey = {
-        let identity: age::x25519::Identity = murk_key.parse().unwrap();
-        identity.to_public().to_string()
-    };
-
-    (murk_key, pubkey)
-}
-
-/// Helper: build a murk command with MURK_KEY and vault set.
-fn murk(dir: &TempDir, key: &str) -> Command {
-    let mut cmd = Command::cargo_bin("murk").unwrap();
-    cmd.current_dir(dir.path())
-        .env("MURK_KEY", key)
-        .env("HOME", dir.path());
-    cmd
-}
+mod common;
+use common::{init_vault, murk, murk_bin};
 
 // ── init ──
 
@@ -60,11 +12,9 @@ fn murk(dir: &TempDir, key: &str) -> Command {
 fn init_creates_vault_and_env() {
     let dir = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env("HOME", dir.path())
         .write_stdin("alice\n")
         .assert()
         .success()
@@ -99,8 +49,7 @@ fn init_existing_vault_authorized() {
     let (key, _) = init_vault(&dir);
 
     // Second init with authorized key shows "authorized".
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env("MURK_KEY", &key)
@@ -121,8 +70,7 @@ fn init_existing_vault_unauthorized() {
     let (other_key, _) = init_vault(&other_dir);
 
     // Init with unauthorized key shows pubkey to share.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
         .env("MURK_KEY", &other_key)
@@ -144,13 +92,9 @@ fn init_existing_vault_no_key() {
     fs::remove_file(dir.path().join(".env")).unwrap();
 
     // Init without a key generates one and shows unauthorized + pubkey.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
         .assert()
         .success()
         .stderr(
@@ -174,13 +118,9 @@ fn init_existing_vault_ignores_dotenv() {
     let dir = TempDir::new().unwrap();
     let (_key, _) = init_vault(&dir);
 
-    let assertion = Command::cargo_bin("murk")
-        .unwrap()
+    let assertion = murk_bin(dir.path())
         .args(["init", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env("HOME", dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
         .write_stdin("n\n")
         .assert();
     let output = assertion.get_output();
@@ -675,11 +615,9 @@ fn ls_works_without_murk_key() {
         .success();
 
     // ls reads header only — no MURK_KEY needed.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["ls", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .success()
         .stdout(predicate::str::contains("SECRET"));
@@ -736,11 +674,9 @@ fn info_works_without_murk_key() {
         .success();
 
     // info reads header only — works without key.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["info", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .success()
         .stdout(predicate::str::contains("TOKEN"));
@@ -912,12 +848,9 @@ fn recover_shows_phrase() {
 #[test]
 fn recover_without_key_fails() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["recover"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -944,11 +877,9 @@ fn recipients_works_without_murk_key() {
 
     // Without MURK_KEY env var, key is still resolved via key file.
     // Should succeed and show recipient info.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["circle", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .success();
 }
@@ -1119,14 +1050,10 @@ fn add_without_key_fails() {
     fs::remove_file(dir.path().join(".env")).ok();
     let fake_home = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(fake_home.path())
         .args(["add", "X", "--vault", "test.murk"])
         .write_stdin("Y\n")
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
-        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1139,13 +1066,9 @@ fn get_without_key_fails() {
     fs::remove_file(dir.path().join(".env")).ok();
     let fake_home = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(fake_home.path())
         .args(["get", "X", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
-        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1158,13 +1081,9 @@ fn export_without_key_fails() {
     fs::remove_file(dir.path().join(".env")).ok();
     let fake_home = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(fake_home.path())
         .args(["export", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
-        .env("HOME", fake_home.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("MURK_KEY not set"));
@@ -1176,8 +1095,7 @@ fn export_without_key_fails() {
 fn get_missing_vault_fails() {
     let dir = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["get", "X", "--vault", "nonexistent.murk"])
         .current_dir(dir.path())
         .env("MURK_KEY", "AGE-SECRET-KEY-1DUMMY")
@@ -1189,8 +1107,7 @@ fn get_missing_vault_fails() {
 fn ls_missing_vault_fails() {
     let dir = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["ls", "--vault", "nonexistent.murk"])
         .current_dir(dir.path())
         .assert()
@@ -1823,8 +1740,7 @@ fn merge_driver_clean_merge() {
 
     // Without MURK_KEY, merge that changes secrets should fail
     // because the MAC in ours.meta would be stale.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args([
             "merge-driver",
             base_path.to_str().unwrap(),
@@ -1877,8 +1793,7 @@ fn merge_driver_schema_only_merge_without_key() {
     let theirs_path = write_vault_json(dir.path(), "theirs.murk", theirs_json);
 
     // Schema-only change — secrets and recipients unchanged, should succeed without MURK_KEY.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args([
             "merge-driver",
             base_path.to_str().unwrap(),
@@ -1916,8 +1831,7 @@ fn merge_driver_conflict_exit_code() {
     let ours_path = write_vault_json(dir.path(), "ours.murk", &ours_json);
     let theirs_path = write_vault_json(dir.path(), "theirs.murk", &theirs_json);
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args([
             "merge-driver",
             base_path.to_str().unwrap(),
@@ -1942,8 +1856,7 @@ fn setup_merge_driver_creates_gitattributes() {
         .output()
         .unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["setup-merge-driver"])
         .current_dir(dir.path())
         .assert()
@@ -1976,8 +1889,7 @@ fn setup_merge_driver_idempotent() {
 
     // Run twice.
     for _ in 0..2 {
-        Command::cargo_bin("murk")
-            .unwrap()
+        murk_bin(dir.path())
             .args(["setup-merge-driver"])
             .current_dir(dir.path())
             .assert()
@@ -2102,12 +2014,10 @@ fn restore_recovers_key_from_phrase() {
     assert_eq!(phrase.split_whitespace().count(), 24);
 
     // Restore from phrase via stdin — should print the same key.
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .arg("restore")
         .write_stdin(format!("{phrase}\n"))
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .success()
         .stdout(predicate::str::contains(&murk_key));
@@ -2117,12 +2027,10 @@ fn restore_recovers_key_from_phrase() {
 fn restore_invalid_phrase_fails() {
     let dir = TempDir::new().unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .arg("restore")
         .write_stdin("not a valid recovery phrase at all\n")
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .failure();
 }
@@ -2141,11 +2049,9 @@ fn old_vault_without_repo_parses() {
     }"#;
     fs::write(dir.path().join("test.murk"), vault_json).unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["info", "--vault", "test.murk"])
         .current_dir(dir.path())
-        .env_remove("MURK_KEY")
         .assert()
         .success()
         .stdout(predicate::str::contains("codename"));
@@ -2657,11 +2563,8 @@ fn agent_plan_works_without_murk_key() {
         .success();
 
     // Run without MURK_KEY in the environment — agent plan only reads schema.
-    let mut cmd = Command::cargo_bin("murk").unwrap();
+    let mut cmd = murk_bin(dir.path());
     cmd.current_dir(dir.path())
-        .env_remove("MURK_KEY")
-        .env_remove("MURK_KEY_FILE")
-        .env("HOME", dir.path())
         .args(["agent", "plan", "--json", "--vault", "test.murk"]);
     let out = cmd.output().unwrap();
     assert!(
@@ -2676,8 +2579,8 @@ fn agent_plan_works_without_murk_key() {
 
 #[test]
 fn completion_generates_output() {
-    Command::cargo_bin("murk")
-        .unwrap()
+    let dir = TempDir::new().unwrap();
+    murk_bin(dir.path())
         .args(["completion", "generate", "bash"])
         .assert()
         .success()
@@ -2687,10 +2590,8 @@ fn completion_generates_output() {
 #[test]
 fn completion_install_writes_file() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["completion", "install", "bash"])
-        .env("HOME", dir.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("ok wrote"));
@@ -2709,10 +2610,8 @@ fn completion_install_writes_file() {
 #[test]
 fn completion_install_zsh_shows_hint() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["completion", "install", "zsh"])
-        .env("HOME", dir.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("fpath+=~/.zfunc"));
@@ -2723,10 +2622,8 @@ fn completion_install_zsh_shows_hint() {
 #[test]
 fn completion_install_fish() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .args(["completion", "install", "fish"])
-        .env("HOME", dir.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("ok wrote"));
@@ -2863,10 +2760,8 @@ fn symlink_key_file_rejected() {
     #[cfg(windows)]
     std::os::windows::fs::symlink_file(real_path, &symlink_path).unwrap();
 
-    Command::cargo_bin("murk")
-        .unwrap()
+    murk_bin(dir.path())
         .env("MURK_KEY_FILE", symlink_path.to_str().unwrap())
-        .env_remove("MURK_KEY")
         .current_dir(dir.path())
         .args(["export", "--vault", "test.murk"])
         .assert()
