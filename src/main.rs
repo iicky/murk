@@ -624,17 +624,23 @@ fn save_vault(
 
 /// Resolve the secret value from stdin pipe or interactive prompt.
 /// Returns the value or exits with an error.
-fn resolve_value(key: &str) -> String {
+/// Prompt for (or read from stdin) a secret value.
+///
+/// The value is returned in [`zeroize::Zeroizing`] so the plaintext is wiped
+/// from memory when the caller drops it. `rpassword` already returns the typed
+/// password in a `String`; we wrap it (and the piped-input line) so the secret
+/// does not linger on the heap after use.
+fn resolve_value(key: &str) -> zeroize::Zeroizing<String> {
     let stdin = io::stdin();
     if !stdin.is_terminal() {
         // Piped input: read one line so multiple calls can each consume a value
         // e.g. `printf "v1\nv2\n" | murk rotate --all`
-        let mut line = String::new();
+        let mut line = zeroize::Zeroizing::new(String::new());
         stdin
             .lock()
             .read_line(&mut line)
             .unwrap_or_else(|e| die(&format_args!("reading stdin: {e}"), 1));
-        let trimmed = line.trim_end_matches('\n').to_string();
+        let trimmed = zeroize::Zeroizing::new(line.trim_end_matches('\n').to_string());
         if trimmed.is_empty() {
             die(&"empty value from stdin", 1);
         }
@@ -644,14 +650,40 @@ fn resolve_value(key: &str) -> String {
     // Interactive TTY: prompt without echo.
     eprint!("value for {key}: ");
     io::stderr().flush().ok();
-    let password = rpassword::read_password().unwrap_or_else(|e| {
+    let password = zeroize::Zeroizing::new(rpassword::read_password().unwrap_or_else(|e| {
         eprintln!();
         die(&format_args!("reading input: {e}"), 1);
-    });
+    }));
     if password.is_empty() {
         die(&"empty value", 1);
     }
     password
+}
+
+/// Generate `length` random bytes and encode them as a fresh secret value,
+/// either lowercase hex or URL-safe base64.
+///
+/// Both the raw entropy (`Zeroizing<Vec<u8>>`) and the encoded string are held
+/// in [`zeroize::Zeroizing`] so the newly minted secret is wiped from memory on
+/// drop instead of lingering on the heap.
+fn random_secret(length: usize, hex: bool) -> zeroize::Zeroizing<String> {
+    use base64::Engine;
+
+    let bytes: zeroize::Zeroizing<Vec<u8>> =
+        zeroize::Zeroizing::new((0..length).map(|_| rand::random::<u8>()).collect());
+
+    let value = if hex {
+        let mut s = String::with_capacity(length * 2);
+        for b in bytes.iter() {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    } else {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes.as_slice())
+    };
+
+    zeroize::Zeroizing::new(value)
 }
 
 fn cmd_add(
@@ -797,8 +829,6 @@ fn cmd_generate(
     tags: &[String],
     vault_path: &str,
 ) {
-    use base64::Engine;
-
     if !is_valid_key_name(key) {
         die(
             &format_args!(
@@ -809,17 +839,7 @@ fn cmd_generate(
         );
     }
 
-    let bytes: Vec<u8> = (0..length).map(|_| rand::random::<u8>()).collect();
-
-    let value = if hex {
-        bytes.iter().fold(String::new(), |mut s, b| {
-            use std::fmt::Write;
-            let _ = write!(s, "{b:02x}");
-            s
-        })
-    } else {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
-    };
+    let value = random_secret(length, hex);
 
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
@@ -849,8 +869,6 @@ fn cmd_rotate(
     hex: bool,
     vault_path: &str,
 ) {
-    use base64::Engine;
-
     if key.is_none() && !all {
         die(&"specify a key name or use --all", 1);
     }
@@ -886,16 +904,7 @@ fn cmd_rotate(
     let mut rotated = 0;
     for k in &keys_to_rotate {
         let new_value = if generate {
-            let bytes: Vec<u8> = (0..length).map(|_| rand::random::<u8>()).collect();
-            if hex {
-                bytes.iter().fold(String::new(), |mut s, b| {
-                    use std::fmt::Write;
-                    let _ = write!(s, "{b:02x}");
-                    s
-                })
-            } else {
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes)
-            }
+            random_secret(length, hex)
         } else {
             resolve_value(k)
         };
@@ -1343,6 +1352,12 @@ fn cmd_exec(
             cmd.env_remove("MURK_KEY");
             cmd.env_remove("MURK_KEY_FILE");
         }
+        // `secrets` holds the decrypted values in `Zeroizing` and is wiped when
+        // it drops. Handing them to the child's environment necessarily copies
+        // the plaintext into the block passed to `execve(2)`; that copy lives in
+        // the kernel/child and is outside our control, so it is intentionally
+        // not zeroized here. This is the documented boundary of best-effort
+        // zeroization (see murk-w9b).
         cmd.envs(&secrets);
     };
 
