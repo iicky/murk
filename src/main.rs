@@ -2710,3 +2710,83 @@ fn main() {
         },
     }
 }
+
+#[cfg(test)]
+mod cli_structure {
+    //! Structural guards over the clap command tree (murk-p9o.3).
+    //!
+    //! murk keeps each command's handler in a flat `cmd_<name>` function
+    //! dispatched from the exhaustive `match` in [`run`], so "every subcommand
+    //! has a handler" is already enforced by the compiler — a missing arm won't
+    //! build. What the compiler does *not* catch is a subcommand shipped without
+    //! help text, or one that no integration test ever exercises. These tests
+    //! close both gaps so the CLI surface stays coherent as it grows.
+
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// Collect `(path, has_about)` for every subcommand at any depth, where
+    /// `path` is the space-joined invocation (e.g. `"circle authorize"`).
+    fn collect(cmd: &clap::Command, prefix: &str, out: &mut Vec<(String, bool)>) {
+        for sub in cmd.get_subcommands() {
+            let path = if prefix.is_empty() {
+                sub.get_name().to_string()
+            } else {
+                format!("{prefix} {}", sub.get_name())
+            };
+            out.push((path.clone(), sub.get_about().is_some()));
+            collect(sub, &path, out);
+        }
+    }
+
+    #[test]
+    fn every_subcommand_has_help() {
+        let mut subs = Vec::new();
+        collect(&Cli::command(), "", &mut subs);
+
+        // Guard against the walk silently finding an empty tree.
+        assert!(
+            subs.len() >= 25,
+            "expected the full command surface, only found {}: {:?}",
+            subs.len(),
+            subs.iter().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+
+        let missing: Vec<&String> = subs
+            .iter()
+            .filter(|(_, has_about)| !has_about)
+            .map(|(path, _)| path)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these subcommands ship without an about/help string: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn every_top_level_subcommand_has_an_integration_test() {
+        // Nested subcommands (e.g. `circle authorize`) are covered transitively
+        // through their parent and by `every_subcommand_has_help`; here we only
+        // assert each top-level command is actually invoked somewhere in the
+        // integration suite, so a new command cannot ship untested.
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let sources: String = ["tests/cli.rs", "tests/adversarial.rs"]
+            .iter()
+            .map(|rel| {
+                std::fs::read_to_string(format!("{manifest}/{rel}"))
+                    .unwrap_or_else(|e| panic!("reading {rel}: {e}"))
+            })
+            .collect();
+
+        let untested: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_string())
+            .filter(|name| !sources.contains(&format!("\"{name}\"")))
+            .collect();
+        assert!(
+            untested.is_empty(),
+            "these top-level subcommands are never invoked by an integration test: {untested:?}"
+        );
+    }
+}
