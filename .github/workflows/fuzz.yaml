@@ -1,0 +1,47 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # nightly 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_vault_parse
+          - fuzz_env_parse
+          - fuzz_merge
+          - fuzz_recipient_parse
+          - fuzz_recovery
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: nightly # cargo-fuzz needs -Zsanitizer (nightly only)
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+        with:
+          workspaces: fuzz # fuzz/ is excluded from the main workspace
+      - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-fuzz
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz ${{ matrix.target }}
+        # Short per-target run; -timeout flags a single slow input as a bug.
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10
+      - name: Upload crash corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          retention-days: 7
