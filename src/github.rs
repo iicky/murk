@@ -149,14 +149,19 @@ pub fn check_pins(
 
     let fetched_fps: Vec<String> = fetched_keys.iter().map(|(_, k)| fingerprint(k)).collect();
 
-    let mut added: Vec<&str> = Vec::new();
-    let mut removed: Vec<&str> = Vec::new();
-
-    for fp in &fetched_fps {
+    // Added keys are present in the fetch but not pinned. We still hold the full
+    // key string, so label each with its SSH type — that lets a user tell a
+    // routine rotation (ed25519 added) from a suspicious downgrade (ssh-rsa
+    // added) at a glance.
+    let mut added: Vec<String> = Vec::new();
+    for ((_, key), fp) in fetched_keys.iter().zip(&fetched_fps) {
         if !pinned.contains(fp) {
-            added.push(fp);
+            added.push(format!("{} {fp}", key_type_label(key)));
         }
     }
+    // Removed keys were pinned but are no longer fetched. We only stored the
+    // fingerprint, not the original key string, so these stay unlabeled.
+    let mut removed: Vec<&str> = Vec::new();
     for fp in pinned {
         if !fetched_fps.contains(fp) {
             removed.push(fp);
@@ -168,8 +173,8 @@ pub fn check_pins(
     }
 
     let mut msg = format!("github:{username} keys changed since last authorization\n");
-    for fp in &added {
-        let _ = writeln!(msg, "  + {fp}");
+    for entry in &added {
+        let _ = writeln!(msg, "  + {entry}");
     }
     for fp in &removed {
         let _ = writeln!(msg, "  - {fp}");
@@ -306,8 +311,10 @@ mod tests {
         let result = check_pins("alice", &keys, &old_pins);
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains('+'));
-        assert!(msg.contains('-'));
+        // Added keys are labeled with their SSH type; removed ones are not
+        // (only the fingerprint was pinned).
+        assert!(msg.contains("+ ssh-ed25519 SHA256:"), "msg: {msg}");
+        assert!(msg.contains("- SHA256:fakefakefake"), "msg: {msg}");
     }
 
     #[test]
