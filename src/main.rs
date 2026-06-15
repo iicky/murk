@@ -2090,6 +2090,8 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
                     "description": e.description,
                     "example": e.example,
                     "tags": e.tags,
+                    "rotation_interval_days": e.rotation_interval_days,
+                    "expires_at": e.expires_at,
                     "scoped_recipients": e.scoped_recipients,
                 })
             })
@@ -2217,6 +2219,15 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
             String::new()
         };
 
+        // Lifecycle policy is public — show it regardless of key, like tags.
+        let lifecycle =
+            murk_cli::lifecycle_segment(entry.rotation_interval_days, entry.expires_at.as_deref());
+        let lifecycle_str = if lifecycle.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", lifecycle.dimmed())
+        };
+
         // Scoped recipients only shown when meta is available.
         let scoped_str = if has_meta && !entry.scoped_recipients.is_empty() {
             format!(
@@ -2228,11 +2239,12 @@ fn cmd_info(tags: &[String], json: bool, vault_path: &str) {
         };
 
         println!(
-            "   {}  {}  {}{}{}",
+            "   {}  {}  {}{}{}{}",
             key_padded.magenta().dimmed().bold(),
             desc_padded,
             ex_padded.dimmed(),
             tag_padded.yellow(),
+            lifecycle_str,
             scoped_str
         );
     }

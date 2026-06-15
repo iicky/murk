@@ -2319,6 +2319,53 @@ fn describe_sets_rotation_metadata_and_doctor_flags_drift() {
 }
 
 #[test]
+fn info_surfaces_rotation_and_expiry() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("s3cr3t\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "TOKEN",
+            "deploy token",
+            "--rotate-every",
+            "90d",
+            "--expires",
+            "2026-09-01",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Human info shows an at-a-glance lifecycle segment.
+    murk(&dir, &key)
+        .args(["info", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("rotate 90d")
+                .and(predicate::str::contains("expires 2026-09-01")),
+        );
+
+    // JSON info carries the raw fields.
+    murk(&dir, &key)
+        .args(["info", "--json", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"rotation_interval_days\": 90").and(
+                predicate::str::contains("\"expires_at\": \"2026-09-01T23:59:59Z\""),
+            ),
+        );
+}
+
+#[test]
 fn verify_reports_key_source() {
     // Verify should print which key source it used, for transparency.
     let dir = TempDir::new().unwrap();
