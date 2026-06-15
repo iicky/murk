@@ -298,6 +298,8 @@ Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` 
 
 Prints the public schema. Works without `MURK_KEY`. With a valid key, also shows recipient names and count. `--tag` filters by tag (repeatable). `--json` outputs JSON.
 
+Each key's row shows any rotation interval and expiry as a trailing `rotate 90d  expires 2026-09-01` segment (public, shown without a key); `--json` includes `rotation_interval_days` and `expires_at` per entry. `murk doctor` evaluates these against the clock — `info` just shows the policy.
+
 ---
 
 ### `murk recover`

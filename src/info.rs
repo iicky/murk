@@ -6,14 +6,34 @@ use crate::{codename, types};
 const PUBKEY_DISPLAY_LEN: usize = 12;
 
 /// A single key entry in the vault info output.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InfoEntry {
     pub key: String,
     pub description: String,
     pub example: Option<String>,
     pub tags: Vec<String>,
+    /// Soft rotation interval in days, if set (public schema metadata).
+    pub rotation_interval_days: Option<u32>,
+    /// Hard expiry (ISO-8601 UTC), if set (public schema metadata).
+    pub expires_at: Option<String>,
     /// Display names (or truncated pubkeys) of recipients with scoped overrides.
     pub scoped_recipients: Vec<String>,
+}
+
+/// Build the at-a-glance lifecycle segment shown after each info row, e.g.
+/// `rotate 90d  expires 2026-09-01`. Returns an empty string when neither is
+/// set. The expiry is shown as a bare date (the stored time is end-of-day).
+/// Public schema, so this renders without a key — same as tags.
+pub fn lifecycle_segment(rotation_interval_days: Option<u32>, expires_at: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(days) = rotation_interval_days {
+        parts.push(format!("rotate {days}d"));
+    }
+    if let Some(ts) = expires_at {
+        let date = ts.split('T').next().unwrap_or(ts);
+        parts.push(format!("expires {date}"));
+    }
+    parts.join("  ")
 }
 
 /// Aggregated vault information for display.
@@ -98,6 +118,8 @@ pub fn vault_info(
                 description: entry.description.clone(),
                 example: entry.example.clone(),
                 tags: entry.tags.clone(),
+                rotation_interval_days: entry.rotation_interval_days,
+                expires_at: entry.expires_at.clone(),
                 scoped_recipients,
             }
         })
@@ -217,6 +239,15 @@ pub fn format_info_lines(info: &VaultInfo, has_meta: bool) -> Vec<String> {
             String::new()
         };
 
+        // Lifecycle policy is public — show it regardless of key, like tags.
+        let lifecycle =
+            lifecycle_segment(entry.rotation_interval_days, entry.expires_at.as_deref());
+        let lifecycle_str = if lifecycle.is_empty() {
+            String::new()
+        } else {
+            format!("  {lifecycle}")
+        };
+
         // Scoped recipients only shown when meta is available.
         let scoped_str = if has_meta && !entry.scoped_recipients.is_empty() {
             format!("  ✦ {}", entry.scoped_recipients.join(", "))
@@ -225,7 +256,7 @@ pub fn format_info_lines(info: &VaultInfo, has_meta: bool) -> Vec<String> {
         };
 
         lines.push(format!(
-            "   {key_padded}  {desc_padded}  {ex_padded}{tag_padded}{scoped_str}"
+            "   {key_padded}  {desc_padded}  {ex_padded}{tag_padded}{lifecycle_str}{scoped_str}"
         ));
     }
 
@@ -363,6 +394,7 @@ mod tests {
                     example: Some("postgres://...".into()),
                     tags: vec![],
                     scoped_recipients: vec![],
+                    ..Default::default()
                 },
                 InfoEntry {
                     key: "API_KEY".into(),
@@ -370,6 +402,7 @@ mod tests {
                     example: None,
                     tags: vec![],
                     scoped_recipients: vec![],
+                    ..Default::default()
                 },
             ],
         };
@@ -397,6 +430,7 @@ mod tests {
                 example: None,
                 tags: vec!["prod".into()],
                 scoped_recipients: vec!["alice".into()],
+                ..Default::default()
             }],
         };
         let lines = format_info_lines(&info, true);
@@ -422,6 +456,7 @@ mod tests {
                 example: None,
                 tags: vec!["prod".into()],
                 scoped_recipients: vec![],
+                ..Default::default()
             }],
         };
         // has_meta=false — tags should still show.
@@ -498,6 +533,7 @@ mod tests {
                 example: None,
                 tags: vec!["prod".into(), "db".into()],
                 scoped_recipients: vec![],
+                ..Default::default()
             }],
         };
         let lines = format_info_lines(&info, false);
@@ -522,5 +558,70 @@ mod tests {
         // Timestamps are in schema, not in InfoEntry — but the vault parses correctly.
         assert_eq!(info.entries.len(), 1);
         assert_eq!(info.entries[0].key, "KEY");
+    }
+
+    // ── lifecycle metadata ──
+
+    #[test]
+    fn lifecycle_segment_renders_both_or_neither() {
+        assert_eq!(lifecycle_segment(None, None), "");
+        assert_eq!(lifecycle_segment(Some(90), None), "rotate 90d");
+        assert_eq!(
+            lifecycle_segment(None, Some("2026-09-01T23:59:59Z")),
+            "expires 2026-09-01"
+        );
+        assert_eq!(
+            lifecycle_segment(Some(30), Some("2026-09-01T23:59:59Z")),
+            "rotate 30d  expires 2026-09-01"
+        );
+    }
+
+    #[test]
+    fn vault_info_carries_lifecycle_fields() {
+        let mut schema = BTreeMap::new();
+        schema.insert(
+            "TOKEN".into(),
+            types::SchemaEntry {
+                description: "api token".into(),
+                rotation_interval_days: Some(90),
+                expires_at: Some("2026-09-01T23:59:59Z".into()),
+                ..Default::default()
+            },
+        );
+        let bytes = test_vault_bytes(schema);
+        let info = vault_info(&bytes, &[], None).unwrap();
+        assert_eq!(info.entries[0].rotation_interval_days, Some(90));
+        assert_eq!(
+            info.entries[0].expires_at.as_deref(),
+            Some("2026-09-01T23:59:59Z")
+        );
+    }
+
+    #[test]
+    fn format_info_shows_lifecycle_without_meta() {
+        let info = VaultInfo {
+            vault_name: ".murk".into(),
+            codename: "cool-name".into(),
+            repo: String::new(),
+            created: "2026-01-01T00:00:00Z".into(),
+            recipient_count: 1,
+            recipient_names: vec![],
+            self_name: None,
+            self_pubkey: None,
+            entries: vec![InfoEntry {
+                key: "TOKEN".into(),
+                description: "api token".into(),
+                rotation_interval_days: Some(90),
+                expires_at: Some("2026-09-01T23:59:59Z".into()),
+                ..Default::default()
+            }],
+        };
+        // has_meta=false — lifecycle is public, must still render.
+        let line = format_info_lines(&info, false)
+            .into_iter()
+            .find(|l| l.contains("TOKEN"))
+            .unwrap();
+        assert!(line.contains("rotate 90d"), "got: {line}");
+        assert!(line.contains("expires 2026-09-01"), "got: {line}");
     }
 }
