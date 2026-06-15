@@ -163,6 +163,12 @@ enum Command {
         /// Tag for grouping (repeatable, replaces existing tags)
         #[arg(long)]
         tag: Vec<String>,
+        /// Rotation interval, e.g. `90d` or `90` (days); `never` clears it
+        #[arg(long, value_name = "DAYS")]
+        rotate_every: Option<String>,
+        /// Hard expiry date, e.g. `2026-09-01`; `never` clears it
+        #[arg(long, value_name = "DATE")]
+        expires: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -314,7 +320,11 @@ enum Command {
     },
 
     /// Check the surrounding repo for hygiene issues
-    Doctor,
+    Doctor {
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 
     /// Agent-oriented commands (schema-only output for AI agent prompts)
     Agent {
@@ -983,16 +993,70 @@ fn cmd_describe(
     description: &str,
     example: Option<&str>,
     tags: &[String],
+    rotate_every: Option<&str>,
+    expires: Option<&str>,
     vault_path: &str,
 ) {
+    let rotation_patch = parse_rotate_every(rotate_every).unwrap_or_else(|e| die(&e, 2));
+    let expires_patch = parse_expires(expires).unwrap_or_else(|e| die(&e, 2));
+
     let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
 
-    murk_cli::describe_key(&mut vault, key, description, example, tags);
+    murk_cli::describe_key(
+        &mut vault,
+        key,
+        description,
+        example,
+        tags,
+        rotation_patch,
+        expires_patch.as_ref().map(|inner| inner.as_deref()),
+    );
 
     // Describe only changes schema (plaintext) — but we still need to write the vault.
     // Re-save with no value changes so ciphertext is preserved.
     save_vault(vault_path, &mut vault, &original, &murk);
+}
+
+/// Parse `--rotate-every` into a tri-state schema patch: `None` leaves the
+/// interval untouched, `Some(None)` clears it, `Some(Some(n))` sets N days.
+fn parse_rotate_every(input: Option<&str>) -> Result<Option<Option<u32>>, String> {
+    let Some(raw) = input else { return Ok(None) };
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("never") || s.eq_ignore_ascii_case("none") {
+        return Ok(Some(None));
+    }
+    let digits = s.strip_suffix(['d', 'D']).unwrap_or(s);
+    match digits.parse::<u32>() {
+        Ok(0) => Ok(Some(None)),
+        Ok(n) => Ok(Some(Some(n))),
+        Err(_) => Err(format!(
+            "invalid --rotate-every {raw:?} (use days like 90 or 90d, or never)"
+        )),
+    }
+}
+
+/// Parse `--expires` into a tri-state patch. Accepts a full RFC-3339 timestamp
+/// or a bare `YYYY-MM-DD` date (stored as end-of-day UTC); `never` clears it.
+fn parse_expires(input: Option<&str>) -> Result<Option<Option<String>>, String> {
+    let Some(raw) = input else { return Ok(None) };
+    let s = raw.trim();
+    if s.eq_ignore_ascii_case("never") || s.eq_ignore_ascii_case("none") {
+        return Ok(Some(None));
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        let norm = dt
+            .with_timezone(&chrono::Utc)
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        return Ok(Some(Some(norm)));
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(Some(Some(format!("{}T23:59:59Z", d.format("%Y-%m-%d")))));
+    }
+    Err(format!(
+        "invalid --expires {raw:?} (use a date like 2026-09-01, or never)"
+    ))
 }
 
 fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
@@ -2399,10 +2463,11 @@ fn cmd_verify(vault_path: &str) {
     report_findings(&findings, "vault");
 }
 
-fn cmd_doctor() {
-    // doctor is repo-level hygiene — it doesn't need a vault to run. The
-    // checks it performs are all about the working tree: env files, key
-    // files sitting next to the vault, obvious commit-would-be-bad state.
+fn cmd_doctor(vault_path: &str) {
+    // doctor is repo-level hygiene — most checks are about the working tree:
+    // env files, key files sitting next to the vault, obvious commit-would-be-bad
+    // state. It also reads the vault's plaintext schema (no key needed) to flag
+    // rotation/expiry drift.
     let mut findings: Vec<Finding> = Vec::new();
 
     let cwd = std::env::current_dir().unwrap_or_else(|e| die(&e, 1));
@@ -2470,11 +2535,14 @@ fn cmd_doctor() {
         });
     }
 
-    // ── ssh-rsa in ~/.ssh ──
-    // Not a repo check strictly, but if a user is going to reach for an SSH
-    // key next, we want them to notice they have an rsa one ready to go.
-    // Skip for now — this is an environment check that doesn't really fit
-    // the "repo hygiene" frame.
+    // ── Rotation / expiry drift ──
+    // Read-only over the plaintext schema (no decryption). Skipped silently when
+    // there's no readable vault — doctor still reports the repo-hygiene findings.
+    if let Ok((vault, _raw)) = murk_cli::vault::read_with_raw(Path::new(vault_path)) {
+        for issue in murk_cli::rotation_health(&vault, chrono::Utc::now()) {
+            findings.push(rotation_finding(&issue));
+        }
+    }
 
     if findings.is_empty() {
         eprintln!("{} repo hygiene looks clean", "ok".green().bold());
@@ -2482,6 +2550,62 @@ fn cmd_doctor() {
     }
 
     report_findings(&findings, "repo");
+}
+
+/// Render a [`murk_cli::RotationIssue`] as a doctor [`Finding`].
+fn rotation_finding(issue: &murk_cli::RotationIssue) -> Finding {
+    use murk_cli::RotationIssue::*;
+    // Show the date portion of stored end-of-day timestamps; they read cleaner.
+    let day = |ts: &str| ts.split('T').next().unwrap_or(ts).to_string();
+    match issue {
+        Overdue {
+            key,
+            last_rotated,
+            interval_days,
+            overdue_days,
+        } => Finding {
+            category: "rotation",
+            message: format!(
+                "{key} is {overdue_days}d overdue for rotation ({interval_days}d interval, last changed {})",
+                day(last_rotated)
+            ),
+            fix: Some(format!("rotate it: `murk rotate {key}`")),
+        },
+        NoBaseline { key, interval_days } => Finding {
+            category: "rotation",
+            message: format!(
+                "{key} has a {interval_days}d rotation interval but no last-updated timestamp"
+            ),
+            fix: Some(format!(
+                "set a value so the clock can start: `murk add {key}`"
+            )),
+        },
+        Expired {
+            key,
+            expired_at,
+            days_ago,
+        } => Finding {
+            category: "expiry",
+            message: format!("{key} expired {days_ago}d ago ({})", day(expired_at)),
+            fix: Some(format!(
+                "rotate it and set a new expiry: `murk rotate {key}` then `murk describe {key} ... --expires DATE`"
+            )),
+        },
+        ExpiringSoon {
+            key,
+            expires_at,
+            days_left,
+        } => Finding {
+            category: "expiry",
+            message: format!("{key} expires in {days_left}d ({})", day(expires_at)),
+            fix: Some(format!("rotate it before it lapses: `murk rotate {key}`")),
+        },
+        BadTimestamp { key, field, value } => Finding {
+            category: "schema",
+            message: format!("{key} has an unparseable {field} timestamp ({value})"),
+            fix: Some("re-set it with a write command, or fix it by hand".into()),
+        },
+    }
 }
 
 fn cmd_completion_generate(shell: clap_complete::Shell) {
@@ -2619,12 +2743,16 @@ fn main() {
             description,
             example,
             tag,
+            rotate_every,
+            expires,
             vault,
         } => cmd_describe(
             &key,
             &description,
             example.as_deref(),
             &tag,
+            rotate_every.as_deref(),
+            expires.as_deref(),
             &murk_cli::resolve_vault_path(&vault),
         ),
         Command::Info { tag, json, vault } => {
@@ -2710,7 +2838,7 @@ fn main() {
         Command::MergeDriver { base, ours, theirs } => cmd_merge_driver(&base, &ours, &theirs),
         Command::SetupMergeDriver => cmd_setup_merge_driver(),
         Command::Verify { vault } => cmd_verify(&murk_cli::resolve_vault_path(&vault)),
-        Command::Doctor => cmd_doctor(),
+        Command::Doctor { vault } => cmd_doctor(&murk_cli::resolve_vault_path(&vault)),
         Command::Skeleton { output, vault } => {
             cmd_skeleton(output.as_deref(), &murk_cli::resolve_vault_path(&vault));
         }
@@ -2819,5 +2947,43 @@ mod cli_structure {
             untested.is_empty(),
             "these top-level subcommands are never invoked by an integration test: {untested:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod describe_flags {
+    use super::{parse_expires, parse_rotate_every};
+
+    #[test]
+    fn rotate_every_tri_state() {
+        // Absent flag leaves the field untouched.
+        assert_eq!(parse_rotate_every(None), Ok(None));
+        // Days, with or without the `d` suffix.
+        assert_eq!(parse_rotate_every(Some("90")), Ok(Some(Some(90))));
+        assert_eq!(parse_rotate_every(Some("90d")), Ok(Some(Some(90))));
+        // `never` and zero both clear it.
+        assert_eq!(parse_rotate_every(Some("never")), Ok(Some(None)));
+        assert_eq!(parse_rotate_every(Some("0")), Ok(Some(None)));
+        // Garbage is rejected.
+        assert!(parse_rotate_every(Some("soon")).is_err());
+    }
+
+    #[test]
+    fn expires_accepts_date_and_normalizes() {
+        // Bare date becomes end-of-day UTC.
+        assert_eq!(
+            parse_expires(Some("2026-09-01")),
+            Ok(Some(Some("2026-09-01T23:59:59Z".into())))
+        );
+        // Full RFC-3339 is normalized to the stored format.
+        assert_eq!(
+            parse_expires(Some("2026-09-01T12:00:00Z")),
+            Ok(Some(Some("2026-09-01T12:00:00Z".into())))
+        );
+        // `never` clears; absent leaves untouched.
+        assert_eq!(parse_expires(Some("never")), Ok(Some(None)));
+        assert_eq!(parse_expires(None), Ok(None));
+        // Garbage is rejected.
+        assert!(parse_expires(Some("2026-13-99")).is_err());
     }
 }

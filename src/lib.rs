@@ -65,7 +65,10 @@ pub use recipients::{
     RecipientEntry, RevokeResult, authorize_recipient, format_recipient_lines, key_type_label,
     list_recipients, revoke_recipient, truncate_pubkey,
 };
-pub use secrets::{add_secret, describe_key, get_secret, import_secrets, list_keys, remove_secret};
+pub use secrets::{
+    EXPIRY_WARN_DAYS, RotationIssue, add_secret, describe_key, get_secret, import_secrets,
+    list_keys, remove_secret, rotation_health,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -398,12 +401,12 @@ pub fn save_vault(
 
 /// Compute an integrity MAC over the vault's secrets, scoped entries, recipients, and schema.
 ///
-/// If an HMAC key is provided, uses BLAKE3 keyed hash v4 (written as `blake3v2:`),
-/// which includes schema in the MAC input. Otherwise falls back to unkeyed SHA-256 v2
-/// for legacy compatibility.
+/// If an HMAC key is provided, uses BLAKE3 keyed hash v5 (written as `blake3v3:`),
+/// which covers schema plus per-key lifecycle metadata. Otherwise falls back to
+/// unkeyed SHA-256 v2 for legacy compatibility.
 pub(crate) fn compute_mac(vault: &types::Vault, mac_key: Option<&[u8; 32]>) -> String {
     match mac_key {
-        Some(key) => compute_mac_v4(vault, key),
+        Some(key) => compute_mac_v5(vault, key),
         None => compute_mac_v2(vault),
     }
 }
@@ -576,7 +579,84 @@ fn compute_mac_v4(vault: &types::Vault, key: &[u8; 32]) -> String {
     format!("blake3v2:{hash}")
 }
 
-/// Verify a stored MAC against the vault, accepting v1, v2, blake3, and blake3v2 schemes.
+/// V5 MAC: extends v4 to also cover each schema entry's lifecycle metadata —
+/// `created`, `updated`, `rotation_interval_days`, and `expires_at`. This makes
+/// rotation policy tamper-evident, so strict mode can treat it as a trustworthy
+/// machine-checkable signal rather than freely-editable plaintext. Prefix
+/// `blake3v3:` distinguishes it from v4 which stopped at description/example/tags.
+fn compute_mac_v5(vault: &types::Vault, key: &[u8; 32]) -> String {
+    let mut data = Vec::new();
+
+    for key_name in vault.secrets.keys() {
+        data.extend_from_slice(key_name.as_bytes());
+        data.push(0x00);
+    }
+
+    for entry in vault.secrets.values() {
+        data.extend_from_slice(entry.shared.as_bytes());
+        data.push(0x00);
+
+        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        scoped_pks.sort();
+        for pk in scoped_pks {
+            data.extend_from_slice(pk.as_bytes());
+            data.push(0x01);
+            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.push(0x00);
+        }
+    }
+
+    let mut pks = vault.recipients.clone();
+    pks.sort();
+    for pk in &pks {
+        data.extend_from_slice(pk.as_bytes());
+        data.push(0x00);
+    }
+
+    // Schema: description, example, tags (as in v4) plus lifecycle metadata.
+    // Optional fields are emitted as their bytes (empty when absent) followed by
+    // a 0x00 terminator, so present/absent stays deterministic. `0x02` separates
+    // each schema entry from the secrets/recipients stream above.
+    for (key_name, entry) in &vault.schema {
+        data.push(0x02);
+        data.extend_from_slice(key_name.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(entry.description.as_bytes());
+        data.push(0x00);
+        if let Some(example) = &entry.example {
+            data.extend_from_slice(example.as_bytes());
+        }
+        data.push(0x00);
+        for tag in &entry.tags {
+            data.extend_from_slice(tag.as_bytes());
+            data.push(0x00);
+        }
+        // Lifecycle metadata (new in v5). Strings go in as UTF-8; the interval
+        // goes in as its decimal text for consistency with the rest of the stream.
+        if let Some(created) = &entry.created {
+            data.extend_from_slice(created.as_bytes());
+        }
+        data.push(0x00);
+        if let Some(updated) = &entry.updated {
+            data.extend_from_slice(updated.as_bytes());
+        }
+        data.push(0x00);
+        if let Some(days) = entry.rotation_interval_days {
+            data.extend_from_slice(days.to_string().as_bytes());
+        }
+        data.push(0x00);
+        if let Some(expires) = &entry.expires_at {
+            data.extend_from_slice(expires.as_bytes());
+        }
+        data.push(0x00);
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3v3:{hash}")
+}
+
+/// Verify a stored MAC against the vault, accepting v1, v2, blake3, blake3v2,
+/// and blake3v3 schemes.
 pub(crate) fn verify_mac(
     vault: &types::Vault,
     stored_mac: &str,
@@ -584,7 +664,12 @@ pub(crate) fn verify_mac(
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
-    let expected = if stored_mac.starts_with("blake3v2:") {
+    let expected = if stored_mac.starts_with("blake3v3:") {
+        match mac_key {
+            Some(key) => compute_mac_v5(vault, key),
+            None => return false,
+        }
+    } else if stored_mac.starts_with("blake3v2:") {
         match mac_key {
             Some(key) => compute_mac_v4(vault, key),
             None => return false,
@@ -778,7 +863,7 @@ mod tests {
         let mac1 = compute_mac(&vault, Some(&key));
         let mac2 = compute_mac(&vault, Some(&key));
         assert_eq!(mac1, mac2);
-        assert!(mac1.starts_with("blake3v2:"));
+        assert!(mac1.starts_with("blake3v3:"));
 
         // Without key, falls back to sha256v2
         let mac_legacy = compute_mac(&vault, None);
@@ -1562,12 +1647,70 @@ mod tests {
         assert!(!verify_mac(&vault, "sha256:bogus", None));
         assert!(!verify_mac(&vault, "blake3:bogus", Some(&key)));
         assert!(!verify_mac(&vault, "blake3v2:bogus", Some(&key)));
+        assert!(!verify_mac(&vault, "blake3v3:bogus", Some(&key)));
         assert!(!verify_mac(&vault, "unknown:prefix", None));
 
-        // v4 (blake3v2) — includes schema
+        // v4 (blake3v2) — includes schema; still accepted as legacy
         let v4_mac = compute_mac_v4(&vault, &key);
         assert!(v4_mac.starts_with("blake3v2:"));
         assert!(verify_mac(&vault, &v4_mac, Some(&key)));
+
+        // v5 (blake3v3) — current scheme, includes lifecycle metadata
+        let v5_mac = compute_mac_v5(&vault, &key);
+        assert!(v5_mac.starts_with("blake3v3:"));
+        assert!(verify_mac(&vault, &v5_mac, Some(&key)));
+        // compute_mac now emits v5 by default
+        assert!(compute_mac(&vault, Some(&key)).starts_with("blake3v3:"));
+    }
+
+    #[test]
+    fn compute_mac_v5_covers_rotation_metadata() {
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.schema.insert(
+            "API_KEY".into(),
+            types::SchemaEntry {
+                description: "Main API key".into(),
+                updated: Some("2026-02-28T00:00:00Z".into()),
+                ..Default::default()
+            },
+        );
+
+        let key = [0u8; 32];
+        let baseline = compute_mac(&vault, Some(&key));
+
+        // Setting a rotation interval changes the MAC — tamper-evident.
+        vault
+            .schema
+            .get_mut("API_KEY")
+            .unwrap()
+            .rotation_interval_days = Some(90);
+        let with_interval = compute_mac(&vault, Some(&key));
+        assert_ne!(baseline, with_interval);
+
+        // So does an expiry.
+        vault.schema.get_mut("API_KEY").unwrap().expires_at = Some("2026-09-01T23:59:59Z".into());
+        let with_expiry = compute_mac(&vault, Some(&key));
+        assert_ne!(with_interval, with_expiry);
+
+        // v4 (which ignores these fields) is blind to the change — the reason
+        // v5 exists. Confirms the new fields really are what moved the MAC.
+        let mut cleared = vault.clone();
+        cleared
+            .schema
+            .get_mut("API_KEY")
+            .unwrap()
+            .rotation_interval_days = None;
+        cleared.schema.get_mut("API_KEY").unwrap().expires_at = None;
+        assert_eq!(compute_mac_v4(&vault, &key), compute_mac_v4(&cleared, &key));
     }
 
     #[test]

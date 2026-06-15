@@ -52,6 +52,7 @@ pub fn add_secret(
                 tags: tags.to_vec(),
                 created: Some(now.clone()),
                 updated: Some(now),
+                ..Default::default()
             },
         );
     }
@@ -112,6 +113,7 @@ pub fn import_secrets(
                     tags: vec![],
                     created: Some(now.clone()),
                     updated: Some(now.clone()),
+                    ..Default::default()
                 },
             );
         }
@@ -121,19 +123,33 @@ pub fn import_secrets(
     imported
 }
 
-/// Update or create a schema entry for a key.
+/// Update a key's plaintext schema metadata.
+///
+/// `rotation_interval_days` and `expires_at` are tri-state patches so a
+/// `describe` that omits them never clobbers sticky rotation policy:
+/// - `None`        — leave the existing value untouched
+/// - `Some(None)`  — clear it
+/// - `Some(Some)`  — set it
 pub fn describe_key(
     vault: &mut types::Vault,
     key: &str,
     description: &str,
     example: Option<&str>,
     tags: &[String],
+    rotation_interval_days: Option<Option<u32>>,
+    expires_at: Option<Option<&str>>,
 ) {
     if let Some(entry) = vault.schema.get_mut(key) {
         entry.description = description.into();
         entry.example = example.map(Into::into);
         if !tags.is_empty() {
             entry.tags = tags.to_vec();
+        }
+        if let Some(patch) = rotation_interval_days {
+            entry.rotation_interval_days = patch;
+        }
+        if let Some(patch) = expires_at {
+            entry.expires_at = patch.map(Into::into);
         }
     } else {
         let now = now_utc();
@@ -145,9 +161,123 @@ pub fn describe_key(
                 tags: tags.to_vec(),
                 created: Some(now.clone()),
                 updated: Some(now),
+                // flatten() turns the tri-state patch into the stored value:
+                // a clear (Some(None)) and an absent patch (None) both mean None.
+                rotation_interval_days: rotation_interval_days.flatten(),
+                expires_at: expires_at.flatten().map(Into::into),
             },
         );
     }
+}
+
+/// Days of lead time before a hard `expires_at` is flagged as "expiring soon".
+pub const EXPIRY_WARN_DAYS: i64 = 14;
+
+/// A rotation-hygiene problem found by [`rotation_health`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RotationIssue {
+    /// `rotation_interval_days` has elapsed since the value was last changed.
+    Overdue {
+        key: String,
+        last_rotated: String,
+        interval_days: u32,
+        overdue_days: i64,
+    },
+    /// A rotation interval is set but there is no `updated` timestamp to anchor it.
+    NoBaseline { key: String, interval_days: u32 },
+    /// `expires_at` is in the past.
+    Expired {
+        key: String,
+        expired_at: String,
+        days_ago: i64,
+    },
+    /// `expires_at` falls within [`EXPIRY_WARN_DAYS`] of now.
+    ExpiringSoon {
+        key: String,
+        expires_at: String,
+        days_left: i64,
+    },
+    /// A stored timestamp could not be parsed as RFC-3339.
+    BadTimestamp {
+        key: String,
+        field: &'static str,
+        value: String,
+    },
+}
+
+/// Evaluate per-key rotation hygiene against `now`.
+///
+/// Reads only the plaintext schema, so it runs without decrypting the vault.
+/// `now` is injected (rather than read from the clock) to keep this pure and
+/// deterministically testable.
+pub fn rotation_health(
+    vault: &types::Vault,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<RotationIssue> {
+    use chrono::Duration;
+
+    let mut issues = Vec::new();
+    for (key, entry) in &vault.schema {
+        // Soft rotation interval, anchored on the last value change (`updated`).
+        if let Some(days) = entry.rotation_interval_days {
+            match &entry.updated {
+                Some(ts) => match parse_ts(ts) {
+                    Some(updated) => {
+                        let due = updated + Duration::days(i64::from(days));
+                        if now > due {
+                            issues.push(RotationIssue::Overdue {
+                                key: key.clone(),
+                                last_rotated: ts.clone(),
+                                interval_days: days,
+                                overdue_days: (now - due).num_days(),
+                            });
+                        }
+                    }
+                    None => issues.push(RotationIssue::BadTimestamp {
+                        key: key.clone(),
+                        field: "updated",
+                        value: ts.clone(),
+                    }),
+                },
+                None => issues.push(RotationIssue::NoBaseline {
+                    key: key.clone(),
+                    interval_days: days,
+                }),
+            }
+        }
+
+        // Hard expiry.
+        if let Some(ts) = &entry.expires_at {
+            match parse_ts(ts) {
+                Some(expiry) if now >= expiry => issues.push(RotationIssue::Expired {
+                    key: key.clone(),
+                    expired_at: ts.clone(),
+                    days_ago: (now - expiry).num_days(),
+                }),
+                Some(expiry) if expiry - now <= Duration::days(EXPIRY_WARN_DAYS) => {
+                    issues.push(RotationIssue::ExpiringSoon {
+                        key: key.clone(),
+                        expires_at: ts.clone(),
+                        days_left: (expiry - now).num_days(),
+                    });
+                }
+                Some(_) => {}
+                None => issues.push(RotationIssue::BadTimestamp {
+                    key: key.clone(),
+                    field: "expires_at",
+                    value: ts.clone(),
+                }),
+            }
+        }
+    }
+    issues
+}
+
+/// Parse an ISO-8601 / RFC-3339 timestamp (the format `now_utc` emits) into UTC.
+fn parse_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
 #[cfg(test)]
@@ -418,6 +548,8 @@ mod tests {
             "a description",
             Some("example"),
             &["tag".into()],
+            None,
+            None,
         );
 
         assert_eq!(vault.schema["KEY"].description, "a description");
@@ -438,7 +570,15 @@ mod tests {
             },
         );
 
-        describe_key(&mut vault, "KEY", "new", None, &["new_tag".into()]);
+        describe_key(
+            &mut vault,
+            "KEY",
+            "new",
+            None,
+            &["new_tag".into()],
+            None,
+            None,
+        );
 
         assert_eq!(vault.schema["KEY"].description, "new");
         assert_eq!(vault.schema["KEY"].example, None);
@@ -458,7 +598,7 @@ mod tests {
             },
         );
 
-        describe_key(&mut vault, "KEY", "new desc", None, &[]);
+        describe_key(&mut vault, "KEY", "new desc", None, &[], None, None);
 
         assert_eq!(vault.schema["KEY"].tags, vec!["keep"]);
     }
@@ -573,5 +713,131 @@ mod tests {
 
         // Should not panic.
         remove_secret(&mut vault, &mut murk, "NONEXISTENT");
+    }
+
+    // ── Rotation metadata ──
+
+    #[test]
+    fn describe_key_sets_rotation_and_expiry_on_new_key() {
+        let mut vault = empty_vault();
+        describe_key(
+            &mut vault,
+            "TOKEN",
+            "api token",
+            None,
+            &[],
+            Some(Some(90)),
+            Some(Some("2026-09-01T23:59:59Z")),
+        );
+        let e = &vault.schema["TOKEN"];
+        assert_eq!(e.rotation_interval_days, Some(90));
+        assert_eq!(e.expires_at.as_deref(), Some("2026-09-01T23:59:59Z"));
+    }
+
+    #[test]
+    fn describe_key_rotation_patch_is_sticky_and_clearable() {
+        let mut vault = empty_vault();
+        describe_key(&mut vault, "K", "d", None, &[], Some(Some(30)), None);
+        assert_eq!(vault.schema["K"].rotation_interval_days, Some(30));
+
+        // A later describe that omits the flag (None) preserves the interval.
+        describe_key(&mut vault, "K", "d2", None, &[], None, None);
+        assert_eq!(vault.schema["K"].rotation_interval_days, Some(30));
+
+        // Some(None) clears it.
+        describe_key(&mut vault, "K", "d3", None, &[], Some(None), None);
+        assert_eq!(vault.schema["K"].rotation_interval_days, None);
+    }
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn vault_with(entry: types::SchemaEntry) -> types::Vault {
+        let mut v = empty_vault();
+        v.schema.insert("K".into(), entry);
+        v
+    }
+
+    #[test]
+    fn rotation_health_flags_overdue() {
+        let vault = vault_with(types::SchemaEntry {
+            updated: Some("2026-01-01T00:00:00Z".into()),
+            rotation_interval_days: Some(30),
+            ..Default::default()
+        });
+        // 60 days later: 30 past due.
+        let issues = rotation_health(&vault, ts("2026-03-02T00:00:00Z"));
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(
+            &issues[0],
+            RotationIssue::Overdue { key, overdue_days, .. } if key == "K" && *overdue_days == 30
+        ));
+    }
+
+    #[test]
+    fn rotation_health_silent_when_within_interval() {
+        let vault = vault_with(types::SchemaEntry {
+            updated: Some("2026-01-01T00:00:00Z".into()),
+            rotation_interval_days: Some(90),
+            ..Default::default()
+        });
+        assert!(rotation_health(&vault, ts("2026-02-01T00:00:00Z")).is_empty());
+    }
+
+    #[test]
+    fn rotation_health_flags_no_baseline() {
+        let vault = vault_with(types::SchemaEntry {
+            rotation_interval_days: Some(30),
+            ..Default::default()
+        });
+        assert!(matches!(
+            &rotation_health(&vault, ts("2026-03-02T00:00:00Z"))[0],
+            RotationIssue::NoBaseline {
+                interval_days: 30,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rotation_health_flags_expired_and_expiring_soon() {
+        let expired = vault_with(types::SchemaEntry {
+            expires_at: Some("2026-01-01T00:00:00Z".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            &rotation_health(&expired, ts("2026-01-11T00:00:00Z"))[0],
+            RotationIssue::Expired { days_ago: 10, .. }
+        ));
+
+        let soon = vault_with(types::SchemaEntry {
+            expires_at: Some("2026-01-10T00:00:00Z".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            &rotation_health(&soon, ts("2026-01-01T00:00:00Z"))[0],
+            RotationIssue::ExpiringSoon { days_left: 9, .. }
+        ));
+
+        // Far out: silent.
+        assert!(rotation_health(&soon, ts("2025-06-01T00:00:00Z")).is_empty());
+    }
+
+    #[test]
+    fn rotation_health_flags_bad_timestamp() {
+        let vault = vault_with(types::SchemaEntry {
+            expires_at: Some("not-a-date".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            &rotation_health(&vault, ts("2026-01-01T00:00:00Z"))[0],
+            RotationIssue::BadTimestamp {
+                field: "expires_at",
+                ..
+            }
+        ));
     }
 }
