@@ -128,6 +128,7 @@ mod tests {
                 tags: vec!["db".into()],
                 created: None,
                 updated: None,
+                ..Default::default()
             },
         );
         schema.insert(
@@ -138,6 +139,7 @@ mod tests {
                 tags: vec!["payments".into()],
                 created: None,
                 updated: None,
+                ..Default::default()
             },
         );
         Vault {

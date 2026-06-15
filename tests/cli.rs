@@ -2253,6 +2253,72 @@ fn doctor_flags_inline_murk_key_in_dotenv() {
 }
 
 #[test]
+fn describe_sets_rotation_metadata_and_doctor_flags_drift() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("s3cr3t\n")
+        .assert()
+        .success();
+
+    // Set a rotation interval and an already-past hard expiry.
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "TOKEN",
+            "deploy token",
+            "--rotate-every",
+            "90d",
+            "--expires",
+            "2020-01-01",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Fields land in the plaintext schema, expiry normalized to end-of-day.
+    let raw = fs::read_to_string(dir.path().join("test.murk")).unwrap();
+    assert!(raw.contains("\"rotation_interval_days\": 90"), "got: {raw}");
+    assert!(
+        raw.contains("\"expires_at\": \"2020-01-01T23:59:59Z\""),
+        "got: {raw}"
+    );
+
+    // doctor reads the plaintext schema (no key) and flags the past expiry.
+    murk(&dir, &key)
+        .args(["doctor", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("TOKEN expired"));
+
+    // `--expires never` clears the expiry but leaves the rotation interval.
+    murk(&dir, &key)
+        .args([
+            "describe",
+            "TOKEN",
+            "deploy token",
+            "--expires",
+            "never",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    let raw = fs::read_to_string(dir.path().join("test.murk")).unwrap();
+    assert!(
+        !raw.contains("expires_at"),
+        "expiry should be cleared, got: {raw}"
+    );
+    assert!(
+        raw.contains("\"rotation_interval_days\": 90"),
+        "rotation should persist, got: {raw}"
+    );
+}
+
+#[test]
 fn verify_reports_key_source() {
     // Verify should print which key source it used, for transparency.
     let dir = TempDir::new().unwrap();

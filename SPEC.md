@@ -84,7 +84,11 @@ A `.murk` file is a single JSON document. All fields except encrypted values and
   "schema": {
     "DATABASE_URL": {
       "description": "postgres connection string",
-      "example": "postgres://user:pass@host/db"
+      "example": "postgres://user:pass@host/db",
+      "created": "2026-02-27T00:00:00Z",
+      "updated": "2026-02-27T00:00:00Z",
+      "rotation_interval_days": 90,
+      "expires_at": "2026-09-01T23:59:59Z"
     },
     "OPENAI_KEY": {
       "description": "openai api key"
@@ -117,6 +121,14 @@ Public keys only — no names or emails. Name-to-pubkey mappings live inside the
 
 Key metadata stored as a map of key name to entry. Each entry has a `description` and optional `example` and `tags` fields. Schema is public and readable without decryption.
 
+Entries also carry optional lifecycle metadata:
+
+- `created` / `updated` — ISO-8601 UTC timestamps. `updated` is bumped on every value change (`add`, `edit`, `rotate`) and so doubles as the "last rotated" anchor.
+- `rotation_interval_days` — soft rotation policy. `doctor` flags the key as overdue when `updated + rotation_interval_days` is in the past.
+- `expires_at` — ISO-8601 UTC hard expiry for credentials with a known end-of-life (e.g. a token). `doctor` flags it as expired or expiring soon.
+
+Set the last two with `murk describe KEY "desc" --rotate-every 90d --expires 2026-09-01` (`never` clears either). All four fields are covered by the integrity MAC (see Integrity), so rotation policy cannot be silently weakened without a key.
+
 Key names must be valid shell identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Secrets
@@ -137,7 +149,7 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "mac": "blake3v2:abc123...",
+  "mac": "blake3v3:abc123...",
   "hmac_key": "0a1b2c3d..."
 }
 ```
@@ -157,11 +169,11 @@ The MAC is a BLAKE3 keyed hash covering, in order:
    - The shared ciphertext, followed by `\x00`
    - For each scoped entry (sorted by pubkey): the pubkey followed by `\x01`, the scoped ciphertext followed by `\x00`
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
-4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`
+4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`, then the lifecycle fields `created`, `updated`, `rotation_interval_days` (decimal text), and `expires_at` — each emitted as its bytes (empty if unset) followed by `\x00`
 
-The resulting digest is prefixed with `blake3v2:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
+The resulting digest is prefixed with `blake3v3:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), and `blake3:` (v3, no schema coverage) are accepted for backward compatibility. On save, murk always writes `blake3v2:` with a fresh key.
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), and `blake3v2:` (v4, no lifecycle-metadata coverage) are accepted for backward compatibility. On save, murk always writes `blake3v3:` with a fresh key. (A vault written by a newer murk therefore cannot be MAC-verified by an older binary that predates `blake3v3:`.)
 
 Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
@@ -223,9 +235,11 @@ Lists key names, one per line. `--tag` filters by tag (repeatable). `--json` out
 
 ---
 
-### `murk describe KEY "description" [--vault NAME]`
+### `murk describe KEY "description" [--example EX] [--tag T]... [--rotate-every DAYS] [--expires DATE] [--vault NAME]`
 
-Sets the description for a key in the plaintext schema. Does not touch encrypted values.
+Sets metadata for a key in the plaintext schema. Does not touch encrypted values.
+
+`--rotate-every` takes a day count (`90` or `90d`) and `--expires` takes a date (`2026-09-01`) or RFC-3339 timestamp; pass `never` to either to clear it. Both are sticky — a later `describe` that omits the flag leaves the existing value untouched. `doctor` reports keys that are overdue for rotation or past/near their expiry.
 
 ---
 
@@ -328,9 +342,9 @@ Verifies vault integrity (MAC) and runs safety checks without exporting secrets.
 
 ---
 
-### `murk doctor`
+### `murk doctor [--vault NAME]`
 
-Checks the surrounding repo for hygiene issues — inline keys in `.env`, key files sitting next to the vault, state that would be bad to commit. Runs without a vault. Exits 1 on findings.
+Checks the surrounding repo for hygiene issues — inline keys in `.env`, key files sitting next to the vault, state that would be bad to commit. If a vault is present it also reads the plaintext schema (no key required) and reports keys overdue for rotation or past/near their `expires_at`. Exits 1 on findings.
 
 ---
 

@@ -41,9 +41,18 @@ pub struct SchemaEntry {
     /// When the key was first added.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
-    /// When the value was last updated.
+    /// When the value was last updated. Doubles as "last rotated": any value
+    /// change (`add`/`edit`/`rotate`) bumps it, so it anchors the rotation clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
+    /// Soft rotation policy: rotate at least every N days. `doctor` flags the
+    /// key as overdue when `updated + rotation_interval_days` is in the past.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_interval_days: Option<u32>,
+    /// Hard expiry (ISO-8601 UTC) for credentials with a known end-of-life,
+    /// e.g. a token. `doctor` flags it as expired or expiring soon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
