@@ -326,9 +326,11 @@ Adds a new recipient. Re-encrypts all shared secrets to include the new public k
 
 ---
 
-### `murk circle revoke RECIPIENT [--vault NAME]`
+### `murk circle revoke RECIPIENT [--rotate] [--vault NAME]`
 
 Removes a recipient by pubkey or display name. Re-encrypts all shared secrets without their key. Removes their scoped entries.
+
+Lists the secrets the revoked recipient had access to. With `--rotate`, prompts for a new value for each in the same session and re-encrypts them. Without the flag on an interactive terminal, offers to rotate; otherwise prints a hint. The recipient can still decrypt previous versions from git history, so rotation is the only way to close the exposure.
 
 ---
 

@@ -147,8 +147,7 @@ murk add DATABASE_URL --scoped
 When someone leaves, revoke their access and rotate the secrets:
 
 ```bash
-murk circle revoke carol
-murk rotate --all         # prompts for each secret
+murk circle revoke carol --rotate   # remove carol, then rotate what she could read
 git commit -am "revoke carol, rotate secrets" && git push
 ```
 
