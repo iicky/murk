@@ -102,6 +102,29 @@ pub fn is_ram_backed(path: &std::path::Path) -> bool {
     }
 }
 
+/// Whether this process's stdout is a regular file (as opposed to a pipe,
+/// terminal, or device).
+///
+/// Strict mode uses this to catch `murk export > secrets.env` style redirects
+/// that would persist plaintext secrets to disk, while still allowing the
+/// `eval "$(murk export)"` pipe that direnv relies on. Unix-only; returns
+/// `false` elsewhere (can't determine — don't block).
+pub fn stdout_is_regular_file() -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        // Borrow stdout's fd as a File to read its metadata. ManuallyDrop keeps
+        // dropping the File from closing the real stdout — we only borrowed it.
+        let fd = std::io::stdout().as_raw_fd();
+        let f = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+        f.metadata().is_ok_and(|m| m.is_file())
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

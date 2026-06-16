@@ -971,7 +971,25 @@ fn cmd_rm(key: &str, vault_path: &str) {
     eprintln!("{} removed {}", "◆".magenta(), key.bold());
 }
 
+/// In strict mode, refuse to write plaintext secret values to a regular file on
+/// stdout (e.g. `murk export > .env`, `murk get KEY > token.txt`). Pipes and
+/// terminals are allowed — the rule targets accidental disk persistence, the
+/// same threat the `edit` RAM-tmpdir guard addresses. `hint` is a one-line
+/// suggestion of a safe alternative. Returns having exited the process on a
+/// refusal.
+fn strict_guard_plaintext_stdout(hint: &str) {
+    if murk_cli::hardening::strict_mode() && murk_cli::hardening::stdout_is_regular_file() {
+        eprintln!(
+            "{} MURK_STRICT refuses writing plaintext secrets to a file",
+            "error".red().bold()
+        );
+        eprintln!("  {}", hint.dimmed());
+        process::exit(1);
+    }
+}
+
 fn cmd_get(key: &str, vault_path: &str) {
+    strict_guard_plaintext_stdout("capture in a variable instead, e.g. TOKEN=$(murk get KEY)");
     let (_vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
@@ -1075,6 +1093,7 @@ fn parse_expires(input: Option<&str>) -> Result<Option<Option<String>>, String> 
 }
 
 fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
+    strict_guard_plaintext_stdout("pipe to a process instead, e.g. eval \"$(murk export)\"");
     let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 

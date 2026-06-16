@@ -711,6 +711,91 @@ fn export_produces_shell_statements() {
         );
 }
 
+/// Run murk with the hermetic test env and stdout redirected to a real file.
+/// assert_cmd captures stdout through a pipe, so this is the only way to
+/// exercise the regular-file stdout path that strict mode refuses.
+#[cfg(unix)]
+fn run_with_stdout_file(
+    dir: &TempDir,
+    key: &str,
+    args: &[&str],
+    out_file: &std::path::Path,
+) -> std::process::ExitStatus {
+    let file = fs::File::create(out_file).unwrap();
+    std::process::Command::new(assert_cmd::cargo::cargo_bin("murk"))
+        .args(args)
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("XDG_RUNTIME_DIR", dir.path())
+        .env_remove("MURK_KEY_FILE")
+        .env("MURK_KEY", key)
+        .env("MURK_STRICT", "1")
+        .stdout(file)
+        .status()
+        .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn export_strict_refuses_file_redirect() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("sekret\n")
+        .assert()
+        .success();
+
+    let leak = dir.path().join("leak.env");
+    let status = run_with_stdout_file(&dir, &key, &["export", "--vault", "test.murk"], &leak);
+    assert!(!status.success(), "strict export to a file should fail");
+    assert_eq!(
+        fs::read_to_string(&leak).unwrap(),
+        "",
+        "secrets leaked to the file"
+    );
+}
+
+#[test]
+fn export_strict_allows_pipe() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("sekret\n")
+        .assert()
+        .success();
+
+    // assert_cmd captures stdout via a pipe — the direnv flow must still work.
+    murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .env("MURK_STRICT", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("export TOKEN='sekret'"));
+}
+
+#[cfg(unix)]
+#[test]
+fn get_strict_refuses_file_redirect() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("sekret\n")
+        .assert()
+        .success();
+
+    let leak = dir.path().join("tok.txt");
+    let status = run_with_stdout_file(&dir, &key, &["get", "TOKEN", "--vault", "test.murk"], &leak);
+    assert!(!status.success(), "strict get to a file should fail");
+    assert_eq!(
+        fs::read_to_string(&leak).unwrap(),
+        "",
+        "secret leaked to the file"
+    );
+}
+
 #[test]
 fn export_merges_scoped_overrides() {
     let dir = TempDir::new().unwrap();
