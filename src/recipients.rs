@@ -131,6 +131,14 @@ pub fn revoke_recipient(
         ));
     }
 
+    // Groups any revoked pubkey belonged to (captured before removal below).
+    let revoked_groups: std::collections::BTreeSet<String> = murk
+        .groups
+        .iter()
+        .filter(|(_, members)| members.iter().any(|pk| pubkeys.contains(pk)))
+        .map(|(name, _)| name.clone())
+        .collect();
+
     let mut display_name = None;
     for pubkey in &pubkeys {
         vault.recipients.retain(|pk| pk != pubkey);
@@ -146,15 +154,24 @@ pub fn revoke_recipient(
         for entry in vault.secrets.values_mut() {
             entry.scoped.remove(pubkey);
         }
+
+        // Remove them from any groups they belonged to. save_vault re-encrypts
+        // affected groups (when the operator is a member and can read them).
+        for members in murk.groups.values_mut() {
+            members.retain(|pk| pk != pubkey);
+        }
     }
 
-    // Only report keys the revoked recipient could actually decrypt:
-    // shared secrets (all recipients can read) + their scoped entries.
+    // Only report keys the revoked recipient could actually decrypt: shared
+    // secrets (all recipients can read), their scoped entries, and any group
+    // they were a member of.
     let exposed_keys: Vec<String> = vault
         .secrets
         .iter()
         .filter(|(_, entry)| {
-            !entry.shared.is_empty() || pubkeys.iter().any(|pk| entry.scoped.contains_key(pk))
+            !entry.shared.is_empty()
+                || pubkeys.iter().any(|pk| entry.scoped.contains_key(pk))
+                || entry.grouped.keys().any(|g| revoked_groups.contains(g))
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -345,6 +362,7 @@ mod tests {
             types::SecretEntry {
                 shared: "ciphertext".into(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut murk = empty_murk();
@@ -416,6 +434,7 @@ mod tests {
             types::SecretEntry {
                 shared: "ct".into(),
                 scoped: BTreeMap::from([(pk2.clone(), "scoped_ct".into())]),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut murk = empty_murk();
@@ -459,6 +478,7 @@ mod tests {
             types::SecretEntry {
                 shared: "ct".into(),
                 scoped: BTreeMap::from([(pk2.clone(), "scoped_db".into())]),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         vault.secrets.insert(
@@ -466,6 +486,7 @@ mod tests {
             types::SecretEntry {
                 shared: "ct2".into(),
                 scoped: BTreeMap::from([(pk2.clone(), "scoped_api".into())]),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut murk = empty_murk();
@@ -500,6 +521,7 @@ mod tests {
             mac: String::new(),
             mac_key: None,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let r2 = make_recipient(&pk2);
@@ -543,6 +565,7 @@ mod tests {
             mac: String::new(),
             mac_key: None,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         let meta_enc = crate::encrypt_value(&meta_json, &[recipient]).unwrap();

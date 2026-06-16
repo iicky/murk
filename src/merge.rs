@@ -359,8 +359,19 @@ fn merge_secrets_normal(
                     _ => o.shared.clone(),
                 };
 
-                let scoped = merge_scoped(&b.scoped, &o.scoped, &t.scoped, key, conflicts);
-                result.insert(key.to_string(), SecretEntry { shared, scoped });
+                let scoped =
+                    merge_scoped(&b.scoped, &o.scoped, &t.scoped, key, "scoped", conflicts);
+                let grouped = merge_scoped(
+                    &b.grouped, &o.grouped, &t.grouped, key, "grouped", conflicts,
+                );
+                result.insert(
+                    key.to_string(),
+                    SecretEntry {
+                        shared,
+                        scoped,
+                        grouped,
+                    },
+                );
             }
         }
     }
@@ -369,11 +380,15 @@ fn merge_secrets_normal(
 }
 
 /// Merge scoped (mote) entries within a single secret key.
+/// Three-way merge of a per-name ciphertext map. Used for both `scoped`
+/// (keyed by pubkey) and `grouped` (keyed by group name) — `kind` is the field
+/// name used in conflict messages.
 fn merge_scoped(
     base: &BTreeMap<String, String>,
     ours: &BTreeMap<String, String>,
     theirs: &BTreeMap<String, String>,
     secret_key: &str,
+    kind: &str,
     conflicts: &mut Vec<MergeConflict>,
 ) -> BTreeMap<String, String> {
     let all_pks: BTreeSet<&str> = base
@@ -402,8 +417,8 @@ fn merge_scoped(
                     result.insert(pk.to_string(), o.clone());
                 } else {
                     conflicts.push(MergeConflict {
-                        field: format!("secrets.{secret_key}.scoped.{pk}"),
-                        reason: "scoped override added on both sides".into(),
+                        field: format!("secrets.{secret_key}.{kind}.{pk}"),
+                        reason: "{kind} entry added on both sides".into(),
                     });
                     result.insert(pk.to_string(), o.clone());
                 }
@@ -412,8 +427,8 @@ fn merge_scoped(
             (Some(b), Some(o), None) => {
                 if o != b {
                     conflicts.push(MergeConflict {
-                        field: format!("secrets.{secret_key}.scoped.{pk}"),
-                        reason: "scoped override modified on our side but removed on theirs".into(),
+                        field: format!("secrets.{secret_key}.{kind}.{pk}"),
+                        reason: "{kind} entry modified on our side but removed on theirs".into(),
                     });
                     result.insert(pk.to_string(), o.clone());
                 }
@@ -421,8 +436,8 @@ fn merge_scoped(
             (Some(b), None, Some(t)) => {
                 if t != b {
                     conflicts.push(MergeConflict {
-                        field: format!("secrets.{secret_key}.scoped.{pk}"),
-                        reason: "scoped override removed on our side but modified on theirs".into(),
+                        field: format!("secrets.{secret_key}.{kind}.{pk}"),
+                        reason: "{kind} entry removed on our side but modified on theirs".into(),
                     });
                     result.insert(pk.to_string(), t.clone());
                 }
@@ -437,8 +452,8 @@ fn merge_scoped(
                     }
                     (true, true) if o != t => {
                         conflicts.push(MergeConflict {
-                            field: format!("secrets.{secret_key}.scoped.{pk}"),
-                            reason: "scoped override modified on both sides".into(),
+                            field: format!("secrets.{secret_key}.{kind}.{pk}"),
+                            reason: "{kind} entry modified on both sides".into(),
                         });
                         result.insert(pk.to_string(), o.clone());
                     }
@@ -607,6 +622,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         mac: String::new(),
         mac_key: None,
         github_pins: HashMap::new(),
+        groups: BTreeMap::new(),
     };
 
     let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
@@ -621,9 +637,20 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     // Only keep names for recipients still in the merged vault.
     names.retain(|pk, _| merged.recipients.contains(pk));
 
+    // Merge group membership: union, ours wins on conflict. Drop members no
+    // longer in the merged recipient set, and drop now-empty groups.
+    let mut groups = theirs_meta.groups;
+    for (name, members) in ours_meta.groups {
+        groups.insert(name, members);
+    }
+    for members in groups.values_mut() {
+        members.retain(|pk| merged.recipients.contains(pk));
+    }
+    groups.retain(|_, members| !members.is_empty());
+
     let mac_key_hex = crate::generate_mac_key();
     let mac_key = crate::decode_mac_key(&mac_key_hex).unwrap();
-    let mac = compute_mac(merged, Some(&mac_key));
+    let mac = compute_mac(merged, &groups, Some(&mac_key));
     // Merge github pins: union, ours wins on conflict.
     let mut github_pins = theirs_meta.github_pins;
     for (user, pins) in ours_meta.github_pins {
@@ -635,6 +662,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         mac,
         mac_key: Some(mac_key_hex),
         github_pins,
+        groups,
     };
 
     let recipients = parse_recipients(&merged.recipients).ok()?;
@@ -673,6 +701,7 @@ mod tests {
             SecretEntry {
                 shared: "base-cipher-db".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -710,6 +739,7 @@ mod tests {
             SecretEntry {
                 shared: "ours-cipher-api".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         ours.schema.insert(
@@ -740,6 +770,7 @@ mod tests {
             SecretEntry {
                 shared: "theirs-cipher-stripe".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -759,6 +790,7 @@ mod tests {
             SecretEntry {
                 shared: "ours-cipher-api".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -768,6 +800,7 @@ mod tests {
             SecretEntry {
                 shared: "theirs-cipher-stripe".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -846,6 +879,7 @@ mod tests {
             SecretEntry {
                 shared: "ours-cipher".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut theirs = base.clone();
@@ -854,6 +888,7 @@ mod tests {
             SecretEntry {
                 shared: "theirs-cipher".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1103,6 +1138,7 @@ mod tests {
             SecretEntry {
                 shared: "theirs-new".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 

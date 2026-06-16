@@ -223,6 +223,7 @@ mod tests {
             SecretEntry {
                 shared: "encrypted-value".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -374,6 +375,7 @@ mod tests {
             SecretEntry {
                 shared: "encrypted-value".into(),
                 scoped,
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 

@@ -26,21 +26,13 @@ struct Vault {
 
 #[pymethods]
 impl Vault {
-    /// Get a single decrypted secret value.
-    /// Returns the scoped override if one exists, otherwise the shared value.
+    /// Get a single decrypted secret value. Resolution order: a personal scoped
+    /// override, then a named-group value we can read, then the shared value.
     ///
     /// The returned `String` is a plain Python-owned copy — once it crosses
     /// the FFI boundary the plaintext is outside murk's zeroization.
     fn get(&self, key: &str) -> Option<String> {
-        if let Some(value) = self
-            .decrypted
-            .scoped
-            .get(key)
-            .and_then(|m| m.get(&self.pubkey))
-        {
-            return Some(value.to_string());
-        }
-        self.decrypted.values.get(key).map(|v| v.to_string())
+        crate::get_secret(&self.decrypted, key, &self.pubkey).map(str::to_string)
     }
 
     /// Export all secrets as a dict. Scoped values override shared values.

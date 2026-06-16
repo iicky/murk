@@ -18,16 +18,66 @@ pub fn add_secret(
     identity: &crypto::MurkIdentity,
 ) -> bool {
     if scoped {
+        // `me` is a per-identity override layered on top of the base tier — it
+        // does not change which group owns the key, so shared/grouped are left
+        // untouched.
         let pubkey = identity.pubkey_string().expect("valid identity has pubkey");
         murk.scoped
             .entry(key.into())
             .or_default()
             .insert(pubkey, Zeroizing::new(value.to_owned()));
     } else {
+        // Setting the shared (everyone) value makes `everyone` the base tier, so
+        // any named-group assignment is dropped — otherwise the stale grouped
+        // ciphertext would still win over the new shared value for members.
+        murk.grouped.remove(key);
         murk.values
             .insert(key.into(), Zeroizing::new(value.to_owned()));
     }
 
+    upsert_schema(vault, key, desc, tags)
+}
+
+/// Add or update a secret encrypted to a named group. The operator must be a
+/// member of the group (so they can read it and re-encrypt it later). Assigning
+/// a secret to a group makes the group its sole base tier: any existing shared
+/// value and other group assignments are dropped so non-members can't read it.
+/// Returns true if the key was new (no existing schema entry).
+pub fn add_grouped_secret(
+    vault: &mut types::Vault,
+    murk: &mut types::Murk,
+    key: &str,
+    value: &str,
+    desc: Option<&str>,
+    group: &str,
+    tags: &[String],
+    operator_pubkey: &str,
+) -> Result<bool, crate::error::MurkError> {
+    use crate::error::MurkError;
+
+    let members = murk
+        .groups
+        .get(group)
+        .ok_or_else(|| MurkError::Group(format!("group not found: {group}")))?;
+    if !members.iter().any(|pk| pk == operator_pubkey) {
+        return Err(MurkError::Group(format!(
+            "you must be a member of group \"{group}\" to add secrets to it"
+        )));
+    }
+
+    // The group becomes the sole base tier for this key.
+    murk.values.remove(key);
+    let entry = murk.grouped.entry(key.into()).or_default();
+    entry.clear();
+    entry.insert(group.into(), Zeroizing::new(value.to_owned()));
+
+    Ok(upsert_schema(vault, key, desc, tags))
+}
+
+/// Insert or update the schema entry for a key, bumping `updated`. Returns true
+/// if the key was new and no description was supplied (the caller uses this to
+/// decide whether to print a "describe this key" hint).
+fn upsert_schema(vault: &mut types::Vault, key: &str, desc: Option<&str>, tags: &[String]) -> bool {
     let is_new = !vault.schema.contains_key(key);
 
     let now = now_utc();
@@ -64,12 +114,18 @@ pub fn add_secret(
 pub fn remove_secret(vault: &mut types::Vault, murk: &mut types::Murk, key: &str) {
     murk.values.remove(key);
     murk.scoped.remove(key);
+    murk.grouped.remove(key);
     vault.schema.remove(key);
 }
 
-/// Look up a decrypted value. Scoped overrides take priority over shared values.
+/// Look up a decrypted value. Resolution order, highest priority first:
+/// a personal scoped override, then a named-group value we can read, then the
+/// shared (everyone) value.
 pub fn get_secret<'a>(murk: &'a types::Murk, key: &str, pubkey: &str) -> Option<&'a str> {
     if let Some(value) = murk.scoped.get(key).and_then(|m| m.get(pubkey)) {
+        return Some(value.as_str());
+    }
+    if let Some(value) = murk.grouped.get(key).and_then(|m| m.values().next()) {
         return Some(value.as_str());
     }
     murk.values.get(key).map(|v| v.as_str())
@@ -100,6 +156,8 @@ pub fn import_secrets(
     let now = now_utc();
     let mut imported = Vec::new();
     for (key, value) in pairs {
+        // Shared (everyone) base tier — drop any prior group assignment.
+        murk.grouped.remove(key);
         murk.values.insert(key.clone(), value.clone());
 
         if let Some(entry) = vault.schema.get_mut(key.as_str()) {
