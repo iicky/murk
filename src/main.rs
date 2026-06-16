@@ -256,6 +256,9 @@ enum Command {
     Revoke {
         /// Recipient pubkey or display name
         recipient: String,
+        /// Rotate the secrets they had access to in the same session
+        #[arg(long)]
+        rotate: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -430,6 +433,9 @@ enum CircleCommand {
     Revoke {
         /// Recipient pubkey or display name
         recipient: String,
+        /// Rotate the secrets they had access to in the same session
+        #[arg(long)]
+        rotate: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -457,6 +463,15 @@ fn prompt(label: &str, default: Option<&str>) -> String {
     } else {
         trimmed
     }
+}
+
+/// Ask a yes/no question on the TTY. Defaults to no (anything but `y`/`yes`).
+fn confirm(question: &str) -> bool {
+    eprint!("{question} [y/N]: ");
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line).unwrap_or(0);
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// Generate a BIP39 keypair, write key to ~/.config/murk/keys/, reference in .env.
@@ -1884,8 +1899,8 @@ fn cmd_authorize(
     }
 }
 
-fn cmd_revoke(recipient: &str, vault_path: &str) {
-    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
+fn cmd_revoke(recipient: &str, rotate: bool, vault_path: &str) {
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
@@ -1895,6 +1910,8 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
         recipient,
     ));
 
+    // Persist the removal first so the recipient is durably revoked even if the
+    // user aborts the rotation prompts below.
     save_vault(vault_path, &mut vault, &original, &current);
 
     let display = result.display_name.as_deref().unwrap_or(recipient);
@@ -1905,30 +1922,81 @@ fn cmd_revoke(recipient: &str, vault_path: &str) {
     );
 
     if !result.exposed_keys.is_empty() {
+        let n = result.exposed_keys.len();
+        let plural = if n == 1 { "" } else { "s" };
         eprintln!();
         eprintln!(
-            "{} {display} had access to {} secret{} — rotate them:",
+            "{} {display} had access to {n} secret{plural} — rotate them:",
             "⚠".yellow(),
-            result.exposed_keys.len(),
-            if result.exposed_keys.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
         );
         for key in &result.exposed_keys {
             eprintln!("  {} {}", "▸".dimmed(), key.bold());
         }
         eprintln!();
-        eprintln!(
-            "  {}",
-            "run `murk rotate --all` to rotate each secret".dimmed()
-        );
+
+        // Rotate now if --rotate was passed, or if the user opts in at the prompt.
+        let do_rotate = rotate
+            || (io::stdin().is_terminal()
+                && confirm(&format!("rotate {n} exposed secret{plural} now?")));
+
+        if do_rotate {
+            rotate_exposed(
+                vault_path,
+                &mut vault,
+                &current,
+                &result.exposed_keys,
+                &identity,
+            );
+        } else {
+            eprintln!(
+                "  {}",
+                "run `murk rotate --all` to rotate each secret".dimmed()
+            );
+        }
     }
     eprintln!();
     eprintln!(
         "  {}",
         "this recipient can still decrypt previous versions from git history".dimmed()
+    );
+}
+
+/// Rotate the given keys in the still-locked session after a revoke, prompting
+/// for each new value. `baseline` is the post-revoke state already on disk; we
+/// diff against it so only the rotated ciphertexts are re-encrypted.
+fn rotate_exposed(
+    vault_path: &str,
+    vault: &mut types::Vault,
+    baseline: &types::Murk,
+    keys: &[String],
+    identity: &MurkIdentity,
+) {
+    let original = baseline.clone();
+    let mut current = baseline.clone();
+
+    for k in keys {
+        let new_value = resolve_value(k);
+        murk_cli::add_secret(
+            vault,
+            &mut current,
+            k,
+            &new_value,
+            None,
+            false,
+            &[],
+            identity,
+        );
+        eprintln!("{} rotated {}", "◆".magenta(), k.bold());
+    }
+
+    save_vault(vault_path, vault, &original, &current);
+
+    let plural = if keys.len() == 1 { "" } else { "s" };
+    eprintln!();
+    eprintln!(
+        "{} rotated {} secret{plural}",
+        "✓".green(),
+        keys.len().to_string().bold(),
     );
 }
 
@@ -2806,8 +2874,12 @@ fn main() {
             allow_ssh_rsa,
             &murk_cli::resolve_vault_path(&vault),
         ),
-        Command::Revoke { recipient, vault } => {
-            cmd_revoke(&recipient, &murk_cli::resolve_vault_path(&vault));
+        Command::Revoke {
+            recipient,
+            rotate,
+            vault,
+        } => {
+            cmd_revoke(&recipient, rotate, &murk_cli::resolve_vault_path(&vault));
         }
         Command::Circle {
             sub: None,
@@ -2832,9 +2904,14 @@ fn main() {
             &murk_cli::resolve_vault_path(&vault),
         ),
         Command::Circle {
-            sub: Some(CircleCommand::Revoke { recipient, vault }),
+            sub:
+                Some(CircleCommand::Revoke {
+                    recipient,
+                    rotate,
+                    vault,
+                }),
             ..
-        } => cmd_revoke(&recipient, &murk_cli::resolve_vault_path(&vault)),
+        } => cmd_revoke(&recipient, rotate, &murk_cli::resolve_vault_path(&vault)),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,

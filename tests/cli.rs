@@ -1039,6 +1039,94 @@ fn revoke_unknown_fails() {
         .stderr(predicate::str::contains("recipient not found"));
 }
 
+#[test]
+fn revoke_rotate_rotates_exposed_secrets() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    // A shared secret bob can read.
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_value\n")
+        .assert()
+        .success();
+
+    let second_pubkey = age::x25519::Identity::generate().to_public().to_string();
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Revoke with --rotate; the piped line is the new value for TOKEN.
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "revoke",
+            "bob",
+            "--rotate",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("new_value\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rotated TOKEN"));
+
+    // The secret now decrypts to the rotated value.
+    murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("new_value"));
+}
+
+#[test]
+fn revoke_without_rotate_keeps_value() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_value\n")
+        .assert()
+        .success();
+
+    let second_pubkey = age::x25519::Identity::generate().to_public().to_string();
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // No --rotate and non-TTY stdin: prints the hint, leaves the value untouched.
+    murk(&dir, &key)
+        .args(["circle", "revoke", "bob", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rotate --all"));
+
+    murk(&dir, &key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("old_value"));
+}
+
 // ── no MURK_KEY scenarios ──
 
 #[test]
