@@ -3200,6 +3200,48 @@ fn edit_single_key_updates_value() {
 
 #[cfg(unix)]
 #[test]
+fn edit_strict_fails_closed_on_disk_tmpdir() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "SECRET", "--vault", "test.murk"])
+        .write_stdin("original\n")
+        .assert()
+        .success();
+
+    // $EDITOR drops a marker; if strict mode worked, it must never run.
+    let marker = dir.path().join("editor-ran");
+    let editor = write_editor_script(
+        &dir,
+        "editor.sh",
+        &format!("touch {}", marker.display()),
+        "echo.> editor-ran",
+    );
+
+    // XDG_RUNTIME_DIR points at the repo root (disk-backed everywhere), so the
+    // scratch dir is not RAM-backed and MURK_STRICT must abort before $EDITOR.
+    murk(&dir, &key)
+        .args(["edit", "SECRET", "--vault", "test.murk"])
+        .env("MURK_STRICT", "1")
+        .env("XDG_RUNTIME_DIR", env!("CARGO_MANIFEST_DIR"))
+        .env("EDITOR", &editor)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not RAM-backed"));
+
+    assert!(!marker.exists(), "editor ran despite strict fail-closed");
+
+    // Value left untouched.
+    murk(&dir, &key)
+        .args(["get", "SECRET", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("original"));
+}
+
+#[cfg(unix)]
+#[test]
 fn edit_single_key_no_change() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);

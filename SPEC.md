@@ -38,6 +38,7 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 | `MURK_KEY`     | No       | Raw age private key (`AGE-SECRET-KEY-1...`). Dev-mode convenience — the key is plaintext on disk. |
 | `MURK_KEY_FILE`| Yes      | Path to a private key file. Set by `murk init`. May be a raw age key, an SSH PEM key, or an age plugin identity file with a `# public key: age1...` header. |
 | `MURK_VAULT`   | No       | Vault filename. Defaults to `.murk`.                    |
+| `MURK_STRICT`  | No       | When `1`/`true`/`yes`, fail closed rather than let a secret touch disk. Currently requires `murk edit`'s scratch file to live on a RAM-backed filesystem. |
 
 Your identity is your key. murk derives your public key from `MURK_KEY` or `MURK_KEY_FILE` to determine which scoped secrets are yours and to identify you in the recipient list.
 
@@ -248,6 +249,8 @@ Sets metadata for a key in the plaintext schema. Does not touch encrypted values
 Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits scoped overrides (motes) instead of shared values.
 
 The plaintext buffer is written to a mode-0600 temp file (preferring `XDG_RUNTIME_DIR`), then overwritten with zeros and deleted after the editor exits. An empty value or non-zero editor exit aborts without saving.
+
+The overwrite-and-delete is best-effort — it can't undo a write to a journaled or copy-on-write disk, and editors leave their own swap files behind. When `MURK_STRICT` is set, `edit` requires the temp file to live on a RAM-backed filesystem (tmpfs/ramfs) and aborts before launching the editor otherwise, so the secret never reaches persistent storage. Default systems without a RAM-backed temp dir (e.g. macOS) keep the best-effort behavior; use `add`/`rotate`/`import` from stdin to avoid the editor entirely.
 
 ---
 

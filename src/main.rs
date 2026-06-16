@@ -1177,6 +1177,27 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_dir())
         .unwrap_or_else(std::env::temp_dir);
+
+    // Strict mode: refuse to write the decrypted secret anywhere but RAM. The
+    // best-effort wipe below can't undo a write to a journaled/CoW disk, so when
+    // MURK_STRICT is set we fail closed rather than fall back to a disk temp dir.
+    if murk_cli::hardening::strict_mode() && !murk_cli::hardening::is_ram_backed(&dir) {
+        eprintln!(
+            "{} MURK_STRICT is set but {} is not RAM-backed",
+            "error".red().bold(),
+            dir.display()
+        );
+        eprintln!(
+            "  {}",
+            "edit would write the secret to disk — aborting".dimmed()
+        );
+        eprintln!(
+            "  {}",
+            "use add/rotate/import (stdin) instead, or point XDG_RUNTIME_DIR at a tmpfs".dimmed()
+        );
+        std::process::exit(1);
+    }
+
     let mut tmp = tempfile::Builder::new()
         .prefix("murk-edit-")
         .suffix(".env")
