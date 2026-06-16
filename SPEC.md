@@ -38,7 +38,7 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 | `MURK_KEY`     | No       | Raw age private key (`AGE-SECRET-KEY-1...`). Dev-mode convenience — the key is plaintext on disk. |
 | `MURK_KEY_FILE`| Yes      | Path to a private key file. Set by `murk init`. May be a raw age key, an SSH PEM key, or an age plugin identity file with a `# public key: age1...` header. |
 | `MURK_VAULT`   | No       | Vault filename. Defaults to `.murk`.                    |
-| `MURK_STRICT`  | No       | When `1`/`true`/`yes`, fail closed rather than let a secret touch disk. Currently requires `murk edit`'s scratch file to live on a RAM-backed filesystem. |
+| `MURK_STRICT`  | No       | When `1`/`true`/`yes`, fail closed rather than let a secret touch disk: requires `murk edit`'s scratch file to live on a RAM-backed filesystem, and refuses `export`/`get` when stdout is a regular file (plaintext to disk). |
 
 Your identity is your key. murk derives your public key from `MURK_KEY` or `MURK_KEY_FILE` to determine which scoped secrets are yours and to identify you in the recipient list.
 
@@ -257,6 +257,8 @@ The overwrite-and-delete is best-effort — it can't undo a write to a journaled
 ### `murk export [--tag TAG] [--json] [--vault NAME]`
 
 Prints all secrets as `export KEY=VALUE` statements to stdout. Scoped values override shared values for the current identity. Errors go to stderr. `--tag` filters by tag (repeatable). `--json` outputs JSON instead of shell exports.
+
+When `MURK_STRICT` is set, `export` refuses to run if stdout is a regular file (e.g. `murk export > .env`), since that persists plaintext secrets to disk; piping to a process (the direnv flow) and printing to a terminal are still allowed. `get` is guarded the same way. This is a guardrail against accidental redirects, not an airtight control — an explicit `murk export | tee .env` still writes the file.
 
 Primary usage via direnv:
 
