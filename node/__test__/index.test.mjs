@@ -1,5 +1,5 @@
 import assert from 'node:assert'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,64 +8,50 @@ import { exportAll, get, hasKey, load } from '../index.js'
 // Find the murk binary.
 const murkBin = join(process.cwd(), '..', 'target', 'release', 'murk')
 
-function setupVault() {
-  const dir = mkdtempSync(join(tmpdir(), 'murk-node-test-'))
+// Run the murk binary directly with an argv array (no shell), so command
+// arguments can never be reinterpreted as shell syntax.
+const PATH_WITH_TARGET = `${join(process.cwd(), '..', 'target', 'release')}:${process.env.PATH}`
 
-  const run = (cmd, input) =>
-    execSync(cmd, {
-      cwd: dir,
-      input,
-      env: {
-        ...process.env,
-        PATH: `${join(process.cwd(), '..', 'target', 'release')}:${process.env.PATH}`,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+function runMurk(dir, args, input = '', extraEnv = {}) {
+  return execFileSync(murkBin, args, {
+    cwd: dir,
+    input,
+    env: { ...process.env, PATH: PATH_WITH_TARGET, ...extraEnv },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+}
 
-  // Init vault.
-  run(`${murkBin} init --vault .murk`, 'testuser\n')
-
-  // Read key from .env.
+// Read the operator key murk init wrote to .env (inline MURK_KEY or a key file).
+function readKeyFromDotenv(dir) {
   const dotenv = readFileSync(join(dir, '.env'), 'utf8')
-  let murkKey
   for (const line of dotenv.split('\n')) {
     if (line.startsWith('export MURK_KEY_FILE=')) {
       const keyFile = line
         .split('=')[1]
         .trim()
         .replace(/^['"]|['"]$/g, '')
-      murkKey = readFileSync(keyFile, 'utf8').trim()
-      break
+      return readFileSync(keyFile, 'utf8').trim()
     }
     if (line.startsWith('export MURK_KEY=')) {
-      murkKey = line
+      return line
         .split('=')[1]
         .trim()
         .replace(/^['"]|['"]$/g, '')
-      break
     }
   }
+  throw new Error('could not find MURK_KEY in .env')
+}
 
-  // Add secrets.
-  const env = { ...process.env, MURK_KEY: murkKey }
-  execSync(`${murkBin} add DATABASE_URL --vault .murk`, {
-    cwd: dir,
-    input: 'postgres://localhost/mydb\n',
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  execSync(`${murkBin} add API_KEY --vault .murk`, {
-    cwd: dir,
-    input: 'sk-test-123\n',
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  execSync(`${murkBin} add STRIPE_SECRET --vault .murk`, {
-    cwd: dir,
-    input: 'sk_live_abc\n',
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+function setupVault() {
+  const dir = mkdtempSync(join(tmpdir(), 'murk-node-test-'))
+
+  runMurk(dir, ['init', '--vault', '.murk'], 'testuser\n')
+  const murkKey = readKeyFromDotenv(dir)
+
+  const keyEnv = { MURK_KEY: murkKey }
+  runMurk(dir, ['add', 'DATABASE_URL', '--vault', '.murk'], 'postgres://localhost/mydb\n', keyEnv)
+  runMurk(dir, ['add', 'API_KEY', '--vault', '.murk'], 'sk-test-123\n', keyEnv)
+  runMurk(dir, ['add', 'STRIPE_SECRET', '--vault', '.murk'], 'sk_live_abc\n', keyEnv)
 
   return { dir, murkKey }
 }
@@ -74,49 +60,35 @@ function setupVault() {
 // prove the bindings enforce the same policy the CLI applies at `agent exec`.
 function setupAgentVault() {
   const dir = mkdtempSync(join(tmpdir(), 'murk-node-agent-'))
-  const run = (cmd, input, extraEnv) =>
-    execSync(cmd, {
-      cwd: dir,
-      input,
-      env: {
-        ...process.env,
-        PATH: `${join(process.cwd(), '..', 'target', 'release')}:${process.env.PATH}`,
-        ...extraEnv,
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
 
-  run(`${murkBin} init --vault .murk`, 'agentowner\n')
-
-  // Read operator key from .env.
-  const dotenv = readFileSync(join(dir, '.env'), 'utf8')
-  let opKey
-  for (const line of dotenv.split('\n')) {
-    if (line.startsWith('export MURK_KEY_FILE=')) {
-      const keyFile = line
-        .split('=')[1]
-        .trim()
-        .replace(/^['"]|['"]$/g, '')
-      opKey = readFileSync(keyFile, 'utf8').trim()
-      break
-    }
-    if (line.startsWith('export MURK_KEY=')) {
-      opKey = line
-        .split('=')[1]
-        .trim()
-        .replace(/^['"]|['"]$/g, '')
-      break
-    }
-  }
+  runMurk(dir, ['init', '--vault', '.murk'], 'agentowner\n')
+  const opKey = readKeyFromDotenv(dir)
 
   const opEnv = { MURK_KEY: opKey }
-  run(`${murkBin} add AGENT_DB --vault .murk`, 'postgres://agent\n', opEnv)
-  run(`${murkBin} add PROD_DB --vault .murk`, 'postgres://prod\n', opEnv)
-  run(`${murkBin} describe AGENT_DB "agent db" --tag agents --vault .murk`, '', opEnv)
-  run(`${murkBin} describe PROD_DB "prod db" --tag prod --vault .murk`, '', opEnv)
-  run(`${murkBin} policy set --allow-tag agents --vault .murk`, '', opEnv)
-  run(
-    `${murkBin} agent grant --name codex --only AGENT_DB --out agent.key --vault .murk`,
+  runMurk(dir, ['add', 'AGENT_DB', '--vault', '.murk'], 'postgres://agent\n', opEnv)
+  runMurk(dir, ['add', 'PROD_DB', '--vault', '.murk'], 'postgres://prod\n', opEnv)
+  runMurk(
+    dir,
+    ['describe', 'AGENT_DB', 'agent db', '--tag', 'agents', '--vault', '.murk'],
+    '',
+    opEnv,
+  )
+  runMurk(dir, ['describe', 'PROD_DB', 'prod db', '--tag', 'prod', '--vault', '.murk'], '', opEnv)
+  runMurk(dir, ['policy', 'set', '--allow-tag', 'agents', '--vault', '.murk'], '', opEnv)
+  runMurk(
+    dir,
+    [
+      'agent',
+      'grant',
+      '--name',
+      'codex',
+      '--only',
+      'AGENT_DB',
+      '--out',
+      'agent.key',
+      '--vault',
+      '.murk',
+    ],
     '',
     opEnv,
   )
@@ -124,7 +96,8 @@ function setupAgentVault() {
 
   // Tightening the policy to drop the `agents` tag leaves the agent's scoped
   // ciphertext in place — the crypto still works, but policy should now refuse.
-  const tightenPolicy = () => run(`${murkBin} policy set --allow-tag prod --vault .murk`, '', opEnv)
+  const tightenPolicy = () =>
+    runMurk(dir, ['policy', 'set', '--allow-tag', 'prod', '--vault', '.murk'], '', opEnv)
 
   return { dir, opKey, agentKey, tightenPolicy }
 }
