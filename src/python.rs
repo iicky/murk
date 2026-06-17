@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use crate::{env, export, types};
+use crate::{env, export, policy, types};
 
 /// A loaded and decrypted murk vault.
 #[pyclass]
@@ -31,17 +31,43 @@ impl Vault {
     ///
     /// The returned `String` is a plain Python-owned copy — once it crosses
     /// the FFI boundary the plaintext is outside murk's zeroization.
-    fn get(&self, key: &str) -> Option<String> {
-        crate::get_secret(&self.decrypted, key, &self.pubkey).map(str::to_string)
+    ///
+    /// When the loaded identity is a granted agent, the vault's agent policy is
+    /// enforced before the value is returned — the same gate the CLI applies at
+    /// `agent exec`. Raises `RuntimeError` if policy forbids the key. For an
+    /// operator identity this is a no-op.
+    fn get(&self, key: &str) -> PyResult<Option<String>> {
+        let value = crate::get_secret(&self.decrypted, key, &self.pubkey).map(str::to_string);
+        // Only enforce when there is a value to hand back: a key the agent
+        // cannot decrypt is already inaccessible, so policy is moot.
+        if value.is_some() {
+            policy::enforce_agent_policy(
+                &self.inner,
+                &self.decrypted,
+                &self.pubkey,
+                &[key.to_string()],
+            )
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        }
+        Ok(value)
     }
 
     /// Export all secrets as a dict. Scoped values override shared values.
-    fn export(&self) -> HashMap<String, String> {
+    ///
+    /// For a granted agent, the vault's agent policy is enforced over the full
+    /// key set first (mirroring `murk agent exec`): if any resolvable key is
+    /// outside the policy, the whole export raises `RuntimeError` rather than
+    /// returning a partial dict. For an operator identity this is a no-op.
+    fn export(&self) -> PyResult<HashMap<String, String>> {
+        let resolved = export::resolve_secrets(&self.inner, &self.decrypted, &self.pubkey, &[]);
+        let keys: Vec<String> = resolved.keys().cloned().collect();
+        policy::enforce_agent_policy(&self.inner, &self.decrypted, &self.pubkey, &keys)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         // Python dicts own plain Strings — zeroization ends at the FFI boundary.
-        export::resolve_secrets(&self.inner, &self.decrypted, &self.pubkey, &[])
+        Ok(resolved
             .into_iter()
             .map(|(k, v)| (k, v.to_string()))
-            .collect()
+            .collect())
     }
 
     /// List all key names.
@@ -56,7 +82,7 @@ impl Vault {
 
     /// Get a value by key (dict-style access).
     fn __getitem__(&self, key: &str) -> PyResult<String> {
-        self.get(key)
+        self.get(key)?
             .ok_or_else(|| PyRuntimeError::new_err(format!("key not found: {key}")))
     }
 
@@ -95,7 +121,7 @@ fn load(vault_path: &str) -> PyResult<Vault> {
 #[pyo3(signature = (key, vault_path=".murk"))]
 fn get(key: &str, vault_path: &str) -> PyResult<Option<String>> {
     let v = load(vault_path)?;
-    Ok(v.get(key))
+    v.get(key)
 }
 
 /// One-liner: load the vault and export all secrets as a dict.
@@ -103,7 +129,7 @@ fn get(key: &str, vault_path: &str) -> PyResult<Option<String>> {
 #[pyo3(signature = (vault_path=".murk"))]
 fn export_all(vault_path: &str) -> PyResult<HashMap<String, String>> {
     let v = load(vault_path)?;
-    Ok(v.export())
+    v.export()
 }
 
 /// Resolve the MURK_KEY from the environment without loading a vault.

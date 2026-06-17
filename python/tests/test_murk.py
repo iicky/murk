@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 import murk
 
 
@@ -144,6 +146,38 @@ class TestVaultMethods:
         r = repr(vault)
         assert "3 secrets" in r
         assert "1 recipients" in r
+
+
+class TestAgentPolicy:
+    def test_agent_reads_allowed_key(self, agent_vault_dir):
+        os.environ["MURK_KEY"] = agent_vault_dir["agent_key"]
+        vault = murk.load(agent_vault_dir["vault"])
+        assert vault.get("AGENT_DB") == "postgres://agent"
+
+    def test_agent_cannot_read_out_of_scope_key(self, agent_vault_dir):
+        # Not a recipient of PROD_DB — the crypto boundary returns None.
+        os.environ["MURK_KEY"] = agent_vault_dir["agent_key"]
+        vault = murk.load(agent_vault_dir["vault"])
+        assert vault.get("PROD_DB") is None
+
+    def test_agent_export_only_scoped_allowed_keys(self, agent_vault_dir):
+        os.environ["MURK_KEY"] = agent_vault_dir["agent_key"]
+        vault = murk.load(agent_vault_dir["vault"])
+        assert vault.export() == {"AGENT_DB": "postgres://agent"}
+
+    def test_tightened_policy_blocks_get(self, agent_vault_dir):
+        agent_vault_dir["tighten"]()
+        os.environ["MURK_KEY"] = agent_vault_dir["agent_key"]
+        vault = murk.load(agent_vault_dir["vault"])
+        with pytest.raises(RuntimeError, match="policy forbids"):
+            vault.get("AGENT_DB")
+
+    def test_tightened_policy_blocks_export(self, agent_vault_dir):
+        agent_vault_dir["tighten"]()
+        os.environ["MURK_KEY"] = agent_vault_dir["agent_key"]
+        vault = murk.load(agent_vault_dir["vault"])
+        with pytest.raises(RuntimeError, match="policy forbids"):
+            vault.export()
 
 
 class TestHasKey:

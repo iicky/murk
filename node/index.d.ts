@@ -3,14 +3,19 @@
 /** A loaded and decrypted murk vault. */
 export declare class Vault {
   /**
-   * Get a single decrypted secret value.
-   * Returns the scoped override if one exists, otherwise the shared value.
+   * Get a single decrypted secret value. Resolution order: a personal scoped
+   * override, then a named-group value we can read, then the shared value.
    *
    * Internally, vault state stores values in `Zeroizing<String>` so plaintext
    * is wiped from memory when dropped. Crossing the napi boundary into a
    * JavaScript `String` requires copying the plaintext into a regular Rust
    * `String`; the V8 garbage collector owns it from there and zeroize cannot
    * follow. This is a known leak in the JS bindings — see THREAT_MODEL.md.
+   *
+   * When the loaded identity is a granted agent, the vault's agent policy is
+   * enforced before the value is returned — the same gate the CLI applies at
+   * `agent exec`. Throws if policy forbids the key. For an operator identity
+   * this is a no-op.
    */
   get(key: string): string | null
   /**
@@ -18,6 +23,11 @@ export declare class Vault {
    *
    * See `get` for the zeroize caveat — the returned `HashMap` holds plain
    * `String` plaintext, not `Zeroizing<String>`.
+   *
+   * For a granted agent, the vault's agent policy is enforced over the full
+   * key set first (mirroring `murk agent exec`): if any resolvable key is
+   * outside the policy, the whole export throws rather than returning a
+   * partial object. For an operator identity this is a no-op.
    */
   export(): Record<string, string>
   /** List all key names. */
