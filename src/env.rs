@@ -133,7 +133,14 @@ pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySou
             KeySource::EnvFile(p.to_path_buf()),
         ));
     }
-    if let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists()) {
+    // Auto-discovery of the operator's stored key. Disabled under MURK_STRICT so
+    // an agent context never silently falls back to the operator's personal key
+    // in ~/.config/murk/keys — it must present an explicit MURK_KEY/MURK_KEY_FILE
+    // (its grant key) or fail closed. `murk agent exec` sets MURK_STRICT for the
+    // agent so this holds without the agent having to opt in.
+    if !crate::hardening::strict_mode()
+        && let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists())
+    {
         let contents = read_secret_file(&path, "key file")?;
         return Ok((SecretString::from(contents), KeySource::Auto(path)));
     }
@@ -297,6 +304,58 @@ pub fn key_file_path(vault_path: &str) -> Result<std::path::PathBuf, String> {
 
     let config_dir = dirs_path()?;
     Ok(config_dir.join(&short_hash))
+}
+
+/// Compute the file path for an agent grant key:
+/// `~/.config/murk/agent-keys/<vault-hash>-<name>`.
+///
+/// Grant keys live in a separate `agent-keys/` directory, not in
+/// `~/.config/murk/keys/`, so they are never surfaced by key auto-discovery
+/// (which only looks up `keys/<vault-hash>`). The vault hash prefix keeps a
+/// grant named the same across two vaults from colliding.
+pub fn agent_key_file_path(vault_path: &str, name: &str) -> Result<std::path::PathBuf, String> {
+    use sha2::{Digest, Sha256};
+
+    let p = std::path::Path::new(vault_path);
+    let abs_path = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("cannot resolve vault path: {e}"))?
+            .join(p)
+    };
+    let hash = Sha256::digest(abs_path.to_string_lossy().as_bytes());
+    let short_hash: String = hash.iter().take(8).fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    Ok(agent_keys_dir()?.join(format!("{short_hash}-{name}")))
+}
+
+/// Return `~/.config/murk/agent-keys/`, creating it if needed (dir `0700`).
+pub fn agent_keys_dir() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "cannot determine home directory")?;
+    let dir = std::path::Path::new(&home)
+        .join(".config")
+        .join("murk")
+        .join("agent-keys");
+    fs::create_dir_all(&dir).map_err(|e| format!("creating agent key directory: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = dir.parent().unwrap(); // ~/.config/murk
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("setting permissions on {}: {e}", parent.display()))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("setting permissions on {}: {e}", dir.display()))?;
+    }
+
+    Ok(dir)
 }
 
 /// Return `~/.config/murk/keys/`, creating it if needed.

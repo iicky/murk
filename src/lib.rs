@@ -26,6 +26,7 @@ pub mod error;
 pub(crate) mod export;
 pub(crate) mod git;
 pub mod github;
+pub(crate) mod grants;
 pub(crate) mod groups;
 pub mod hardening;
 pub(crate) mod info;
@@ -48,9 +49,10 @@ pub mod testutil;
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use agent::{AgentPlan, AgentPlanKey, agent_plan, format_agent_plan_text};
 pub use env::{
-    EnvrcStatus, KeySource, dotenv_has_murk_key, key_file_path, parse_env, resolve_key,
-    resolve_key_for_vault, resolve_key_with_source, warn_env_permissions, write_envrc,
-    write_key_ref_to_dotenv, write_key_to_dotenv, write_key_to_file,
+    EnvrcStatus, KeySource, agent_key_file_path, agent_keys_dir, dotenv_has_murk_key,
+    key_file_path, parse_env, resolve_key, resolve_key_for_vault, resolve_key_with_source,
+    warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
+    write_key_to_file,
 };
 pub use error::MurkError;
 pub use export::{
@@ -59,6 +61,7 @@ pub use export::{
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
 pub use github::{GitHubError, fetch_keys};
+pub use grants::{create_grant, parse_ttl, remove_grant, validate_grant_name};
 pub use groups::{
     add_member, create_group, delete_group, remove_member, resolve_member, validate_group_name,
 };
@@ -210,6 +213,73 @@ pub fn resolve_vault_path(arg: &str) -> String {
     arg.to_string()
 }
 
+/// The non-secret state carried out of the encrypted meta blob after integrity
+/// verification: recipient names, group membership, agent grants, the
+/// legacy-MAC flag, and pinned GitHub fingerprints.
+struct MetaState {
+    recipients: HashMap<String, String>,
+    groups: BTreeMap<String, Vec<String>>,
+    grants: BTreeMap<String, types::GrantEntry>,
+    legacy_mac: bool,
+    github_pins: HashMap<String, Vec<String>>,
+}
+
+/// Decrypt the meta blob and verify the vault's integrity MAC, returning the
+/// recipient/group/grant state. Errors if the vault has secrets but a missing or
+/// invalid MAC — a tampered or inconsistent vault should fail loudly here rather
+/// than surface a misleading decryption error later.
+fn resolve_meta_state(
+    vault: &types::Vault,
+    identity: &crypto::MurkIdentity,
+) -> Result<MetaState, MurkError> {
+    match decrypt_meta(vault, identity) {
+        Some(meta) if !meta.mac.is_empty() => {
+            let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
+            if !verify_mac(
+                vault,
+                &meta.groups,
+                &meta.grants,
+                &meta.mac,
+                mac_key.as_ref(),
+            ) {
+                let expected = compute_mac(vault, &meta.groups, &meta.grants, mac_key.as_ref());
+                return Err(MurkError::Integrity(format!(
+                    "vault may have been tampered with (expected {expected}, got {})",
+                    meta.mac
+                )));
+            }
+            let legacy_mac = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
+            Ok(MetaState {
+                recipients: meta.recipients,
+                groups: meta.groups,
+                grants: meta.grants,
+                legacy_mac,
+                github_pins: meta.github_pins,
+            })
+        }
+        Some(meta) if vault.secrets.is_empty() => Ok(MetaState {
+            recipients: meta.recipients,
+            groups: meta.groups,
+            grants: meta.grants,
+            legacy_mac: false,
+            github_pins: meta.github_pins,
+        }),
+        Some(_) => Err(MurkError::Integrity(
+            "vault has secrets but MAC is empty — vault may have been tampered with".into(),
+        )),
+        None if vault.secrets.is_empty() && vault.meta.is_empty() => Ok(MetaState {
+            recipients: HashMap::new(),
+            groups: BTreeMap::new(),
+            grants: BTreeMap::new(),
+            legacy_mac: false,
+            github_pins: HashMap::new(),
+        }),
+        None => Err(MurkError::Integrity(
+            "vault has secrets but no meta — vault may have been tampered with".into(),
+        )),
+    }
+}
+
 /// Decrypt a vault using the given identity. Verifies integrity, decrypts all
 /// shared and scoped values, and returns the working state.
 ///
@@ -223,36 +293,21 @@ pub fn decrypt_vault(
 
     // Verify integrity BEFORE decrypting secrets — a tampered vault should fail
     // with an integrity error, not a misleading "you are not a recipient" message.
-    let (recipients, groups, legacy_mac, github_pins) = match decrypt_meta(vault, identity) {
-        Some(meta) if !meta.mac.is_empty() => {
-            let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
-            if !verify_mac(vault, &meta.groups, &meta.mac, mac_key.as_ref()) {
-                let expected = compute_mac(vault, &meta.groups, mac_key.as_ref());
-                return Err(MurkError::Integrity(format!(
-                    "vault may have been tampered with (expected {expected}, got {})",
-                    meta.mac
-                )));
-            }
-            let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
-            (meta.recipients, meta.groups, legacy, meta.github_pins)
-        }
-        Some(meta) if vault.secrets.is_empty() => {
-            (meta.recipients, meta.groups, false, meta.github_pins)
-        }
-        Some(_) => {
-            return Err(MurkError::Integrity(
-                "vault has secrets but MAC is empty — vault may have been tampered with".into(),
-            ));
-        }
-        None if vault.secrets.is_empty() && vault.meta.is_empty() => {
-            (HashMap::new(), BTreeMap::new(), false, HashMap::new())
-        }
-        None => {
-            return Err(MurkError::Integrity(
-                "vault has secrets but no meta — vault may have been tampered with".into(),
-            ));
-        }
-    };
+    let MetaState {
+        recipients,
+        groups,
+        grants,
+        legacy_mac,
+        github_pins,
+    } = resolve_meta_state(vault, identity)?;
+
+    // An agent grant is a recipient of the meta blob (so it can verify integrity
+    // and read its grant) but is deliberately excluded from the shared "everyone"
+    // layer. Such an identity legitimately cannot decrypt shared ciphertexts, so
+    // it skips them rather than erroring. A normal recipient that fails to decrypt
+    // shared is a genuine problem (a true outsider already failed at meta
+    // decryption above), so it still gets the clear "not a recipient" error.
+    let is_agent = grants.values().any(|g| g.pubkey == pubkey);
 
     // Decrypt shared values (skip scoped-only entries with empty shared ciphertext).
     let mut values: HashMap<String, Zeroizing<String>> = HashMap::new();
@@ -260,11 +315,15 @@ pub fn decrypt_vault(
         if entry.shared.is_empty() {
             continue;
         }
-        let plaintext = decrypt_value(&entry.shared, identity).map_err(|_| {
-            MurkError::Crypto(crypto::CryptoError::Decrypt(
-                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
-            ))
-        })?;
+        let plaintext = match decrypt_value(&entry.shared, identity) {
+            Ok(plaintext) => plaintext,
+            Err(_) if is_agent => continue,
+            Err(_) => {
+                return Err(MurkError::Crypto(crypto::CryptoError::Decrypt(
+                    "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into(),
+                )));
+            }
+        };
         let value = plaintext_bytes_to_zeroizing_string(&plaintext)
             .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
         values.insert(key.clone(), value);
@@ -310,6 +369,7 @@ pub fn decrypt_vault(
         scoped,
         grouped,
         groups,
+        grants,
         legacy_mac,
         github_pins,
     })
@@ -442,6 +502,38 @@ fn rebuild_grouped(
     Ok(grouped)
 }
 
+/// Keep each active grant's scoped copy of `key` in sync with the key's current
+/// shared value. A grant stages a per-agent scoped copy at grant time; without
+/// this, rotating a granted key would leave the agent reading the stale value
+/// (the operator can't see the agent's ciphertext to re-encrypt it, and
+/// `rebuild_scoped` preserves it as-is). When the value changed since load and
+/// the operator can read it, re-encrypt the agent's copy; unchanged values keep
+/// their preserved ciphertext (no churn), and keys the operator can't read are
+/// left untouched.
+fn resync_grant_scoped(
+    key: &str,
+    scoped: &mut BTreeMap<String, String>,
+    original: &types::Murk,
+    current: &types::Murk,
+) -> Result<(), MurkError> {
+    let Some(value) = current.values.get(key) else {
+        return Ok(());
+    };
+    if original.values.get(key) == Some(value) {
+        return Ok(());
+    }
+    for grant in current.grants.values() {
+        if grant.scope.iter().any(|k| k == key) {
+            let recipient = crypto::parse_recipient(&grant.pubkey)?;
+            scoped.insert(
+                grant.pubkey.clone(),
+                encrypt_value(value.as_bytes(), &[recipient])?,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Save the vault: compare against original state and only re-encrypt changed values.
 /// Unchanged values keep their original ciphertext for minimal git diffs.
 pub fn save_vault(
@@ -450,12 +542,45 @@ pub fn save_vault(
     original: &types::Murk,
     current: &types::Murk,
 ) -> Result<(), MurkError> {
+    // The full recipient set encrypts the meta blob, so every recipient —
+    // including agent grants — can verify integrity and read group/grant state.
     let recipients = parse_recipients(&vault.recipients)?;
 
-    // Check if recipient list changed — forces full re-encryption of shared values.
-    let recipients_changed = {
-        let mut current_pks: Vec<&str> = vault.recipients.iter().map(String::as_str).collect();
-        let mut original_pks: Vec<&str> = original.recipients.keys().map(String::as_str).collect();
+    // Agent grant pubkeys are deliberately excluded from the shared "everyone"
+    // layer: a granted agent must read only the scoped values granted to it, not
+    // every shared secret. They remain meta recipients (above) but never receive
+    // the shared ciphertext.
+    let grant_pubkeys: BTreeSet<&str> =
+        current.grants.values().map(|g| g.pubkey.as_str()).collect();
+    let shared_recipients: Vec<crypto::MurkRecipient> = vault
+        .recipients
+        .iter()
+        .filter(|pk| !grant_pubkeys.contains(pk.as_str()))
+        .map(|pk| crypto::parse_recipient(pk))
+        .collect::<Result<_, _>>()?;
+
+    // Check if the *shared* recipient set (recipients minus agent grants) changed
+    // — that forces full re-encryption of shared values. Adding or removing an
+    // agent doesn't change this set, so it doesn't needlessly churn shared
+    // ciphertext (and never pulls an agent into the shared layer).
+    let shared_recipients_changed = {
+        let orig_grant_pubkeys: BTreeSet<&str> = original
+            .grants
+            .values()
+            .map(|g| g.pubkey.as_str())
+            .collect();
+        let mut current_pks: Vec<&str> = vault
+            .recipients
+            .iter()
+            .map(String::as_str)
+            .filter(|pk| !grant_pubkeys.contains(pk))
+            .collect();
+        let mut original_pks: Vec<&str> = original
+            .recipients
+            .keys()
+            .map(String::as_str)
+            .filter(|pk| !orig_grant_pubkeys.contains(pk))
+            .collect();
         current_pks.sort_unstable();
         original_pks.sort_unstable();
         current_pks != original_pks
@@ -501,12 +626,13 @@ pub fn save_vault(
         let shared = rebuild_shared(
             key,
             vault,
-            &recipients,
-            recipients_changed,
+            &shared_recipients,
+            shared_recipients_changed,
             original,
             current,
         )?;
-        let scoped = rebuild_scoped(key, vault, original, current)?;
+        let mut scoped = rebuild_scoped(key, vault, original, current)?;
+        resync_grant_scoped(key, &mut scoped, original, current)?;
         let grouped = rebuild_grouped(key, vault, &changed_groups, original, current)?;
         new_secrets.insert(
             key.clone(),
@@ -523,13 +649,14 @@ pub fn save_vault(
     // Update meta — always generate a fresh BLAKE3 key on save.
     let mac_key_hex = generate_mac_key();
     let mac_key = decode_mac_key(&mac_key_hex).unwrap();
-    let mac = compute_mac(vault, &current.groups, Some(&mac_key));
+    let mac = compute_mac(vault, &current.groups, &current.grants, Some(&mac_key));
     let meta = types::Meta {
         recipients: current.recipients.clone(),
         mac,
         mac_key: Some(mac_key_hex),
         github_pins: current.github_pins.clone(),
         groups: current.groups.clone(),
+        grants: current.grants.clone(),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -549,9 +676,11 @@ pub fn save_vault(
 pub(crate) fn compute_mac(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
     mac_key: Option<&[u8; 32]>,
 ) -> String {
     match mac_key {
+        Some(key) if !grants.is_empty() => compute_mac_v7(vault, groups, grants, key),
         Some(key) if !groups.is_empty() => compute_mac_v6(vault, groups, key),
         Some(key) => compute_mac_v5(vault, key),
         None => compute_mac_v2(vault),
@@ -839,17 +968,10 @@ fn schema_mac_bytes(vault: &types::Vault, data: &mut Vec<u8>) {
     }
 }
 
-/// v6 MAC (`blake3v4:`). Extends v5 with the per-secret grouped ciphertexts and
-/// the group membership map, so a named group's members and the values encrypted
-/// to them cannot be tampered with undetected. Only emitted once a vault has at
-/// least one group; group-free vaults keep writing v5 and stay byte-identical.
-fn compute_mac_v6(
-    vault: &types::Vault,
-    groups: &BTreeMap<String, Vec<String>>,
-    key: &[u8; 32],
-) -> String {
-    let mut data = Vec::new();
-
+/// Append the v6 byte stream (secrets, scoped, grouped ciphertexts, recipients,
+/// schema, and group definitions) to `data`. Factored out so v7 can extend the
+/// exact same bytes without risking a change to v6's encoding.
+fn v6_mac_bytes(vault: &types::Vault, groups: &BTreeMap<String, Vec<String>>, data: &mut Vec<u8>) {
     for key_name in vault.secrets.keys() {
         data.extend_from_slice(key_name.as_bytes());
         data.push(0x00);
@@ -888,7 +1010,7 @@ fn compute_mac_v6(
         data.push(0x00);
     }
 
-    schema_mac_bytes(vault, &mut data);
+    schema_mac_bytes(vault, data);
 
     // Group definitions (sorted by name; members sorted). `0x04` separates each
     // group, `0x05` each member, so membership can't be tampered with undetected.
@@ -903,33 +1025,102 @@ fn compute_mac_v6(
             data.extend_from_slice(member.as_bytes());
         }
     }
+}
 
+/// v6 MAC (`blake3v4:`). Extends v5 with the per-secret grouped ciphertexts and
+/// the group membership map, so a named group's members and the values encrypted
+/// to them cannot be tampered with undetected. Only emitted once a vault has at
+/// least one group; group-free vaults keep writing v5 and stay byte-identical.
+fn compute_mac_v6(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v6_mac_bytes(vault, groups, &mut data);
     let hash = blake3::keyed_hash(key, &data);
     format!("blake3v4:{hash}")
 }
 
+/// v7 MAC (`blake3v5:`). Extends v6 with agent grant metadata — each grant's
+/// name, ephemeral pubkey, sorted scope, issued_at, expires_at, and issuer — so
+/// a grant's TTL and scope cannot be tampered with undetected. Only emitted once
+/// a vault has at least one grant; grant-free vaults keep writing v5/v6 and stay
+/// byte-identical.
+fn compute_mac_v7(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v6_mac_bytes(vault, groups, &mut data);
+
+    // Grants (BTreeMap → sorted by name). `0x06` separates each grant; fixed
+    // fields are 0x00-terminated; each scope key is prefixed `0x07` (sorted), so
+    // the grant stream can't be confused with the group (`0x04`/`0x05`) stream.
+    for (name, grant) in grants {
+        data.push(0x06);
+        data.extend_from_slice(name.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(grant.pubkey.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(grant.issued_at.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(grant.expires_at.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(grant.issuer.as_bytes());
+        data.push(0x00);
+        let mut scope = grant.scope.clone();
+        scope.sort();
+        for k in &scope {
+            data.push(0x07);
+            data.extend_from_slice(k.as_bytes());
+        }
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3v5:{hash}")
+}
+
 /// Verify a stored MAC against the vault, accepting v1, v2, blake3, blake3v2,
-/// blake3v3, and blake3v4 schemes.
+/// blake3v3, blake3v4, and blake3v5 schemes.
 pub(crate) fn verify_mac(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
     stored_mac: &str,
     mac_key: Option<&[u8; 32]>,
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
-    // Group data is only covered by v6 (`blake3v4:`). A vault carrying any
-    // grouped ciphertext or group membership but stamped with an older MAC is
-    // either tampered (an attacker injected a `grouped` entry that the old MAC
-    // ignores, then relies on group-before-shared resolution) or inconsistent.
-    // Reject it rather than verify against a scheme that doesn't cover groups.
-    let touches_groups =
-        !groups.is_empty() || vault.secrets.values().any(|e| !e.grouped.is_empty());
-    if touches_groups && !stored_mac.starts_with("blake3v4:") {
+    // Grant metadata is only covered by v7 (`blake3v5:`). A vault carrying grants
+    // but stamped with an older MAC is tampered or inconsistent — reject it.
+    if !grants.is_empty() && !stored_mac.starts_with("blake3v5:") {
         return false;
     }
 
-    let expected = if stored_mac.starts_with("blake3v4:") {
+    // Group data is covered by v6 (`blake3v4:`) and v7 (`blake3v5:`). A vault
+    // carrying any grouped ciphertext or group membership but stamped with an
+    // older MAC is either tampered (an attacker injected a `grouped` entry that
+    // the old MAC ignores, then relies on group-before-shared resolution) or
+    // inconsistent. Reject it rather than verify against a scheme that doesn't
+    // cover groups.
+    let touches_groups =
+        !groups.is_empty() || vault.secrets.values().any(|e| !e.grouped.is_empty());
+    if touches_groups
+        && !stored_mac.starts_with("blake3v4:")
+        && !stored_mac.starts_with("blake3v5:")
+    {
+        return false;
+    }
+
+    let expected = if stored_mac.starts_with("blake3v5:") {
+        match mac_key {
+            Some(key) => compute_mac_v7(vault, groups, grants, key),
+            None => return false,
+        }
+    } else if stored_mac.starts_with("blake3v4:") {
         match mac_key {
             Some(key) => compute_mac_v6(vault, groups, key),
             None => return false,
@@ -1130,13 +1321,28 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
-        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac1 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
+        let mac2 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_eq!(mac1, mac2);
         assert!(mac1.starts_with("blake3v3:"));
 
         // Without key, falls back to sha256v2
-        let mac_legacy = compute_mac(&vault, &std::collections::BTreeMap::new(), None);
+        let mac_legacy = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            None,
+        );
         assert!(mac_legacy.starts_with("sha256v2:"));
     }
 
@@ -1154,7 +1360,12 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac_empty = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_empty = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
 
         vault.secrets.insert(
             "KEY".into(),
@@ -1165,7 +1376,12 @@ mod tests {
             },
         );
 
-        let mac_with_secret = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_with_secret = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(mac_empty, mac_with_secret);
     }
 
@@ -1183,9 +1399,19 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac1 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         vault.recipients.push("age1xyz".into());
-        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac2 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(mac1, mac2);
     }
 
@@ -1906,7 +2132,12 @@ mod tests {
         );
 
         let key = [0u8; 32];
-        let mac_no_scoped = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_no_scoped = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
 
         vault
             .secrets
@@ -1915,11 +2146,17 @@ mod tests {
             .scoped
             .insert("age1bob".into(), "scoped-ct".into());
 
-        let mac_with_scoped = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_with_scoped = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(mac_no_scoped, mac_with_scoped);
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // exhaustively enumerates every MAC scheme
     fn verify_mac_accepts_v1_prefix() {
         let vault = types::Vault {
             version: types::VAULT_VERSION.into(),
@@ -1939,11 +2176,13 @@ mod tests {
         assert!(verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             &v1_mac,
             None
         ));
         assert!(verify_mac(
             &vault,
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
             &v2_mac,
             None
@@ -1951,11 +2190,13 @@ mod tests {
         assert!(verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             &v3_mac,
             Some(&key)
         ));
         assert!(!verify_mac(
             &vault,
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
             "sha256:bogus",
             None
@@ -1963,11 +2204,13 @@ mod tests {
         assert!(!verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             "blake3:bogus",
             Some(&key)
         ));
         assert!(!verify_mac(
             &vault,
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
             "blake3v2:bogus",
             Some(&key)
@@ -1975,11 +2218,13 @@ mod tests {
         assert!(!verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             "blake3v3:bogus",
             Some(&key)
         ));
         assert!(!verify_mac(
             &vault,
+            &std::collections::BTreeMap::new(),
             &std::collections::BTreeMap::new(),
             "unknown:prefix",
             None
@@ -1991,6 +2236,7 @@ mod tests {
         assert!(verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             &v4_mac,
             Some(&key)
         ));
@@ -2001,26 +2247,49 @@ mod tests {
         assert!(verify_mac(
             &vault,
             &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
             &v5_mac,
             Some(&key)
         ));
         // compute_mac emits v5 when there are no groups
         assert!(
-            compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key))
-                .starts_with("blake3v3:")
+            compute_mac(
+                &vault,
+                &std::collections::BTreeMap::new(),
+                &std::collections::BTreeMap::new(),
+                Some(&key)
+            )
+            .starts_with("blake3v3:")
         );
 
         // v6 (blake3v4) — emitted once a group exists; verifies and round-trips
         let groups = BTreeMap::from([("prod".to_string(), vec!["age1abc".to_string()])]);
-        let v6_mac = compute_mac(&vault, &groups, Some(&key));
+        let v6_mac = compute_mac(
+            &vault,
+            &groups,
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert!(v6_mac.starts_with("blake3v4:"));
-        assert!(verify_mac(&vault, &groups, &v6_mac, Some(&key)));
+        assert!(verify_mac(
+            &vault,
+            &groups,
+            &std::collections::BTreeMap::new(),
+            &v6_mac,
+            Some(&key)
+        ));
         // Tampering with membership changes the MAC.
         let tampered = BTreeMap::from([(
             "prod".to_string(),
             vec!["age1abc".to_string(), "age1evil".to_string()],
         )]);
-        assert!(!verify_mac(&vault, &tampered, &v6_mac, Some(&key)));
+        assert!(!verify_mac(
+            &vault,
+            &tampered,
+            &std::collections::BTreeMap::new(),
+            &v6_mac,
+            Some(&key)
+        ));
     }
 
     #[test]
@@ -2040,9 +2309,20 @@ mod tests {
         };
         let key = [7u8; 32];
         let no_groups = BTreeMap::new();
-        let v5_mac = compute_mac(&vault, &no_groups, Some(&key));
+        let v5_mac = compute_mac(
+            &vault,
+            &no_groups,
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert!(v5_mac.starts_with("blake3v3:"));
-        assert!(verify_mac(&vault, &no_groups, &v5_mac, Some(&key)));
+        assert!(verify_mac(
+            &vault,
+            &no_groups,
+            &std::collections::BTreeMap::new(),
+            &v5_mac,
+            Some(&key)
+        ));
 
         // Attacker injects a grouped entry; the v5 MAC is now invalid for it.
         vault.secrets.insert(
@@ -2052,7 +2332,102 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(!verify_mac(&vault, &no_groups, &v5_mac, Some(&key)));
+        assert!(!verify_mac(
+            &vault,
+            &no_groups,
+            &std::collections::BTreeMap::new(),
+            &v5_mac,
+            Some(&key)
+        ));
+    }
+
+    #[test]
+    fn mac_v7_covers_grant_metadata() {
+        let vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into(), "age1agent".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [9u8; 32];
+        let no_groups = BTreeMap::new();
+
+        // compute_mac emits v7 (blake3v5) once a grant exists.
+        let grants = BTreeMap::from([(
+            "codex".to_string(),
+            types::GrantEntry {
+                pubkey: "age1agent".into(),
+                scope: vec!["STRIPE_KEY".into()],
+                issued_at: "2026-02-28T00:00:00Z".into(),
+                expires_at: "2026-02-28T02:00:00Z".into(),
+                issuer: "age1abc".into(),
+            },
+        )]);
+        let v7_mac = compute_mac(&vault, &no_groups, &grants, Some(&key));
+        assert!(v7_mac.starts_with("blake3v5:"));
+        assert!(verify_mac(&vault, &no_groups, &grants, &v7_mac, Some(&key)));
+
+        // Widening the scope (or extending the TTL) changes the MAC.
+        let tampered = BTreeMap::from([(
+            "codex".to_string(),
+            types::GrantEntry {
+                pubkey: "age1agent".into(),
+                scope: vec!["STRIPE_KEY".into(), "PROD_DB".into()],
+                issued_at: "2026-02-28T00:00:00Z".into(),
+                expires_at: "2026-02-28T02:00:00Z".into(),
+                issuer: "age1abc".into(),
+            },
+        )]);
+        assert!(!verify_mac(
+            &vault,
+            &no_groups,
+            &tampered,
+            &v7_mac,
+            Some(&key)
+        ));
+    }
+
+    #[test]
+    fn verify_mac_rejects_grants_under_legacy_prefix() {
+        // Grant metadata is only covered by v7. A vault carrying grants but
+        // stamped with an older (group-era) MAC must not verify — otherwise an
+        // attacker could fabricate or extend a grant the MAC ignores.
+        let vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [3u8; 32];
+        let no_groups = BTreeMap::new();
+        let grants = BTreeMap::from([(
+            "codex".to_string(),
+            types::GrantEntry {
+                pubkey: "age1agent".into(),
+                scope: vec!["STRIPE_KEY".into()],
+                issued_at: "2026-02-28T00:00:00Z".into(),
+                expires_at: "2026-02-28T02:00:00Z".into(),
+                issuer: "age1abc".into(),
+            },
+        )]);
+        // A v6 MAC (no grants in the digest) must be rejected once grants exist.
+        let v6_mac = compute_mac_v6(&vault, &no_groups, &key);
+        assert!(v6_mac.starts_with("blake3v4:"));
+        assert!(!verify_mac(
+            &vault,
+            &no_groups,
+            &grants,
+            &v6_mac,
+            Some(&key)
+        ));
     }
 
     #[test]
@@ -2077,7 +2452,12 @@ mod tests {
         );
 
         let key = [0u8; 32];
-        let baseline = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let baseline = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
 
         // Setting a rotation interval changes the MAC — tamper-evident.
         vault
@@ -2085,12 +2465,22 @@ mod tests {
             .get_mut("API_KEY")
             .unwrap()
             .rotation_interval_days = Some(90);
-        let with_interval = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let with_interval = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(baseline, with_interval);
 
         // So does an expiry.
         vault.schema.get_mut("API_KEY").unwrap().expires_at = Some("2026-09-01T23:59:59Z".into());
-        let with_expiry = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let with_expiry = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(with_interval, with_expiry);
 
         // v4 (which ignores these fields) is blind to the change — the reason
@@ -2119,7 +2509,12 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac_no_schema = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_no_schema = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
 
         vault.schema.insert(
             "API_KEY".into(),
@@ -2130,13 +2525,23 @@ mod tests {
             },
         );
 
-        let mac_with_schema = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_with_schema = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(mac_no_schema, mac_with_schema);
 
         // Changing a tag changes the MAC
         let mac_before_retag = mac_with_schema;
         vault.schema.get_mut("API_KEY").unwrap().tags = vec!["ops".into()];
-        let mac_after_retag = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac_after_retag = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key),
+        );
         assert_ne!(mac_before_retag, mac_after_retag);
     }
 
@@ -2180,8 +2585,18 @@ mod tests {
 
         let key1 = [0u8; 32];
         let key2 = [1u8; 32];
-        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key1));
-        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key2));
+        let mac1 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key1),
+        );
+        let mac2 = compute_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+            Some(&key2),
+        );
         assert_ne!(mac1, mac2);
     }
 

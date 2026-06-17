@@ -159,10 +159,19 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "mac": "blake3v4:abc123...",
+  "mac": "blake3v5:abc123...",
   "hmac_key": "0a1b2c3d...",
   "groups": {
     "prod": ["age1abc...", "age1xyz..."]
+  },
+  "grants": {
+    "codex": {
+      "pubkey": "age1agent...",
+      "scope": ["STRIPE_KEY"],
+      "issued_at": "2026-06-16T00:00:00Z",
+      "expires_at": "2026-06-16T02:00:00Z",
+      "issuer": "age1abc..."
+    }
   }
 }
 ```
@@ -175,6 +184,8 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
 
 `groups` maps a group name to its member pubkeys (a subset of `recipients`). Stored here, not in the plaintext header, so org structure — who is in which group — does not leak. Members are covered by the MAC. The field is omitted entirely when the vault has no named groups, keeping group-free vaults byte-identical to pre-groups murk.
 
+`grants` maps an agent grant name to its metadata: the agent's ephemeral `pubkey` (also a `recipients` entry), the `scope` of keys it may read, `issued_at`/`expires_at` timestamps, and the `issuer` pubkey. The agent is excluded from the `everyone` layer — its access is the set of `scoped` ciphertexts encrypted to its pubkey, one per scope key. Stored here (not in the header) so an agent's existence and scope don't leak. Covered by the MAC so TTL/scope/issuer can't be altered undetected. The field is omitted entirely when the vault has no grants. The `expires_at` TTL is advisory: it is not cryptographically enforced (see THREAT_MODEL.md).
+
 ### Integrity
 
 The MAC is a BLAKE3 keyed hash covering, in order:
@@ -186,11 +197,12 @@ The MAC is a BLAKE3 keyed hash covering, in order:
    - (v6 only) For each grouped entry (sorted by group name): `\x03`, the group name followed by `\x00`, the grouped ciphertext followed by `\x00`
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
 4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`, then the lifecycle fields `created`, `updated`, `rotation_interval_days` (decimal text), and `expires_at` — each emitted as its bytes (empty if unset) followed by `\x00`
-5. **Group definitions** (v6 only) — for each group (sorted by name): `\x04`, the group name followed by `\x00`, then each member pubkey (sorted) prefixed by `\x05`
+5. **Group definitions** (v6 and v7) — for each group (sorted by name): `\x04`, the group name followed by `\x00`, then each member pubkey (sorted) prefixed by `\x05`
+6. **Grant definitions** (v7 only) — for each grant (sorted by name): `\x06`, then the grant name, agent pubkey, `issued_at`, `expires_at`, and issuer each followed by `\x00`, then each scope key (sorted) prefixed by `\x07`
 
-The resulting digest is prefixed with `blake3v4:` (v6) when the vault has at least one group, or `blake3v3:` (v5) when it has none, and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
+The resulting digest is prefixed with `blake3v5:` (v7) when the vault has at least one grant, `blake3v4:` (v6) when it has a group but no grant, or `blake3v3:` (v5) when it has neither, and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), and `blake3v3:` (v5, no group coverage) are accepted for backward compatibility. On save, murk writes `blake3v4:` if any group exists, otherwise `blake3v3:`, always with a fresh key. Gating the version bump on the first group keeps group-free vaults byte-identical to pre-groups murk. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), `blake3v3:` (v5, no group coverage), and `blake3v4:` (v6, no grant coverage) are accepted for backward compatibility. On save, murk writes `blake3v5:` if any grant exists, else `blake3v4:` if any group exists, otherwise `blake3v3:`, always with a fresh key. Gating each version bump on the first group/grant keeps simpler vaults byte-identical to older murk. A vault carrying groups or grants is rejected under an older prefix that doesn't cover them, so an attacker can't strip coverage by downgrading the MAC. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
 
 Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
@@ -306,6 +318,24 @@ Emits schema-only context safe to paste into an AI agent prompt — key names, d
 ### `murk agent exec --only KEY [--vault NAME] COMMAND...`
 
 `murk exec` with strict agent-safe defaults: clears the inherited environment, strips `MURK_KEY` so the child process cannot read the vault, and requires explicit `--only` keys (repeatable). Agent mode fails closed — there is no inject-everything path. See `docs/ai-agents.md`.
+
+---
+
+### `murk agent grant --name NAME --only KEY [--ttl DUR] [--out PATH] [--vault NAME]`
+
+Mints a fresh ephemeral age identity and gives it read access to exactly the `--only` keys (repeatable, required) — never the operator's own key. The agent becomes a recipient of the encrypted meta and gets a `scoped` ciphertext of each `--only` key's shared value, but is excluded from the `everyone` layer. Records grant metadata (scope, TTL, issuer) in the encrypted meta. `--ttl` accepts `30m`/`2h`/`7d` (default `2h`); it is advisory (see THREAT_MODEL.md). The agent key is written to `~/.config/murk/agent-keys/<vault-hash>-NAME` (or `--out PATH`, or `--out -` to stream it to stdout). Run the agent with `MURK_KEY_FILE` pointing at that key and `MURK_STRICT=1` so it can't fall back to the operator's stored key.
+
+---
+
+### `murk agent ls [--json] [--vault NAME]`
+
+Lists active grants: name, truncated pubkey, scope, and TTL status (time remaining, or how long expired). Works offline. `--json` outputs structured data including an `expired` flag.
+
+---
+
+### `murk agent revoke NAME [--rotate] [--vault NAME]`
+
+Removes the grant and its ephemeral recipient (clearing the agent's scoped ciphertexts), persisting before any rotation. Because the handed-off key can still decrypt old `.murk` versions from git history, rotation is the real close: `--rotate` (or the interactive prompt) re-prompts for new values for the grant's scope.
 
 ---
 

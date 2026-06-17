@@ -3834,3 +3834,195 @@ fn add_shared_clears_group_assignment() {
         .success()
         .stdout(predicate::str::contains("shared_val"));
 }
+
+// ── agent grants ──
+
+/// Read the agent key written by `agent grant --out <path>`.
+fn read_agent_key(path: &std::path::Path) -> String {
+    fs::read_to_string(path).unwrap().trim().to_string()
+}
+
+#[test]
+fn agent_grant_scopes_access_to_only_keys() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_secret\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("pg://prod\n")
+        .assert()
+        .success();
+
+    let agent_key_path = dir.path().join("agent.key");
+    murk(&dir, &key)
+        .args(["agent", "grant", "--name", "codex", "--only", "STRIPE_KEY"])
+        .args(["--ttl", "2h", "--out"])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("granted").and(predicate::str::contains("STRIPE_KEY")));
+
+    let agent_key = read_agent_key(&agent_key_path);
+
+    // The agent reads the granted key.
+    murk(&dir, &agent_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_secret"));
+
+    // The agent cannot read a non-granted shared secret.
+    murk(&dir, &agent_key)
+        .args(["get", "DB_URL", "--vault", "test.murk"])
+        .assert()
+        .failure();
+
+    // The operator sees the grant listed.
+    murk(&dir, &key)
+        .args(["agent", "ls", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("codex").and(predicate::str::contains("STRIPE_KEY")));
+}
+
+#[test]
+fn agent_revoke_removes_grant_and_access() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_secret\n")
+        .assert()
+        .success();
+
+    let agent_key_path = dir.path().join("agent.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "grant",
+            "--name",
+            "codex",
+            "--only",
+            "STRIPE_KEY",
+            "--out",
+        ])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success();
+    let agent_key = read_agent_key(&agent_key_path);
+
+    // Revoke and rotate to a new value in the same session.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "revoke",
+            "codex",
+            "--rotate",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("sk_live_rotated\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("revoked"));
+
+    // No grants remain.
+    murk(&dir, &key)
+        .args(["agent", "ls", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no active grants"));
+
+    // The revoked agent key can no longer read the secret.
+    murk(&dir, &agent_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .failure();
+
+    // The operator reads the rotated value.
+    murk(&dir, &key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_rotated"));
+}
+
+#[test]
+fn agent_grant_tracks_rotation_of_granted_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_v1\n")
+        .assert()
+        .success();
+
+    let agent_key_path = dir.path().join("agent.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "grant",
+            "--name",
+            "codex",
+            "--only",
+            "STRIPE_KEY",
+            "--out",
+        ])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success();
+    let agent_key = read_agent_key(&agent_key_path);
+
+    // Operator rotates the granted key to a new value while the grant is active.
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_v2\n")
+        .assert()
+        .success();
+
+    // The agent sees the new value, not the stale snapshot.
+    murk(&dir, &agent_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_v2"));
+}
+
+#[test]
+fn strict_mode_disables_key_auto_discovery() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_secret\n")
+        .assert()
+        .success();
+
+    // With no key in the environment, auto-discovery normally finds the stored
+    // key. Under MURK_STRICT it must fail closed instead of falling back.
+    murk_bin(dir.path())
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .env("MURK_STRICT", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("MURK_KEY not set"));
+
+    // Without strict mode, auto-discovery still works (sanity check).
+    murk_bin(dir.path())
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_secret"));
+}

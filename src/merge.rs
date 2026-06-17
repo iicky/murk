@@ -623,6 +623,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         mac_key: None,
         github_pins: HashMap::new(),
         groups: BTreeMap::new(),
+        grants: BTreeMap::new(),
     };
 
     let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
@@ -648,9 +649,17 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
     }
     groups.retain(|_, members| !members.is_empty());
 
+    // Merge agent grants: union, ours wins on conflict. Drop grants whose
+    // ephemeral pubkey is no longer in the merged recipient set.
+    let mut grants = theirs_meta.grants;
+    for (name, grant) in ours_meta.grants {
+        grants.insert(name, grant);
+    }
+    grants.retain(|_, grant| merged.recipients.contains(&grant.pubkey));
+
     let mac_key_hex = crate::generate_mac_key();
     let mac_key = crate::decode_mac_key(&mac_key_hex).unwrap();
-    let mac = compute_mac(merged, &groups, Some(&mac_key));
+    let mac = compute_mac(merged, &groups, &grants, Some(&mac_key));
     // Merge github pins: union, ours wins on conflict.
     let mut github_pins = theirs_meta.github_pins;
     for (user, pins) in ours_meta.github_pins {
@@ -663,6 +672,7 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         mac_key: Some(mac_key_hex),
         github_pins,
         groups,
+        grants,
     };
 
     let recipients = parse_recipients(&merged.recipients).ok()?;

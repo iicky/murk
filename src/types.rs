@@ -73,6 +73,30 @@ pub struct SecretEntry {
     pub grouped: BTreeMap<String, String>,
 }
 
+/// A short-lived agent grant: an ephemeral identity with read access to a
+/// narrow set of keys. The grant's `pubkey` is also a `Vault::recipients`
+/// entry, and each granted key carries a `scoped` ciphertext under that pubkey —
+/// so the agent's *access* is governed (and MAC-covered) by the scoped entries.
+/// This record is the audit/TTL layer: it lives in the encrypted meta (so an
+/// agent's existence and scope don't leak) and is covered by the keyed MAC
+/// (`blake3v5:`) so TTL, scope, and issuer cannot be tampered with undetected.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrantEntry {
+    /// The agent's ephemeral age public key (also in `Vault::recipients`).
+    pub pubkey: String,
+    /// Keys this grant can read (the `--only` set). Display/audit only — actual
+    /// access is the set of `scoped` ciphertexts encrypted to `pubkey`.
+    pub scope: Vec<String>,
+    /// When the grant was issued (ISO-8601 UTC).
+    pub issued_at: String,
+    /// Advisory expiry (ISO-8601 UTC). `agent ls` flags grants past this; nothing
+    /// auto-revokes. age keys cannot self-destruct, so the real close is
+    /// `agent revoke` + rotate.
+    pub expires_at: String,
+    /// Pubkey of the recipient who issued the grant (minimal accountability).
+    pub issuer: String,
+}
+
 // -- Meta (encrypted, stored in vault.meta) --
 // Contains metadata only visible to recipients.
 
@@ -95,6 +119,11 @@ pub struct Meta {
     /// MAC (`blake3v4:`) so membership cannot be tampered with undetected.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub groups: BTreeMap<String, Vec<String>>,
+    /// Short-lived agent grants: grant name → metadata. Stored here (encrypted)
+    /// so an agent's existence and scope do not leak. Covered by the keyed MAC
+    /// (`blake3v5:`) so TTL/scope/issuer are tamper-evident.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub grants: BTreeMap<String, GrantEntry>,
 }
 
 // -- Murk (decrypted in-memory state) --
@@ -116,6 +145,8 @@ pub struct Murk {
     pub grouped: HashMap<String, HashMap<String, Zeroizing<String>>>,
     /// Group membership: group name → member pubkeys (carried from meta).
     pub groups: BTreeMap<String, Vec<String>>,
+    /// Agent grants (carried from meta): grant name → metadata.
+    pub grants: BTreeMap<String, GrantEntry>,
     /// True if the vault uses a legacy unkeyed MAC (sha256/sha256v2).
     pub legacy_mac: bool,
     /// Pinned GitHub key fingerprints (carried from meta).

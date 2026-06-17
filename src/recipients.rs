@@ -162,6 +162,12 @@ pub fn revoke_recipient(
         }
     }
 
+    // Drop any agent grant whose ephemeral pubkey was just revoked, so revoking
+    // an agent recipient (directly or via `agent revoke`) never leaves an
+    // orphaned grant record pointing at a pubkey that is no longer a recipient.
+    murk.grants
+        .retain(|_, grant| !pubkeys.contains(&grant.pubkey));
+
     // Only report keys the revoked recipient could actually decrypt: shared
     // secrets (all recipients can read), their scoped entries, and any group
     // they were a member of.
