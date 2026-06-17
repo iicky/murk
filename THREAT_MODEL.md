@@ -32,6 +32,8 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Audit logging.** murk has no built-in audit trail beyond git history. It does not log who decrypted what or when. For regulated environments requiring provable access controls, use a dedicated secrets server.
 
+**Admin-change accountability (agents and otherwise).** Every administrative change is a commit to the `.murk` file, so **git history is the admin audit trail**: creating or revoking an agent grant, setting or clearing a policy, authorizing or revoking a recipient, and rotating a value after an agent session all show up in `git log -p .murk` / `murk diff`, attributed to the commit author (and cryptographically signed if you use git commit signing). murk deliberately does **not** keep a second event log inside the vault: it would duplicate git, can drift from it, and — because the integrity MAC uses a key every recipient shares — any keyholder could forge entries, so it would be weaker than git on attribution, not stronger. What cannot be audited at all: secret *reads* on a developer's machine (murk can't see them), and any action taken with age directly or an old murk binary. Provable per-actor attribution beyond git's commit identity would require signed events, which needs a signing key murk's age identities don't have — deferred until a concrete requirement exists.
+
 ## Trust boundaries
 
 ```

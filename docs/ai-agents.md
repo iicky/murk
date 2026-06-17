@@ -76,3 +76,14 @@ murk policy set --allow-tag agents              # default-deny everything else
 ```
 
 Now `agent exec` and `agent grant` only work for keys tagged `agents`; asking for an untagged or production key fails closed with a clear error — there's no override flag, so a misbehaving agent can't talk its way past it. `agents` is just an example tag; use whatever tags fit your vault (`dev`, `ci`, ...). The policy lives in the vault header (MAC-covered, readable with `murk policy show` even without a key) so it travels with the repo and applies in CI. Note this is a guardrail enforced by the murk binary, not access control — see THREAT_MODEL.md.
+
+## Auditing agent activity
+
+There's no separate agent log to consult — **git is the record.** Every admin change to a grant or policy is a commit, so:
+
+```bash
+git log -p .murk        # who created/revoked grants, changed policy, rotated values
+murk diff               # the same changes for the latest revision, decoded
+```
+
+Each shows the change attributed to its commit author (and signed, if you use git commit signing). What git *can't* show is secret reads on a developer's machine — murk never sees those — so don't treat the absence of a read trail as proof a secret wasn't used. See THREAT_MODEL.md for the full audit boundary.
