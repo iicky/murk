@@ -276,6 +276,7 @@ mod tests {
             repo: "https://github.com/test/repo".into(),
             recipients: vec!["age1test".into()],
             schema,
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };

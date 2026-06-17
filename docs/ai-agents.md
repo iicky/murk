@@ -65,3 +65,14 @@ Three things to keep in mind:
 - **The TTL is advisory.** age keys can't self-destruct, and old vault versions stay readable in git, so a leaked grant key works until you `agent revoke` and rotate. The TTL tells you *when* to revoke; `agent ls` flags expired grants. Revoke + rotate is the real close.
 - **The key is a bearer credential.** Whoever holds the key file has the access. Treat it like the secret it unlocks.
 - **Real isolation is the OS's job.** An agent running as you, with read access to your home directory, can read `~/.config/murk/keys` directly and bypass murk. `MURK_STRICT` stops murk from *handing over* your key, but for true containment run the agent in a sandbox, container, or under a separate user that can't read your key directory.
+
+## Restricting which secrets agents can touch
+
+Tag your secrets and set an allow-list, and murk will refuse to inject or grant anything outside it in agent mode:
+
+```bash
+murk describe DATABASE_URL "..." --tag agents   # tag the agent-usable ones
+murk policy set --allow-tag agents              # default-deny everything else
+```
+
+Now `agent exec` and `agent grant` only work for keys tagged `agents`; asking for an untagged or production key fails closed with a clear error — there's no override flag, so a misbehaving agent can't talk its way past it. `agents` is just an example tag; use whatever tags fit your vault (`dev`, `ci`, ...). The policy lives in the vault header (MAC-covered, readable with `murk policy show` even without a key) so it travels with the repo and applies in CI. Note this is a guardrail enforced by the murk binary, not access control — see THREAT_MODEL.md.

@@ -4026,3 +4026,171 @@ fn strict_mode_disables_key_auto_discovery() {
         .success()
         .stdout(predicate::str::contains("sk_live_secret"));
 }
+
+// ── agent access policy ──
+
+#[test]
+fn policy_restricts_agent_grant_and_exec_to_allowed_tags() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--tag", "agents", "--vault", "test.murk"])
+        .write_stdin("safe_val\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args([
+            "add",
+            "PROD_DB",
+            "--tag",
+            "production",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("prod_val\n")
+        .assert()
+        .success();
+
+    // Set the allow-list to agents.
+    murk(&dir, &key)
+        .args([
+            "policy",
+            "set",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // policy show works without a key (reads the plaintext header).
+    murk_bin(dir.path())
+        .args(["policy", "show", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("agents"));
+
+    // Granting an agents key is allowed.
+    let agent_key_path = dir.path().join("a.key");
+    murk(&dir, &key)
+        .args([
+            "agent", "grant", "--name", "ok", "--only", "API_KEY", "--out",
+        ])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Granting a production key is refused by policy.
+    murk(&dir, &key)
+        .args([
+            "agent", "grant", "--name", "bad", "--only", "PROD_DB", "--out",
+        ])
+        .arg(dir.path().join("bad.key"))
+        .args(["--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("policy forbids").and(predicate::str::contains("PROD_DB")),
+        );
+
+    // agent exec of a production key is refused too.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "PROD_DB",
+            "--vault",
+            "test.murk",
+            "--",
+            "echo",
+            "hi",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy forbids"));
+
+    // The operator (human) is unconstrained — get still works.
+    murk(&dir, &key)
+        .args(["get", "PROD_DB", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("prod_val"));
+
+    // Integrity still verifies under the v8 MAC.
+    murk(&dir, &key)
+        .args(["verify", "--vault", "test.murk"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn policy_clear_restores_unrestricted_agent_mode() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+    murk(&dir, &key)
+        .args([
+            "add",
+            "PROD_DB",
+            "--tag",
+            "production",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("prod_val\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args([
+            "policy",
+            "set",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Blocked under policy.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "PROD_DB",
+            "--vault",
+            "test.murk",
+            "--",
+            "echo",
+            "hi",
+        ])
+        .assert()
+        .failure();
+
+    // Clear the policy.
+    murk(&dir, &key)
+        .args(["policy", "clear", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // Now allowed.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "PROD_DB",
+            "--vault",
+            "test.murk",
+            "--",
+            "echo",
+            "hi",
+        ])
+        .assert()
+        .success();
+}

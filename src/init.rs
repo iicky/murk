@@ -147,6 +147,7 @@ pub fn create_vault(
         repo,
         recipients: vec![pubkey.to_string()],
         schema: BTreeMap::new(),
+        policy: None,
         secrets: BTreeMap::new(),
         meta: String::new(),
     };
@@ -316,6 +317,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: std::collections::BTreeMap::new(),
+            policy: None,
             secrets: std::collections::BTreeMap::new(),
             meta: meta_enc,
         };
@@ -338,6 +340,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![other_pubkey],
             schema: std::collections::BTreeMap::new(),
+            policy: None,
             secrets: std::collections::BTreeMap::new(),
             meta: String::new(),
         };

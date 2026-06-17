@@ -32,6 +32,7 @@ pub mod hardening;
 pub(crate) mod info;
 pub(crate) mod init;
 pub(crate) mod merge;
+pub(crate) mod policy;
 pub(crate) mod recipients;
 pub mod recovery;
 pub mod scan;
@@ -68,6 +69,7 @@ pub use groups::{
 pub use info::{InfoEntry, VaultInfo, format_info_lines, lifecycle_segment, vault_info};
 pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
+pub use policy::check_agent_keys;
 pub use recipients::{
     RecipientEntry, RevokeResult, authorize_recipient, format_recipient_lines, key_type_label,
     list_recipients, revoke_recipient, truncate_pubkey,
@@ -680,6 +682,7 @@ pub(crate) fn compute_mac(
     mac_key: Option<&[u8; 32]>,
 ) -> String {
     match mac_key {
+        Some(key) if vault.policy.is_some() => compute_mac_v8(vault, groups, grants, key),
         Some(key) if !grants.is_empty() => compute_mac_v7(vault, groups, grants, key),
         Some(key) if !groups.is_empty() => compute_mac_v6(vault, groups, key),
         Some(key) => compute_mac_v5(vault, key),
@@ -1047,14 +1050,16 @@ fn compute_mac_v6(
 /// a grant's TTL and scope cannot be tampered with undetected. Only emitted once
 /// a vault has at least one grant; grant-free vaults keep writing v5/v6 and stay
 /// byte-identical.
-fn compute_mac_v7(
+/// Append the v7 byte stream (v6 bytes plus agent grant metadata) to `data`.
+/// Factored out so v8 can extend the exact same bytes without risking a change
+/// to v7's encoding.
+fn v7_mac_bytes(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
     grants: &BTreeMap<String, types::GrantEntry>,
-    key: &[u8; 32],
-) -> String {
-    let mut data = Vec::new();
-    v6_mac_bytes(vault, groups, &mut data);
+    data: &mut Vec<u8>,
+) {
+    v6_mac_bytes(vault, groups, data);
 
     // Grants (BTreeMap → sorted by name). `0x06` separates each grant; fixed
     // fields are 0x00-terminated; each scope key is prefixed `0x07` (sorted), so
@@ -1078,13 +1083,58 @@ fn compute_mac_v7(
             data.extend_from_slice(k.as_bytes());
         }
     }
+}
 
+fn compute_mac_v7(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v7_mac_bytes(vault, groups, grants, &mut data);
     let hash = blake3::keyed_hash(key, &data);
     format!("blake3v5:{hash}")
 }
 
+/// v8 MAC (`blake3v6:`). Extends v7 with the plaintext header policy object, so a
+/// vault's agent access policy cannot be weakened or stripped undetected. Only
+/// emitted once a vault has a policy; policy-free vaults keep writing v5/v6/v7
+/// and stay byte-identical.
+fn compute_mac_v8(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v7_mac_bytes(vault, groups, grants, &mut data);
+
+    // Policy (header). `0x08` opens the policy block (present only when a policy
+    // exists, so Some-but-empty is distinct from None). Each agent allow-tag is
+    // length-prefixed (4-byte big-endian) and sorted, so the byte stream is
+    // unambiguous regardless of tag contents — a crafted tag can't forge a
+    // boundary (e.g. `["a\tb"]` and `["a", "b"]` hash differently). New policy
+    // fields extend this block.
+    if let Some(policy) = &vault.policy {
+        data.push(0x08);
+        let mut tags = policy.agent_allow_tags.clone();
+        tags.sort();
+        for tag in &tags {
+            let bytes = tag.as_bytes();
+            // usize→u64 is lossless on supported targets; fixed-width length
+            // prefix keeps the encoding unambiguous.
+            data.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            data.extend_from_slice(bytes);
+        }
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3v6:{hash}")
+}
+
 /// Verify a stored MAC against the vault, accepting v1, v2, blake3, blake3v2,
-/// blake3v3, blake3v4, and blake3v5 schemes.
+/// blake3v3, blake3v4, blake3v5, and blake3v6 schemes.
 pub(crate) fn verify_mac(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
@@ -1094,28 +1144,43 @@ pub(crate) fn verify_mac(
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
-    // Grant metadata is only covered by v7 (`blake3v5:`). A vault carrying grants
-    // but stamped with an older MAC is tampered or inconsistent — reject it.
-    if !grants.is_empty() && !stored_mac.starts_with("blake3v5:") {
+    // Policy is only covered by v8 (`blake3v6:`). A vault carrying a policy but
+    // stamped with an older MAC is tampered or inconsistent — reject it so an
+    // attacker can't strip or weaken the policy by downgrading the MAC.
+    if vault.policy.is_some() && !stored_mac.starts_with("blake3v6:") {
         return false;
     }
 
-    // Group data is covered by v6 (`blake3v4:`) and v7 (`blake3v5:`). A vault
-    // carrying any grouped ciphertext or group membership but stamped with an
-    // older MAC is either tampered (an attacker injected a `grouped` entry that
-    // the old MAC ignores, then relies on group-before-shared resolution) or
-    // inconsistent. Reject it rather than verify against a scheme that doesn't
-    // cover groups.
+    // Grant metadata is covered by v7 (`blake3v5:`) and v8 (`blake3v6:`). A vault
+    // carrying grants but stamped with an older MAC is tampered or inconsistent.
+    if !grants.is_empty()
+        && !stored_mac.starts_with("blake3v5:")
+        && !stored_mac.starts_with("blake3v6:")
+    {
+        return false;
+    }
+
+    // Group data is covered by v6, v7, and v8. A vault carrying any grouped
+    // ciphertext or group membership but stamped with an older MAC is either
+    // tampered (an attacker injected a `grouped` entry that the old MAC ignores,
+    // then relies on group-before-shared resolution) or inconsistent. Reject it
+    // rather than verify against a scheme that doesn't cover groups.
     let touches_groups =
         !groups.is_empty() || vault.secrets.values().any(|e| !e.grouped.is_empty());
     if touches_groups
         && !stored_mac.starts_with("blake3v4:")
         && !stored_mac.starts_with("blake3v5:")
+        && !stored_mac.starts_with("blake3v6:")
     {
         return false;
     }
 
-    let expected = if stored_mac.starts_with("blake3v5:") {
+    let expected = if stored_mac.starts_with("blake3v6:") {
+        match mac_key {
+            Some(key) => compute_mac_v8(vault, groups, grants, key),
+            None => return false,
+        }
+    } else if stored_mac.starts_with("blake3v5:") {
         match mac_key {
             Some(key) => compute_mac_v7(vault, groups, grants, key),
             None => return false,
@@ -1316,6 +1381,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1355,6 +1421,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1394,6 +1461,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1433,6 +1501,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1492,6 +1561,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1544,6 +1614,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1607,6 +1678,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey1.clone(), pubkey2.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1671,6 +1743,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1747,6 +1820,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1816,6 +1890,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1877,6 +1952,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![other_pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1946,6 +2022,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1998,6 +2075,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2066,6 +2144,7 @@ mod tests {
             repo: String::new(),
             recipients: vec![pubkey.clone()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2118,6 +2197,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2165,6 +2245,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2304,6 +2385,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2350,6 +2432,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into(), "age1agent".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2403,6 +2486,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2431,6 +2515,115 @@ mod tests {
     }
 
     #[test]
+    fn mac_v8_covers_policy() {
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            policy: Some(types::Policy {
+                agent_allow_tags: vec!["agents".into()],
+            }),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [11u8; 32];
+        let no_groups = BTreeMap::new();
+        let no_grants = BTreeMap::new();
+
+        // compute_mac emits v8 (blake3v6) once a policy exists.
+        let v8_mac = compute_mac(&vault, &no_groups, &no_grants, Some(&key));
+        assert!(v8_mac.starts_with("blake3v6:"));
+        assert!(verify_mac(
+            &vault,
+            &no_groups,
+            &no_grants,
+            &v8_mac,
+            Some(&key)
+        ));
+
+        // Weakening the policy (adding an allowed tag) changes the MAC.
+        vault.policy = Some(types::Policy {
+            agent_allow_tags: vec!["agents".into(), "production".into()],
+        });
+        assert!(!verify_mac(
+            &vault,
+            &no_groups,
+            &no_grants,
+            &v8_mac,
+            Some(&key)
+        ));
+    }
+
+    #[test]
+    fn mac_v8_policy_tags_are_unambiguous() {
+        // A crafted tag must not collide with a different tag list: ["a\tb"] and
+        // ["a", "b"] previously hashed identically under a separator-only scheme.
+        let base = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            policy: None,
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [7u8; 32];
+        let groups = BTreeMap::new();
+        let grants = BTreeMap::new();
+
+        let mut a = base.clone();
+        a.policy = Some(types::Policy {
+            agent_allow_tags: vec!["a\tb".into()],
+        });
+        let mut b = base.clone();
+        b.policy = Some(types::Policy {
+            agent_allow_tags: vec!["a".into(), "b".into()],
+        });
+
+        let mac_a = compute_mac(&a, &groups, &grants, Some(&key));
+        let mac_b = compute_mac(&b, &groups, &grants, Some(&key));
+        assert_ne!(mac_a, mac_b, "distinct tag lists must not share a MAC");
+    }
+
+    #[test]
+    fn verify_mac_rejects_policy_under_legacy_prefix() {
+        // Policy is only covered by v8. A vault carrying a policy but stamped
+        // with an older MAC must not verify — otherwise an attacker could strip
+        // or weaken the policy by downgrading the MAC.
+        let vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            policy: Some(types::Policy {
+                agent_allow_tags: vec!["agents".into()],
+            }),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [5u8; 32];
+        let no_groups = BTreeMap::new();
+        let no_grants = BTreeMap::new();
+        // A v5 MAC (no policy in the digest) must be rejected once a policy exists.
+        let v5_mac = compute_mac_v5(&vault, &key);
+        assert!(v5_mac.starts_with("blake3v3:"));
+        assert!(!verify_mac(
+            &vault,
+            &no_groups,
+            &no_grants,
+            &v5_mac,
+            Some(&key)
+        ));
+    }
+
+    #[test]
     fn compute_mac_v5_covers_rotation_metadata() {
         let mut vault = types::Vault {
             version: types::VAULT_VERSION.into(),
@@ -2439,6 +2632,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2504,6 +2698,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -2579,6 +2774,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1abc".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
