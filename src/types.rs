@@ -60,10 +60,12 @@ pub struct SecretEntry {
     /// Shared value encrypted to all recipients (the implicit `everyone` group).
     /// Empty when the secret's base group is a named group instead.
     pub shared: String,
-    /// Scoped overrides: pubkey → encrypted value (encrypted to that pubkey only).
-    /// This is the `me` tier — a singleton group of one recipient.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub scoped: BTreeMap<String, String>,
+    /// Private per-recipient values: pubkey → encrypted value (encrypted to that
+    /// pubkey only). This is the `me` tier — a singleton group of one recipient.
+    /// Serialized as `scoped` for on-disk compatibility with vaults written
+    /// before the tier was renamed; the wire format is unchanged.
+    #[serde(rename = "scoped", default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub private: BTreeMap<String, String>,
     /// Named-group values: group name → encrypted value (encrypted to that
     /// group's current members). A secret has at most one base group, so this
     /// map holds at most one entry, but it is keyed by name so the integrity MAC
@@ -137,9 +139,9 @@ pub struct Murk {
     pub values: HashMap<String, Zeroizing<String>>,
     /// Pubkey → display name (from meta).
     pub recipients: HashMap<String, String>,
-    /// Scoped overrides: key → { pubkey → decrypted value }.
-    /// Only contains entries decryptable by the current identity.
-    pub scoped: HashMap<String, HashMap<String, Zeroizing<String>>>,
+    /// Private per-recipient values (the `me` tier): key → { pubkey → decrypted
+    /// value }. Only contains entries decryptable by the current identity.
+    pub private: HashMap<String, HashMap<String, Zeroizing<String>>>,
     /// Named-group values: key → { group name → decrypted value }.
     /// Only contains groups the current identity is a member of (and can decrypt).
     pub grouped: HashMap<String, HashMap<String, Zeroizing<String>>>,

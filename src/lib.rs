@@ -329,16 +329,16 @@ pub fn decrypt_vault(
         values.insert(key.clone(), value);
     }
 
-    // Decrypt our scoped (mote) overrides.
-    let mut scoped: HashMap<String, HashMap<String, Zeroizing<String>>> = HashMap::new();
+    // Decrypt our private (per-recipient) overrides — the `me` tier.
+    let mut private: HashMap<String, HashMap<String, Zeroizing<String>>> = HashMap::new();
     for (key, entry) in &vault.secrets {
-        if let Some(encoded) = entry.scoped.get(&pubkey)
+        if let Some(encoded) = entry.private.get(&pubkey)
             && let Ok(value) = decrypt_value(encoded, identity).and_then(|pt| {
                 plaintext_bytes_to_zeroizing_string(&pt)
                     .map_err(|e| MurkError::Secret(e.to_string()))
             })
         {
-            scoped
+            private
                 .entry(key.clone())
                 .or_default()
                 .insert(pubkey.clone(), value);
@@ -366,7 +366,7 @@ pub fn decrypt_vault(
     Ok(types::Murk {
         values,
         recipients,
-        scoped,
+        private,
         grouped,
         groups,
         grants,
@@ -421,7 +421,7 @@ fn rebuild_shared(
 
 /// Re-encrypt a key's scoped (per-recipient) ciphertexts, keeping unchanged
 /// entries and dropping ones removed since load.
-fn rebuild_scoped(
+fn rebuild_private(
     key: &str,
     vault: &types::Vault,
     original: &types::Murk,
@@ -430,12 +430,12 @@ fn rebuild_scoped(
     let mut scoped = vault
         .secrets
         .get(key)
-        .map(|e| e.scoped.clone())
+        .map(|e| e.private.clone())
         .unwrap_or_default();
 
-    if let Some(key_scoped) = current.scoped.get(key) {
+    if let Some(key_scoped) = current.private.get(key) {
         for (pk, val) in key_scoped {
-            let original_val = original.scoped.get(key).and_then(|m| m.get(pk));
+            let original_val = original.private.get(key).and_then(|m| m.get(pk));
             if original_val != Some(val) {
                 let recipient = crypto::parse_recipient(pk)?;
                 scoped.insert(pk.clone(), encrypt_value(val.as_bytes(), &[recipient])?);
@@ -443,9 +443,9 @@ fn rebuild_scoped(
         }
     }
 
-    if let Some(orig_key_scoped) = original.scoped.get(key) {
+    if let Some(orig_key_scoped) = original.private.get(key) {
         for pk in orig_key_scoped.keys() {
-            let still_present = current.scoped.get(key).is_some_and(|m| m.contains_key(pk));
+            let still_present = current.private.get(key).is_some_and(|m| m.contains_key(pk));
             if !still_present {
                 scoped.remove(pk);
             }
@@ -502,17 +502,17 @@ fn rebuild_grouped(
     Ok(grouped)
 }
 
-/// Keep each active grant's scoped copy of `key` in sync with the key's current
-/// shared value. A grant stages a per-agent scoped copy at grant time; without
+/// Keep each active grant's private copy of `key` in sync with the key's current
+/// shared value. A grant stages a per-agent private copy at grant time; without
 /// this, rotating a granted key would leave the agent reading the stale value
 /// (the operator can't see the agent's ciphertext to re-encrypt it, and
-/// `rebuild_scoped` preserves it as-is). When the value changed since load and
+/// `rebuild_private` preserves it as-is). When the value changed since load and
 /// the operator can read it, re-encrypt the agent's copy; unchanged values keep
 /// their preserved ciphertext (no churn), and keys the operator can't read are
 /// left untouched.
-fn resync_grant_scoped(
+fn resync_grant_private(
     key: &str,
-    scoped: &mut BTreeMap<String, String>,
+    private: &mut BTreeMap<String, String>,
     original: &types::Murk,
     current: &types::Murk,
 ) -> Result<(), MurkError> {
@@ -525,7 +525,7 @@ fn resync_grant_scoped(
     for grant in current.grants.values() {
         if grant.scope.iter().any(|k| k == key) {
             let recipient = crypto::parse_recipient(&grant.pubkey)?;
-            scoped.insert(
+            private.insert(
                 grant.pubkey.clone(),
                 encrypt_value(value.as_bytes(), &[recipient])?,
             );
@@ -602,7 +602,7 @@ pub fn save_vault(
     // Collect all keys with a shared, scoped, or grouped value in the operator's
     // working state.
     let mut all_keys: BTreeSet<&String> = current.values.keys().collect();
-    all_keys.extend(current.scoped.keys());
+    all_keys.extend(current.private.keys());
     all_keys.extend(current.grouped.keys());
 
     // Preserve on-disk secrets the operator can't see (other groups' values, or
@@ -613,7 +613,7 @@ pub fn save_vault(
     let original_visible: BTreeSet<&String> = original
         .values
         .keys()
-        .chain(original.scoped.keys())
+        .chain(original.private.keys())
         .chain(original.grouped.keys())
         .collect();
     for key in vault.secrets.keys() {
@@ -631,14 +631,14 @@ pub fn save_vault(
             original,
             current,
         )?;
-        let mut scoped = rebuild_scoped(key, vault, original, current)?;
-        resync_grant_scoped(key, &mut scoped, original, current)?;
+        let mut private = rebuild_private(key, vault, original, current)?;
+        resync_grant_private(key, &mut private, original, current)?;
         let grouped = rebuild_grouped(key, vault, &changed_groups, original, current)?;
         new_secrets.insert(
             key.clone(),
             types::SecretEntry {
                 shared,
-                scoped,
+                private,
                 grouped,
             },
         );
@@ -739,12 +739,12 @@ fn compute_mac_v2(vault: &types::Vault) -> String {
         hasher.update(b"\x00");
 
         // Hash scoped entries (sorted by pubkey for determinism).
-        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        let mut scoped_pks: Vec<&String> = entry.private.keys().collect();
         scoped_pks.sort();
         for pk in scoped_pks {
             hasher.update(pk.as_bytes());
             hasher.update(b"\x01");
-            hasher.update(entry.scoped[pk].as_bytes());
+            hasher.update(entry.private[pk].as_bytes());
             hasher.update(b"\x00");
         }
     }
@@ -781,12 +781,12 @@ fn compute_mac_v3(vault: &types::Vault, key: &[u8; 32]) -> String {
         data.extend_from_slice(entry.shared.as_bytes());
         data.push(0x00);
 
-        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        let mut scoped_pks: Vec<&String> = entry.private.keys().collect();
         scoped_pks.sort();
         for pk in scoped_pks {
             data.extend_from_slice(pk.as_bytes());
             data.push(0x01);
-            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.extend_from_slice(entry.private[pk].as_bytes());
             data.push(0x00);
         }
     }
@@ -816,12 +816,12 @@ fn compute_mac_v4(vault: &types::Vault, key: &[u8; 32]) -> String {
         data.extend_from_slice(entry.shared.as_bytes());
         data.push(0x00);
 
-        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        let mut scoped_pks: Vec<&String> = entry.private.keys().collect();
         scoped_pks.sort();
         for pk in scoped_pks {
             data.extend_from_slice(pk.as_bytes());
             data.push(0x01);
-            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.extend_from_slice(entry.private[pk].as_bytes());
             data.push(0x00);
         }
     }
@@ -872,12 +872,12 @@ fn compute_mac_v5(vault: &types::Vault, key: &[u8; 32]) -> String {
         data.extend_from_slice(entry.shared.as_bytes());
         data.push(0x00);
 
-        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        let mut scoped_pks: Vec<&String> = entry.private.keys().collect();
         scoped_pks.sort();
         for pk in scoped_pks {
             data.extend_from_slice(pk.as_bytes());
             data.push(0x01);
-            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.extend_from_slice(entry.private[pk].as_bytes());
             data.push(0x00);
         }
     }
@@ -981,12 +981,12 @@ fn v6_mac_bytes(vault: &types::Vault, groups: &BTreeMap<String, Vec<String>>, da
         data.extend_from_slice(entry.shared.as_bytes());
         data.push(0x00);
 
-        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        let mut scoped_pks: Vec<&String> = entry.private.keys().collect();
         scoped_pks.sort();
         for pk in scoped_pks {
             data.extend_from_slice(pk.as_bytes());
             data.push(0x01);
-            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.extend_from_slice(entry.private[pk].as_bytes());
             data.push(0x00);
         }
 
@@ -1371,7 +1371,7 @@ mod tests {
             "KEY".into(),
             types::SecretEntry {
                 shared: "ciphertext".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1440,7 +1440,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: shared.clone(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1450,7 +1450,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("original"))]),
             recipients: recipients_map.clone(),
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1499,7 +1499,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared,
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1509,7 +1509,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map.clone(),
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1551,7 +1551,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1559,7 +1559,7 @@ mod tests {
             "KEY2".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val2", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1572,7 +1572,7 @@ mod tests {
                 ("KEY2".into(), crate::testutil::secret("val2")),
             ]),
             recipients: recipients_map.clone(),
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1614,7 +1614,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: shared.clone(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1624,7 +1624,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1636,7 +1636,7 @@ mod tests {
         let current = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: current_recipients,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1678,7 +1678,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared,
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1688,7 +1688,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("shared_val"))]),
             recipients: recipients_map.clone(),
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1698,18 +1698,18 @@ mod tests {
         let mut current = original.clone();
         let mut key_scoped = HashMap::new();
         key_scoped.insert(pubkey.clone(), crate::testutil::secret("my_override"));
-        current.scoped.insert("KEY1".into(), key_scoped);
+        current.private.insert("KEY1".into(), key_scoped);
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
 
-        assert!(vault.secrets["KEY1"].scoped.contains_key(&pubkey));
-        let scoped_val = decrypt_value(&vault.secrets["KEY1"].scoped[&pubkey], &identity).unwrap();
+        assert!(vault.secrets["KEY1"].private.contains_key(&pubkey));
+        let scoped_val = decrypt_value(&vault.secrets["KEY1"].private[&pubkey], &identity).unwrap();
         assert_eq!(&scoped_val[..], b"my_override");
 
         // Now remove the scoped override.
         let original_with_scoped = current.clone();
         let mut current_no_scoped = original_with_scoped.clone();
-        current_no_scoped.scoped.remove("KEY1");
+        current_no_scoped.private.remove("KEY1");
 
         save_vault(
             path.to_str().unwrap(),
@@ -1719,7 +1719,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(vault.secrets["KEY1"].scoped.is_empty());
+        assert!(vault.secrets["KEY1"].private.is_empty());
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1754,7 +1754,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1764,7 +1764,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1823,7 +1823,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[recipient]).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1833,7 +1833,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1884,7 +1884,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[other_recipient]).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1895,7 +1895,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1955,7 +1955,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::new(),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -1971,7 +1971,7 @@ mod tests {
         assert!(result.is_ok());
         let (_, murk, _) = result.unwrap();
         assert!(murk.values.is_empty());
-        assert!(murk.scoped.is_empty());
+        assert!(murk.private.is_empty());
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -2005,7 +2005,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[recipient]).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -2015,7 +2015,7 @@ mod tests {
         let original = types::Murk {
             values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
             recipients: recipients_map,
-            scoped: HashMap::new(),
+            private: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
             ..Default::default()
@@ -2073,7 +2073,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -2126,7 +2126,7 @@ mod tests {
             "KEY".into(),
             types::SecretEntry {
                 shared: "ciphertext".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -2143,7 +2143,7 @@ mod tests {
             .secrets
             .get_mut("KEY")
             .unwrap()
-            .scoped
+            .private
             .insert("age1bob".into(), "scoped-ct".into());
 
         let mac_with_scoped = compute_mac(

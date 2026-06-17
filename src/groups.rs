@@ -13,7 +13,7 @@
 use crate::error::MurkError;
 use crate::types;
 
-/// Reserved group names. These route to the shared/scoped tiers instead of a
+/// Reserved group names. These route to the shared/private tiers instead of a
 /// stored group, so a real group can't take these names.
 pub const RESERVED_GROUP_NAMES: &[&str] = &["everyone", "me", "all", "self", "mine", "shared"];
 

@@ -876,7 +876,11 @@ fn tier_get(
 ) -> Option<zeroize::Zeroizing<String>> {
     match tier {
         SecretTier::Everyone => current.values.get(key).cloned(),
-        SecretTier::Me => current.scoped.get(key).and_then(|m| m.get(pubkey)).cloned(),
+        SecretTier::Me => current
+            .private
+            .get(key)
+            .and_then(|m| m.get(pubkey))
+            .cloned(),
         SecretTier::Group(name) => current.grouped.get(key).and_then(|m| m.get(name)).cloned(),
     }
 }
@@ -899,7 +903,7 @@ fn tier_set(
         SecretTier::Me => {
             // me is an override; leave the base tier untouched.
             current
-                .scoped
+                .private
                 .entry(key.to_string())
                 .or_default()
                 .insert(pubkey.to_string(), value);
@@ -927,7 +931,7 @@ fn tier_list(
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         SecretTier::Me => current
-            .scoped
+            .private
             .iter()
             .filter_map(|(k, m)| m.get(pubkey).map(|v| (k.clone(), v.clone())))
             .collect(),
@@ -1073,7 +1077,7 @@ fn cmd_import(file: &str, force: bool, group: Option<&str>, vault_path: &str) {
             .filter(|(k, _)| {
                 current.values.contains_key(k)
                     || current.grouped.contains_key(k)
-                    || current.scoped.contains_key(k)
+                    || current.private.contains_key(k)
             })
             .map(|(k, _)| k.as_str())
             .collect();
@@ -1667,12 +1671,12 @@ fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &s
                 match &tier {
                     SecretTier::Everyone => {
                         current.values.remove(k);
-                        current.scoped.remove(k);
+                        current.private.remove(k);
                         current.grouped.remove(k);
                         vault.schema.remove(k);
                     }
                     SecretTier::Me => {
-                        if let Some(m) = current.scoped.get_mut(k) {
+                        if let Some(m) = current.private.get_mut(k) {
                             m.remove(&pubkey);
                         }
                     }

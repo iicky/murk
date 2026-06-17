@@ -6,7 +6,7 @@ use zeroize::Zeroizing;
 
 use crate::types;
 
-/// Merge scoped overrides over shared values and filter by tag.
+/// Merge private overrides over shared values and filter by tag.
 /// Returns raw (unescaped) values suitable for env var injection.
 ///
 /// Values are wrapped in `Zeroizing` so plaintext is cleared from memory
@@ -26,15 +26,15 @@ pub fn resolve_secrets(
         .collect::<BTreeMap<String, Zeroizing<String>>>();
 
     // Apply named-group values we can read. A group secret has no shared value,
-    // so this is usually an addition; scoped (below) still wins over it.
+    // so this is usually an addition; the private override (below) still wins over it.
     for (key, group_map) in &murk.grouped {
         if let Some(value) = group_map.values().next() {
             values.insert(key.clone(), value.clone());
         }
     }
 
-    // Apply scoped overrides.
-    for (key, scoped_map) in &murk.scoped {
+    // Apply private overrides.
+    for (key, scoped_map) in &murk.private {
         if let Some(value) = scoped_map.get(pubkey) {
             values.insert(key.clone(), value.clone());
         }
@@ -87,8 +87,8 @@ pub fn decrypt_vault_values(
         {
             values.insert(key.clone(), value);
         }
-        // Scoped override takes priority.
-        if let Some(encoded) = entry.scoped.get(&pubkey)
+        // Private override takes priority.
+        if let Some(encoded) = entry.private.get(&pubkey)
             && let Ok(value) = crate::decrypt_value(encoded, identity).and_then(|pt| {
                 crate::plaintext_bytes_to_zeroizing_string(&pt)
                     .map_err(|e| crate::error::MurkError::Secret(e.to_string()))
@@ -246,7 +246,7 @@ mod tests {
         murk.values.insert("KEY".into(), secret("shared"));
         let mut scoped = HashMap::new();
         scoped.insert("age1pk".into(), secret("override"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         let exports = export_secrets(&vault, &murk, "age1pk", &[]);
         assert_eq!(exports["KEY"].as_str(), "override");
@@ -497,7 +497,7 @@ mod tests {
         murk.values.insert("KEY".into(), secret("shared"));
         let mut scoped = HashMap::new();
         scoped.insert("age1pk".into(), secret("override"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         let resolved = resolve_secrets(&vault, &murk, "age1pk", &[]);
         assert_eq!(resolved["KEY"].as_str(), "override");
@@ -584,16 +584,16 @@ mod tests {
 
         let mut murk = empty_murk();
         murk.values.insert("KEY".into(), secret("shared"));
-        // Scoped override for a pubkey NOT in vault.recipients.
+        // Private override for a pubkey NOT in vault.recipients.
         let mut scoped = HashMap::new();
         scoped.insert("age1outsider".into(), secret("outsider_val"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         // The outsider's override should still be applied (resolve doesn't gate on recipient list).
         let resolved = resolve_secrets(&vault, &murk, "age1outsider", &[]);
         assert_eq!(resolved["KEY"].as_str(), "outsider_val");
 
-        // Alice gets the shared value since she has no scoped override.
+        // Alice gets the shared value since she has no private override.
         let resolved_alice = resolve_secrets(&vault, &murk, "age1alice", &[]);
         assert_eq!(resolved_alice["KEY"].as_str(), "shared");
     }
@@ -620,7 +620,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -628,7 +628,7 @@ mod tests {
             "KEY2".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -652,7 +652,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -692,7 +692,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -700,7 +700,7 @@ mod tests {
             "KEY2".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -734,7 +734,7 @@ mod tests {
             "KEY1".into(),
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );

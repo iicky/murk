@@ -222,7 +222,7 @@ mod tests {
             "DATABASE_URL".into(),
             SecretEntry {
                 shared: "encrypted-value".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -367,14 +367,14 @@ mod tests {
         let path = dir.join("test.murk");
 
         let mut vault = test_vault();
-        let mut scoped = BTreeMap::new();
-        scoped.insert("age1bob".into(), "encrypted-for-bob".into());
+        let mut private = BTreeMap::new();
+        private.insert("age1bob".into(), "encrypted-for-bob".into());
 
         vault.secrets.insert(
             "DATABASE_URL".into(),
             SecretEntry {
                 shared: "encrypted-value".into(),
-                scoped,
+                private,
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -383,7 +383,7 @@ mod tests {
         let read_vault = read(&path).unwrap();
 
         let entry = &read_vault.secrets["DATABASE_URL"];
-        assert_eq!(entry.scoped["age1bob"], "encrypted-for-bob");
+        assert_eq!(entry.private["age1bob"], "encrypted-for-bob");
 
         fs::remove_dir_all(&dir).unwrap();
     }

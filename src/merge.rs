@@ -359,8 +359,9 @@ fn merge_secrets_normal(
                     _ => o.shared.clone(),
                 };
 
-                let scoped =
-                    merge_scoped(&b.scoped, &o.scoped, &t.scoped, key, "scoped", conflicts);
+                let private = merge_scoped(
+                    &b.private, &o.private, &t.private, key, "private", conflicts,
+                );
                 let grouped = merge_scoped(
                     &b.grouped, &o.grouped, &t.grouped, key, "grouped", conflicts,
                 );
@@ -368,7 +369,7 @@ fn merge_secrets_normal(
                     key.to_string(),
                     SecretEntry {
                         shared,
-                        scoped,
+                        private,
                         grouped,
                     },
                 );
@@ -710,7 +711,7 @@ mod tests {
             "DB_URL".into(),
             SecretEntry {
                 shared: "base-cipher-db".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -748,7 +749,7 @@ mod tests {
             "API_KEY".into(),
             SecretEntry {
                 shared: "ours-cipher-api".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -779,7 +780,7 @@ mod tests {
             "STRIPE_KEY".into(),
             SecretEntry {
                 shared: "theirs-cipher-stripe".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -799,7 +800,7 @@ mod tests {
             "API_KEY".into(),
             SecretEntry {
                 shared: "ours-cipher-api".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -809,7 +810,7 @@ mod tests {
             "STRIPE_KEY".into(),
             SecretEntry {
                 shared: "theirs-cipher-stripe".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -888,7 +889,7 @@ mod tests {
             "NEW_KEY".into(),
             SecretEntry {
                 shared: "ours-cipher".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -897,7 +898,7 @@ mod tests {
             "NEW_KEY".into(),
             SecretEntry {
                 shared: "theirs-cipher".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -1038,21 +1039,21 @@ mod tests {
         ours.secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "alice-scope".into());
         let mut theirs = base.clone();
         theirs
             .secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1bob".into(), "bob-scope".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
         assert!(r.conflicts.is_empty());
         let entry = &r.vault.secrets["DB_URL"];
-        assert_eq!(entry.scoped["age1alice"], "alice-scope");
-        assert_eq!(entry.scoped["age1bob"], "bob-scope");
+        assert_eq!(entry.private["age1alice"], "alice-scope");
+        assert_eq!(entry.private["age1bob"], "bob-scope");
     }
 
     #[test]
@@ -1061,26 +1062,26 @@ mod tests {
         base.secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "base-scope".into());
 
         let mut ours = base.clone();
         ours.secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "ours-scope".into());
         let mut theirs = base.clone();
         theirs
             .secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "theirs-scope".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
         assert_eq!(r.conflicts.len(), 1);
-        assert!(r.conflicts[0].field.contains("scoped"));
+        assert!(r.conflicts[0].field.contains("private"));
     }
 
     #[test]
@@ -1098,7 +1099,7 @@ mod tests {
             .secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "alice-scoped".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
@@ -1124,7 +1125,7 @@ mod tests {
             .secrets
             .get_mut("DB_URL")
             .unwrap()
-            .scoped
+            .private
             .insert("age1alice".into(), "alice-scoped".into());
 
         let r = merge_vaults(&base, &ours, &theirs);
@@ -1147,7 +1148,7 @@ mod tests {
             "NEW_KEY".into(),
             SecretEntry {
                 shared: "theirs-new".into(),
-                scoped: BTreeMap::new(),
+                private: BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );

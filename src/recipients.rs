@@ -148,11 +148,11 @@ pub fn revoke_recipient(
         }
 
         // Remove their scoped entries.
-        for scoped_map in murk.scoped.values_mut() {
+        for scoped_map in murk.private.values_mut() {
             scoped_map.remove(pubkey);
         }
         for entry in vault.secrets.values_mut() {
-            entry.scoped.remove(pubkey);
+            entry.private.remove(pubkey);
         }
 
         // Remove them from any groups they belonged to. save_vault re-encrypts
@@ -176,7 +176,7 @@ pub fn revoke_recipient(
         .iter()
         .filter(|(_, entry)| {
             !entry.shared.is_empty()
-                || pubkeys.iter().any(|pk| entry.scoped.contains_key(pk))
+                || pubkeys.iter().any(|pk| entry.private.contains_key(pk))
                 || entry.grouped.keys().any(|g| revoked_groups.contains(g))
         })
         .map(|(key, _)| key.clone())
@@ -367,7 +367,7 @@ mod tests {
             "KEY".into(),
             types::SecretEntry {
                 shared: "ciphertext".into(),
-                scoped: std::collections::BTreeMap::new(),
+                private: std::collections::BTreeMap::new(),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -439,19 +439,19 @@ mod tests {
             "KEY".into(),
             types::SecretEntry {
                 shared: "ct".into(),
-                scoped: BTreeMap::from([(pk2.clone(), "scoped_ct".into())]),
+                private: BTreeMap::from([(pk2.clone(), "scoped_ct".into())]),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut murk = empty_murk();
         let mut scoped = HashMap::new();
         scoped.insert(pk2.clone(), secret("scoped_val"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
 
-        assert!(vault.secrets["KEY"].scoped.is_empty());
-        assert!(murk.scoped["KEY"].is_empty());
+        assert!(vault.secrets["KEY"].private.is_empty());
+        assert!(murk.private["KEY"].is_empty());
     }
 
     #[test]
@@ -483,7 +483,7 @@ mod tests {
             "DB_URL".into(),
             types::SecretEntry {
                 shared: "ct".into(),
-                scoped: BTreeMap::from([(pk2.clone(), "scoped_db".into())]),
+                private: BTreeMap::from([(pk2.clone(), "scoped_db".into())]),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
@@ -491,14 +491,14 @@ mod tests {
             "API_KEY".into(),
             types::SecretEntry {
                 shared: "ct2".into(),
-                scoped: BTreeMap::from([(pk2.clone(), "scoped_api".into())]),
+                private: BTreeMap::from([(pk2.clone(), "scoped_api".into())]),
                 grouped: std::collections::BTreeMap::default(),
             },
         );
         let mut murk = empty_murk();
-        murk.scoped
+        murk.private
             .insert("DB_URL".into(), HashMap::from([(pk2.clone(), secret("v"))]));
-        murk.scoped.insert(
+        murk.private.insert(
             "API_KEY".into(),
             HashMap::from([(pk2.clone(), secret("v2"))]),
         );
@@ -507,8 +507,8 @@ mod tests {
         let mut keys = result.exposed_keys.clone();
         keys.sort();
         assert_eq!(keys, vec!["API_KEY", "DB_URL"]);
-        assert!(vault.secrets["DB_URL"].scoped.is_empty());
-        assert!(vault.secrets["API_KEY"].scoped.is_empty());
+        assert!(vault.secrets["DB_URL"].private.is_empty());
+        assert!(vault.secrets["API_KEY"].private.is_empty());
     }
 
     // ── list_recipients tests ──

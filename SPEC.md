@@ -9,7 +9,7 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 - Stores encrypted secrets in a single `.murk` file safe to commit to git
 - Uses one key (`MURK_KEY`) to unlock everything, stored in `~/.config/murk/keys/`
 - Integrates naturally with `direnv`
-- Supports multiple users and per-identity scoped secrets
+- Supports multiple users and per-identity private secrets
 - Documents itself via `murk info` — no key required
 
 ---
@@ -27,7 +27,7 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 ## Terminology
 
 - **murk** — the shared layer. Secrets encrypted to all recipients (the implicit `everyone` group).
-- **mote** — a scoped secret. Encrypted to a single recipient's key. Overrides the shared value during export. On the CLI this is the `me` tier (`--group me`).
+- **mote** — a private secret. Encrypted to a single recipient's key. Overrides the shared value during export. On the CLI this is the `me` tier (`--group me`).
 - **group** — a named subset of recipients. A secret assigned to a group is encrypted only to that group's members, so a leaked member key can't read secrets outside that member's groups. `everyone` (all recipients) and `me` (just you) are the two reserved, implicit groups; named groups (e.g. `prod`) sit between them.
 
 ---
@@ -41,7 +41,7 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 | `MURK_VAULT`   | No       | Vault filename. Defaults to `.murk`.                    |
 | `MURK_STRICT`  | No       | When `1`/`true`/`yes`, fail closed rather than let a secret touch disk: requires `murk edit`'s scratch file to live on a RAM-backed filesystem, and refuses `export`/`get` when stdout is a regular file (plaintext to disk). |
 
-Your identity is your key. murk derives your public key from `MURK_KEY` or `MURK_KEY_FILE` to determine which scoped secrets are yours and to identify you in the recipient list.
+Your identity is your key. murk derives your public key from `MURK_KEY` or `MURK_KEY_FILE` to determine which private secrets are yours and to identify you in the recipient list.
 
 ### Hardware-backed identities
 
@@ -54,7 +54,7 @@ AGE-PLUGIN-YUBIKEY-1Q9WFTQQVZN3FASCJ3N9WEHUMFCYMCQSA2F8YVRMMGY6N76C6DMC6A8FTMP
 
 The `# public key:` header is required — murk reads it to determine the recipient without spawning the plugin. The `AGE-PLUGIN-<NAME>-1...` line is the opaque pointer the plugin binary understands. On decrypt, murk invokes `age-plugin-<name>` (which must be on `$PATH`) and the plugin may prompt the user for physical consent (touch, PIN). Plugin identities have no BIP39 recovery phrase; `murk recover` errors on them. Back up a second hardware device as a vault recipient instead.
 
-Setting `MURK_KEY` (the inline env var) to an `AGE-PLUGIN-...` string is rejected — bare plugin identities don't carry the recipient pubkey, so murk can't resolve scoped secrets without spawning the plugin. Use a file path via `MURK_KEY_FILE`.
+Setting `MURK_KEY` (the inline env var) to an `AGE-PLUGIN-...` string is rejected — bare plugin identities don't carry the recipient pubkey, so murk can't resolve private secrets without spawning the plugin. Use a file path via `MURK_KEY_FILE`.
 
 ### Key storage
 
@@ -141,11 +141,11 @@ Key names must be valid shell identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Secrets
 
-Each secret has a `shared` field containing age ciphertext encrypted to all recipients (the `everyone` group), an optional `scoped` map of recipient pubkey to age ciphertext encrypted to only that recipient (the `me` tier), and an optional `grouped` map of group name to age ciphertext encrypted to that group's current members.
+Each secret has a `shared` field containing age ciphertext encrypted to all recipients (the `everyone` group), an optional `scoped` map of recipient pubkey to age ciphertext encrypted to only that recipient (the **private** / `me` tier — the on-disk field is named `scoped` for compatibility with vaults written before the tier was renamed), and an optional `grouped` map of group name to age ciphertext encrypted to that group's current members.
 
 A secret's base tier is exactly one of: shared (`everyone`), or a single named group (in which case `shared` is empty and `grouped` holds one entry). The `me` tier is a per-identity override layered on top. Group *names* are plaintext, like key names; group *membership* lives in the encrypted meta. age determines readability — a non-member simply can't decrypt a `grouped` ciphertext.
 
-During `murk export` / `get`, resolution is: a personal scoped (`me`) override first, then a named-group value the current identity can read, then the shared value.
+During `murk export` / `get`, resolution is: a personal private (`me`) override first, then a named-group value the current identity can read, then the shared value.
 
 All age ciphertext is base64-encoded (standard alphabet, with padding).
 
@@ -226,7 +226,7 @@ Interactive setup. Prompts for a display name. Then:
 
 Adds or updates a secret. Prompts for the value interactively (hidden input via rpassword) or reads from stdin when piped.
 
-`--group` selects who can read it: `everyone` (the default; the shared/murk layer), `me` (only your key; the scoped/mote layer), or a named group (encrypted to that group's members; you must be a member). Assigning a secret to a named group makes that group its sole base tier — any existing shared value is dropped. `--scoped` is a deprecated alias for `--group me`.
+`--group` selects who can read it: `everyone` (the default; the shared/murk layer), `me` (only your key; the private/mote layer), or a named group (encrypted to that group's members; you must be a member). Assigning a secret to a named group makes that group its sole base tier — any existing shared value is dropped. `--scoped` is a deprecated alias for `--group me`.
 
 Key names are validated as shell identifiers. Invalid names are rejected.
 
@@ -248,7 +248,7 @@ Replaces a secret value. Prompts for the new value interactively, or generates a
 
 ### `murk rm KEY [--vault NAME]`
 
-Removes a key from the vault (shared value, schema entry, and all scoped entries). No confirmation prompt — git is your safety net.
+Removes a key from the vault (shared value, schema entry, and all private entries). No confirmation prompt — git is your safety net.
 
 ---
 
@@ -274,7 +274,7 @@ Sets metadata for a key in the plaintext schema. Does not touch encrypted values
 
 ### `murk edit [KEY] [--scoped] [--group NAME] [--vault NAME]`
 
-Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits scoped overrides (motes) instead of shared values; with `--group NAME`, edits the values for that named group (you must be a member).
+Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits private overrides (motes) instead of shared values; with `--group NAME`, edits the values for that named group (you must be a member).
 
 The plaintext buffer is written to a mode-0600 temp file (preferring `XDG_RUNTIME_DIR`), then overwritten with zeros and deleted after the editor exits. An empty value or non-zero editor exit aborts without saving.
 
@@ -323,7 +323,7 @@ Emits schema-only context safe to paste into an AI agent prompt — key names, d
 
 ### `murk agent grant --name NAME --only KEY [--ttl DUR] [--out PATH] [--vault NAME]`
 
-Mints a fresh ephemeral age identity and gives it read access to exactly the `--only` keys (repeatable, required) — never the operator's own key. The agent becomes a recipient of the encrypted meta and gets a `scoped` ciphertext of each `--only` key's shared value, but is excluded from the `everyone` layer. Records grant metadata (scope, TTL, issuer) in the encrypted meta. `--ttl` accepts `30m`/`2h`/`7d` (default `2h`); it is advisory (see THREAT_MODEL.md). The agent key is written to `~/.config/murk/agent-keys/<vault-hash>-NAME` (or `--out PATH`, or `--out -` to stream it to stdout). Run the agent with `MURK_KEY_FILE` pointing at that key and `MURK_STRICT=1` so it can't fall back to the operator's stored key.
+Mints a fresh ephemeral age identity and gives it read access to exactly the `--only` keys (repeatable, required) — never the operator's own key. The agent becomes a recipient of the encrypted meta and gets a private (per-recipient) ciphertext of each `--only` key's shared value, but is excluded from the `everyone` layer. Records grant metadata (scope, TTL, issuer) in the encrypted meta. `--ttl` accepts `30m`/`2h`/`7d` (default `2h`); it is advisory (see THREAT_MODEL.md). The agent key is written to `~/.config/murk/agent-keys/<vault-hash>-NAME` (or `--out PATH`, or `--out -` to stream it to stdout). Run the agent with `MURK_KEY_FILE` pointing at that key and `MURK_STRICT=1` so it can't fall back to the operator's stored key.
 
 ---
 
@@ -335,7 +335,7 @@ Lists active grants: name, truncated pubkey, scope, and TTL status (time remaini
 
 ### `murk agent revoke NAME [--rotate] [--vault NAME]`
 
-Removes the grant and its ephemeral recipient (clearing the agent's scoped ciphertexts), persisting before any rotation. Because the handed-off key can still decrypt old `.murk` versions from git history, rotation is the real close: `--rotate` (or the interactive prompt) re-prompts for new values for the grant's scope.
+Removes the grant and its ephemeral recipient (clearing the agent's private ciphertexts), persisting before any rotation. Because the handed-off key can still decrypt old `.murk` versions from git history, rotation is the real close: `--rotate` (or the interactive prompt) re-prompts for new values for the grant's scope.
 
 ---
 
@@ -403,7 +403,7 @@ With `--member`, removes a recipient from the group and re-encrypts its secrets 
 
 ### `murk circle revoke RECIPIENT [--rotate] [--vault NAME]`
 
-Removes a recipient by pubkey or display name. Re-encrypts all shared secrets without their key. Removes their scoped entries.
+Removes a recipient by pubkey or display name. Re-encrypts all shared secrets without their key. Removes their private entries.
 
 Lists the secrets the revoked recipient had access to. With `--rotate`, prompts for a new value for each in the same session and re-encrypts them. Without the flag on an interactive terminal, offers to rotate; otherwise prints a hint. The recipient can still decrypt previous versions from git history, so rotation is the only way to close the exposure.
 
@@ -463,7 +463,7 @@ Prints shell completions to stdout (`generate`) or installs them to the shell's 
 
 - Repo leaks — `.murk` is safe to commit, useless without a private key
 - Accidental secret exposure — `.env` is never committed if `.gitignore` is set correctly
-- Private overrides — scoped secrets (motes) are encrypted only to their owner
+- Private overrides — private secrets (motes) are encrypted only to their owner
 
 **What murk does not protect against:**
 
