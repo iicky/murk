@@ -3956,6 +3956,49 @@ fn agent_revoke_removes_grant_and_access() {
 }
 
 #[test]
+fn agent_grant_tracks_rotation_of_granted_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_v1\n")
+        .assert()
+        .success();
+
+    let agent_key_path = dir.path().join("agent.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "grant",
+            "--name",
+            "codex",
+            "--only",
+            "STRIPE_KEY",
+            "--out",
+        ])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success();
+    let agent_key = read_agent_key(&agent_key_path);
+
+    // Operator rotates the granted key to a new value while the grant is active.
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_v2\n")
+        .assert()
+        .success();
+
+    // The agent sees the new value, not the stale snapshot.
+    murk(&dir, &agent_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_v2"));
+}
+
+#[test]
 fn strict_mode_disables_key_auto_discovery() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);

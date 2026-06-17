@@ -502,6 +502,38 @@ fn rebuild_grouped(
     Ok(grouped)
 }
 
+/// Keep each active grant's scoped copy of `key` in sync with the key's current
+/// shared value. A grant stages a per-agent scoped copy at grant time; without
+/// this, rotating a granted key would leave the agent reading the stale value
+/// (the operator can't see the agent's ciphertext to re-encrypt it, and
+/// `rebuild_scoped` preserves it as-is). When the value changed since load and
+/// the operator can read it, re-encrypt the agent's copy; unchanged values keep
+/// their preserved ciphertext (no churn), and keys the operator can't read are
+/// left untouched.
+fn resync_grant_scoped(
+    key: &str,
+    scoped: &mut BTreeMap<String, String>,
+    original: &types::Murk,
+    current: &types::Murk,
+) -> Result<(), MurkError> {
+    let Some(value) = current.values.get(key) else {
+        return Ok(());
+    };
+    if original.values.get(key) == Some(value) {
+        return Ok(());
+    }
+    for grant in current.grants.values() {
+        if grant.scope.iter().any(|k| k == key) {
+            let recipient = crypto::parse_recipient(&grant.pubkey)?;
+            scoped.insert(
+                grant.pubkey.clone(),
+                encrypt_value(value.as_bytes(), &[recipient])?,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Save the vault: compare against original state and only re-encrypt changed values.
 /// Unchanged values keep their original ciphertext for minimal git diffs.
 pub fn save_vault(
@@ -599,7 +631,8 @@ pub fn save_vault(
             original,
             current,
         )?;
-        let scoped = rebuild_scoped(key, vault, original, current)?;
+        let mut scoped = rebuild_scoped(key, vault, original, current)?;
+        resync_grant_scoped(key, &mut scoped, original, current)?;
         let grouped = rebuild_grouped(key, vault, &changed_groups, original, current)?;
         new_secrets.insert(
             key.clone(),
