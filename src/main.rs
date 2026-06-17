@@ -425,6 +425,47 @@ enum AgentCommand {
         #[arg(required = true)]
         command: Vec<String>,
     },
+
+    /// Mint a short-lived ephemeral key that can read only the named secrets
+    Grant {
+        /// Grant name (used to revoke it later)
+        #[arg(long)]
+        name: String,
+        /// Keys this grant can read (required — fails closed)
+        #[arg(long, required = true)]
+        only: Vec<String>,
+        /// Time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)
+        #[arg(long, default_value = "2h")]
+        ttl: String,
+        /// Where to write the agent key: a path, or `-` for stdout
+        #[arg(long)]
+        out: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// List active agent grants and their TTLs
+    Ls {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Revoke an agent grant and rotate the keys it could read
+    Revoke {
+        /// Grant name
+        name: String,
+        /// Rotate the keys it could read in the same session
+        #[arg(long)]
+        rotate: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2866,6 +2907,237 @@ fn cmd_agent_exec(command: &[String], only: &[String], vault_path: &str) {
     cmd_exec(command, only, &[], /* clean_env */ true, vault_path);
 }
 
+fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, vault_path: &str) {
+    use age::secrecy::ExposeSecret;
+
+    try_or_die(murk_cli::validate_grant_name(name));
+    let ttl_dur = try_or_die(murk_cli::parse_ttl(ttl));
+
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
+    let issuer = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    let original = murk.clone();
+    let mut current = murk;
+
+    // Mint a fresh ephemeral identity for the agent — never the operator's key.
+    let agent_id = age::x25519::Identity::generate();
+    let agent_secret = agent_id.to_string();
+    let agent_pubkey = agent_id.to_public().to_string();
+
+    // The agent becomes a recipient (so it can decrypt meta and its scoped
+    // values) named for the grant, then we stage the scoped copies + metadata.
+    vault.recipients.push(agent_pubkey.clone());
+    current
+        .recipients
+        .insert(agent_pubkey.clone(), format!("agent:{name}"));
+    let entry = try_or_die(murk_cli::create_grant(
+        &mut current,
+        name,
+        &agent_pubkey,
+        only,
+        &issuer,
+        chrono::Utc::now(),
+        ttl_dur,
+    ));
+
+    save_vault(vault_path, &mut vault, &original, &current);
+
+    eprintln!(
+        "{} granted {} read access to {} key{} until {}",
+        "◆".magenta(),
+        name.bold(),
+        entry.scope.len(),
+        if entry.scope.len() == 1 { "" } else { "s" },
+        entry.expires_at.dimmed(),
+    );
+    for key in &entry.scope {
+        eprintln!("  {} {}", "▸".dimmed(), key.bold());
+    }
+
+    // Hand off the ephemeral key.
+    let secret = agent_secret.expose_secret();
+    match out {
+        Some("-") => {
+            println!("{secret}");
+            eprintln!(
+                "{} key streamed to stdout — capture it now; it is not stored",
+                "⚠".yellow()
+            );
+        }
+        Some(path) => {
+            try_or_die(murk_cli::write_key_to_file(Path::new(path), secret));
+            print_grant_handoff(only, path);
+        }
+        None => {
+            let path = try_or_die(murk_cli::agent_key_file_path(vault_path, name));
+            try_or_die(murk_cli::write_key_to_file(&path, secret));
+            print_grant_handoff(only, &path.display().to_string());
+        }
+    }
+
+    eprintln!();
+    eprintln!(
+        "  {}",
+        "the TTL is advisory — run `murk agent revoke` and rotate to truly close access".dimmed()
+    );
+}
+
+/// Print how to run an agent with a grant key file, and the containment caveat.
+fn print_grant_handoff(only: &[String], key_path: &str) {
+    eprintln!();
+    eprintln!(
+        "{} agent key written to {}",
+        "ok".green().bold(),
+        key_path.bold()
+    );
+    eprintln!(
+        "  {}",
+        format!(
+            "run the agent with: MURK_KEY_FILE={key_path} MURK_STRICT=1 murk agent exec --only {} -- <cmd>",
+            only.join(" ")
+        )
+        .dimmed()
+    );
+    eprintln!(
+        "  {}",
+        "for real isolation, run the agent in a sandbox that can't read ~/.config/murk/keys"
+            .dimmed()
+    );
+}
+
+fn cmd_agent_ls(json: bool, vault_path: &str) {
+    let (_vault, murk, _identity) = load_vault(vault_path);
+    let now = chrono::Utc::now();
+
+    if json {
+        let grants: Vec<serde_json::Value> = murk
+            .grants
+            .iter()
+            .map(|(name, g)| {
+                serde_json::json!({
+                    "name": name,
+                    "pubkey": g.pubkey,
+                    "scope": g.scope,
+                    "issued_at": g.issued_at,
+                    "expires_at": g.expires_at,
+                    "expired": grant_is_expired(&g.expires_at, now),
+                })
+            })
+            .collect();
+        let mut s = serde_json::to_string_pretty(&grants).unwrap();
+        s.push('\n');
+        print!("{s}");
+        return;
+    }
+
+    if murk.grants.is_empty() {
+        eprintln!("{} no active grants", "◆".magenta());
+        return;
+    }
+
+    for (name, g) in &murk.grants {
+        let status = grant_status(&g.expires_at, now);
+        eprintln!(
+            "{} {}  {}  {}",
+            "◆".magenta(),
+            name.bold(),
+            murk_cli::truncate_pubkey(&g.pubkey).dimmed(),
+            status,
+        );
+        eprintln!("  {}", g.scope.join(", ").dimmed());
+    }
+}
+
+fn cmd_agent_revoke(name: &str, rotate: bool, vault_path: &str) {
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
+    let original = murk.clone();
+    let mut current = murk;
+
+    // Remove the grant record, then revoke its ephemeral recipient (which clears
+    // the agent's scoped ciphertexts). Persist before rotating so the agent is
+    // durably gone even if the rotation prompts are aborted.
+    let grant = try_or_die(murk_cli::remove_grant(&mut current, name));
+    try_or_die(murk_cli::revoke_recipient(
+        &mut vault,
+        &mut current,
+        &grant.pubkey,
+    ));
+    save_vault(vault_path, &mut vault, &original, &current);
+
+    eprintln!("{} revoked grant {}", "◆".magenta(), name.bold());
+
+    // The agent could read exactly its scope (it was never in the shared layer),
+    // so rotate those keys — that's the real close, since the handed-off key can
+    // still decrypt old `.murk` versions from git history.
+    if !grant.scope.is_empty() {
+        let n = grant.scope.len();
+        let plural = if n == 1 { "" } else { "s" };
+        eprintln!();
+        eprintln!(
+            "{} the agent could read {n} secret{plural} — rotate them:",
+            "⚠".yellow(),
+        );
+        for key in &grant.scope {
+            eprintln!("  {} {}", "▸".dimmed(), key.bold());
+        }
+        eprintln!();
+
+        let do_rotate = rotate
+            || (io::stdin().is_terminal() && confirm(&format!("rotate {n} secret{plural} now?")));
+        if do_rotate {
+            rotate_exposed(vault_path, &mut vault, &current, &grant.scope, &identity);
+        } else {
+            eprintln!(
+                "  {}",
+                "run `murk rotate KEY` to rotate each secret".dimmed()
+            );
+        }
+    }
+    eprintln!();
+    eprintln!(
+        "  {}",
+        "the agent's key can still decrypt previous versions from git history".dimmed()
+    );
+}
+
+/// True if `expires_at` (ISO-8601 UTC) is in the past.
+fn grant_is_expired(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(expires_at)
+        .map(|e| e.with_timezone(&chrono::Utc) <= now)
+        .unwrap_or(false)
+}
+
+/// A colored status string for a grant: time remaining, or how long expired.
+fn grant_status(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires_at) else {
+        return format!("expires {expires_at}").dimmed().to_string();
+    };
+    let exp = exp.with_timezone(&chrono::Utc);
+    if exp <= now {
+        format!("expired {} ago", human_duration(now - exp))
+            .yellow()
+            .to_string()
+    } else {
+        format!("expires in {}", human_duration(exp - now))
+            .green()
+            .to_string()
+    }
+}
+
+/// Render a duration roughly, e.g. `2h`, `45m`, `3d`. Coarse on purpose — grant
+/// TTLs are advisory, so minute-precision is plenty.
+fn human_duration(d: chrono::Duration) -> String {
+    let secs = d.num_seconds().abs();
+    if secs >= 86_400 {
+        format!("{}d", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}h", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
 fn cmd_agent_plan(tags: &[String], json: bool, output: Option<&str>, vault_path: &str) {
     let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
     let plan = murk_cli::agent_plan(&vault, tags);
@@ -3447,6 +3719,27 @@ fn main() {
                 vault,
                 command,
             } => cmd_agent_exec(&command, &only, &murk_cli::resolve_vault_path(&vault)),
+            AgentCommand::Grant {
+                name,
+                only,
+                ttl,
+                out,
+                vault,
+            } => cmd_agent_grant(
+                &name,
+                &only,
+                &ttl,
+                out.as_deref(),
+                &murk_cli::resolve_vault_path(&vault),
+            ),
+            AgentCommand::Ls { json, vault } => {
+                cmd_agent_ls(json, &murk_cli::resolve_vault_path(&vault));
+            }
+            AgentCommand::Revoke {
+                name,
+                rotate,
+                vault,
+            } => cmd_agent_revoke(&name, rotate, &murk_cli::resolve_vault_path(&vault)),
         },
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));

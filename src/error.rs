@@ -21,6 +21,8 @@ pub enum MurkError {
     Secret(String),
     /// Recipient group management (create, add/remove member, assign).
     Group(String),
+    /// Agent grant management (grant, revoke, list).
+    Grant(String),
     /// GitHub key fetch.
     GitHub(GitHubError),
     /// General I/O.
@@ -38,6 +40,7 @@ impl std::fmt::Display for MurkError {
             MurkError::Recipient(msg) => write!(f, "{msg}"),
             MurkError::Secret(msg) => write!(f, "{msg}"),
             MurkError::Group(msg) => write!(f, "{msg}"),
+            MurkError::Grant(msg) => write!(f, "{msg}"),
             MurkError::GitHub(e) => write!(f, "{e}"),
             MurkError::Io(e) => write!(f, "I/O error: {e}"),
         }

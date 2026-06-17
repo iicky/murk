@@ -26,6 +26,7 @@ pub mod error;
 pub(crate) mod export;
 pub(crate) mod git;
 pub mod github;
+pub(crate) mod grants;
 pub(crate) mod groups;
 pub mod hardening;
 pub(crate) mod info;
@@ -48,9 +49,10 @@ pub mod testutil;
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use agent::{AgentPlan, AgentPlanKey, agent_plan, format_agent_plan_text};
 pub use env::{
-    EnvrcStatus, KeySource, dotenv_has_murk_key, key_file_path, parse_env, resolve_key,
-    resolve_key_for_vault, resolve_key_with_source, warn_env_permissions, write_envrc,
-    write_key_ref_to_dotenv, write_key_to_dotenv, write_key_to_file,
+    EnvrcStatus, KeySource, agent_key_file_path, agent_keys_dir, dotenv_has_murk_key,
+    key_file_path, parse_env, resolve_key, resolve_key_for_vault, resolve_key_with_source,
+    warn_env_permissions, write_envrc, write_key_ref_to_dotenv, write_key_to_dotenv,
+    write_key_to_file,
 };
 pub use error::MurkError;
 pub use export::{
@@ -59,6 +61,7 @@ pub use export::{
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
 pub use github::{GitHubError, fetch_keys};
+pub use grants::{create_grant, parse_ttl, remove_grant, validate_grant_name};
 pub use groups::{
     add_member, create_group, delete_group, remove_member, resolve_member, validate_group_name,
 };
@@ -298,17 +301,29 @@ pub fn decrypt_vault(
         github_pins,
     } = resolve_meta_state(vault, identity)?;
 
+    // An agent grant is a recipient of the meta blob (so it can verify integrity
+    // and read its grant) but is deliberately excluded from the shared "everyone"
+    // layer. Such an identity legitimately cannot decrypt shared ciphertexts, so
+    // it skips them rather than erroring. A normal recipient that fails to decrypt
+    // shared is a genuine problem (a true outsider already failed at meta
+    // decryption above), so it still gets the clear "not a recipient" error.
+    let is_agent = grants.values().any(|g| g.pubkey == pubkey);
+
     // Decrypt shared values (skip scoped-only entries with empty shared ciphertext).
     let mut values: HashMap<String, Zeroizing<String>> = HashMap::new();
     for (key, entry) in &vault.secrets {
         if entry.shared.is_empty() {
             continue;
         }
-        let plaintext = decrypt_value(&entry.shared, identity).map_err(|_| {
-            MurkError::Crypto(crypto::CryptoError::Decrypt(
-                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into()
-            ))
-        })?;
+        let plaintext = match decrypt_value(&entry.shared, identity) {
+            Ok(plaintext) => plaintext,
+            Err(_) if is_agent => continue,
+            Err(_) => {
+                return Err(MurkError::Crypto(crypto::CryptoError::Decrypt(
+                    "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into(),
+                )));
+            }
+        };
         let value = plaintext_bytes_to_zeroizing_string(&plaintext)
             .map_err(|e| MurkError::Secret(format!("invalid UTF-8 in secret {key}: {e}")))?;
         values.insert(key.clone(), value);
@@ -495,12 +510,45 @@ pub fn save_vault(
     original: &types::Murk,
     current: &types::Murk,
 ) -> Result<(), MurkError> {
+    // The full recipient set encrypts the meta blob, so every recipient —
+    // including agent grants — can verify integrity and read group/grant state.
     let recipients = parse_recipients(&vault.recipients)?;
 
-    // Check if recipient list changed — forces full re-encryption of shared values.
-    let recipients_changed = {
-        let mut current_pks: Vec<&str> = vault.recipients.iter().map(String::as_str).collect();
-        let mut original_pks: Vec<&str> = original.recipients.keys().map(String::as_str).collect();
+    // Agent grant pubkeys are deliberately excluded from the shared "everyone"
+    // layer: a granted agent must read only the scoped values granted to it, not
+    // every shared secret. They remain meta recipients (above) but never receive
+    // the shared ciphertext.
+    let grant_pubkeys: BTreeSet<&str> =
+        current.grants.values().map(|g| g.pubkey.as_str()).collect();
+    let shared_recipients: Vec<crypto::MurkRecipient> = vault
+        .recipients
+        .iter()
+        .filter(|pk| !grant_pubkeys.contains(pk.as_str()))
+        .map(|pk| crypto::parse_recipient(pk))
+        .collect::<Result<_, _>>()?;
+
+    // Check if the *shared* recipient set (recipients minus agent grants) changed
+    // — that forces full re-encryption of shared values. Adding or removing an
+    // agent doesn't change this set, so it doesn't needlessly churn shared
+    // ciphertext (and never pulls an agent into the shared layer).
+    let shared_recipients_changed = {
+        let orig_grant_pubkeys: BTreeSet<&str> = original
+            .grants
+            .values()
+            .map(|g| g.pubkey.as_str())
+            .collect();
+        let mut current_pks: Vec<&str> = vault
+            .recipients
+            .iter()
+            .map(String::as_str)
+            .filter(|pk| !grant_pubkeys.contains(pk))
+            .collect();
+        let mut original_pks: Vec<&str> = original
+            .recipients
+            .keys()
+            .map(String::as_str)
+            .filter(|pk| !orig_grant_pubkeys.contains(pk))
+            .collect();
         current_pks.sort_unstable();
         original_pks.sort_unstable();
         current_pks != original_pks
@@ -546,8 +594,8 @@ pub fn save_vault(
         let shared = rebuild_shared(
             key,
             vault,
-            &recipients,
-            recipients_changed,
+            &shared_recipients,
+            shared_recipients_changed,
             original,
             current,
         )?;
