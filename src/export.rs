@@ -25,6 +25,14 @@ pub fn resolve_secrets(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<BTreeMap<String, Zeroizing<String>>>();
 
+    // Apply named-group values we can read. A group secret has no shared value,
+    // so this is usually an addition; scoped (below) still wins over it.
+    for (key, group_map) in &murk.grouped {
+        if let Some(value) = group_map.values().next() {
+            values.insert(key.clone(), value.clone());
+        }
+    }
+
     // Apply scoped overrides.
     for (key, scoped_map) in &murk.scoped {
         if let Some(value) = scoped_map.get(pubkey) {
@@ -613,6 +621,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         vault.secrets.insert(
@@ -620,6 +629,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -643,6 +653,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -682,6 +693,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         vault.secrets.insert(
@@ -689,6 +701,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val2", &[recipient]).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -722,6 +735,7 @@ mod tests {
             types::SecretEntry {
                 shared: crate::encrypt_value(b"val1", &[recipient]).unwrap(),
                 scoped: std::collections::BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 

@@ -50,6 +50,7 @@ pub fn empty_murk() -> types::Murk {
         scoped: HashMap::new(),
         legacy_mac: false,
         github_pins: HashMap::new(),
+        ..Default::default()
     }
 }
 

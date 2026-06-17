@@ -23,8 +23,8 @@ pub struct Vault {
 
 #[napi]
 impl Vault {
-    /// Get a single decrypted secret value.
-    /// Returns the scoped override if one exists, otherwise the shared value.
+    /// Get a single decrypted secret value. Resolution order: a personal scoped
+    /// override, then a named-group value we can read, then the shared value.
     ///
     /// Internally, vault state stores values in `Zeroizing<String>` so plaintext
     /// is wiped from memory when dropped. Crossing the napi boundary into a
@@ -33,10 +33,7 @@ impl Vault {
     /// follow. This is a known leak in the JS bindings — see THREAT_MODEL.md.
     #[napi]
     pub fn get(&self, key: String) -> Option<String> {
-        if let Some(value) = self.murk.scoped.get(&key).and_then(|m| m.get(&self.pubkey)) {
-            return Some(value.to_string());
-        }
-        self.murk.values.get(&key).map(|v| v.to_string())
+        murk_cli::get_secret(&self.murk, &key, &self.pubkey).map(str::to_string)
     }
 
     /// Export all secrets as an object. Scoped values override shared values.

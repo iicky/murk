@@ -55,19 +55,28 @@ pub struct SchemaEntry {
     pub expires_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretEntry {
-    /// Shared value encrypted to all recipients.
+    /// Shared value encrypted to all recipients (the implicit `everyone` group).
+    /// Empty when the secret's base group is a named group instead.
     pub shared: String,
     /// Scoped overrides: pubkey → encrypted value (encrypted to that pubkey only).
+    /// This is the `me` tier — a singleton group of one recipient.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scoped: BTreeMap<String, String>,
+    /// Named-group values: group name → encrypted value (encrypted to that
+    /// group's current members). A secret has at most one base group, so this
+    /// map holds at most one entry, but it is keyed by name so the integrity MAC
+    /// and merge driver can treat it uniformly with `scoped`. Group *names* are
+    /// plaintext (like key names); group *membership* lives in the encrypted meta.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub grouped: BTreeMap<String, String>,
 }
 
 // -- Meta (encrypted, stored in vault.meta) --
 // Contains metadata only visible to recipients.
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Meta {
     /// Maps pubkey → display name. The only place names are stored.
     pub recipients: HashMap<String, String>,
@@ -80,13 +89,19 @@ pub struct Meta {
     /// Used for TOFU (Trust On First Use) verification on `authorize github:user`.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub github_pins: HashMap<String, Vec<String>>,
+    /// Named recipient groups: group name → member pubkeys. Stored here (not in
+    /// the plaintext header) so org structure — who is in which group — does not
+    /// leak. Members are a subset of `Vault::recipients`. Covered by the keyed
+    /// MAC (`blake3v4:`) so membership cannot be tampered with undetected.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub groups: BTreeMap<String, Vec<String>>,
 }
 
 // -- Murk (decrypted in-memory state) --
 // The working representation after decryption. Commands read/modify this,
 // then save_vault compares against the original to minimize re-encryption.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Murk {
     /// Decrypted shared values. Wrapped in `Zeroizing` so plaintext is cleared
     /// from memory when the `Murk` is dropped.
@@ -96,6 +111,11 @@ pub struct Murk {
     /// Scoped overrides: key → { pubkey → decrypted value }.
     /// Only contains entries decryptable by the current identity.
     pub scoped: HashMap<String, HashMap<String, Zeroizing<String>>>,
+    /// Named-group values: key → { group name → decrypted value }.
+    /// Only contains groups the current identity is a member of (and can decrypt).
+    pub grouped: HashMap<String, HashMap<String, Zeroizing<String>>>,
+    /// Group membership: group name → member pubkeys (carried from meta).
+    pub groups: BTreeMap<String, Vec<String>>,
     /// True if the vault uses a legacy unkeyed MAC (sha256/sha256v2).
     pub legacy_mac: bool,
     /// Pinned GitHub key fingerprints (carried from meta).

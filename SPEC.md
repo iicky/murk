@@ -26,8 +26,9 @@ Existing secrets tools are either too complex (SOPS, Vault), tied to a runtime (
 
 ## Terminology
 
-- **murk** — the shared layer. Secrets encrypted to all recipients.
-- **mote** — a scoped secret. Encrypted to a single recipient's key. Overrides the shared value during export.
+- **murk** — the shared layer. Secrets encrypted to all recipients (the implicit `everyone` group).
+- **mote** — a scoped secret. Encrypted to a single recipient's key. Overrides the shared value during export. On the CLI this is the `me` tier (`--group me`).
+- **group** — a named subset of recipients. A secret assigned to a group is encrypted only to that group's members, so a leaked member key can't read secrets outside that member's groups. `everyone` (all recipients) and `me` (just you) are the two reserved, implicit groups; named groups (e.g. `prod`) sit between them.
 
 ---
 
@@ -102,6 +103,12 @@ A `.murk` file is a single JSON document. All fields except encrypted values and
         "age1xyz...": "<base64 age ciphertext>"
       }
     },
+    "STRIPE_KEY": {
+      "shared": "",
+      "grouped": {
+        "prod": "<base64 age ciphertext>"
+      }
+    },
     "OPENAI_KEY": {
       "shared": "<base64 age ciphertext>"
     }
@@ -134,9 +141,11 @@ Key names must be valid shell identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Secrets
 
-Each secret has a `shared` field containing age ciphertext encrypted to all recipients, and an optional `scoped` map of recipient pubkey to age ciphertext encrypted to only that recipient.
+Each secret has a `shared` field containing age ciphertext encrypted to all recipients (the `everyone` group), an optional `scoped` map of recipient pubkey to age ciphertext encrypted to only that recipient (the `me` tier), and an optional `grouped` map of group name to age ciphertext encrypted to that group's current members.
 
-During `murk export`, scoped values override shared values for the current identity.
+A secret's base tier is exactly one of: shared (`everyone`), or a single named group (in which case `shared` is empty and `grouped` holds one entry). The `me` tier is a per-identity override layered on top. Group *names* are plaintext, like key names; group *membership* lives in the encrypted meta. age determines readability — a non-member simply can't decrypt a `grouped` ciphertext.
+
+During `murk export` / `get`, resolution is: a personal scoped (`me`) override first, then a named-group value the current identity can read, then the shared value.
 
 All age ciphertext is base64-encoded (standard alphabet, with padding).
 
@@ -150,8 +159,11 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
     "age1abc...": "mickey@example.com",
     "age1xyz...": "alice@example.com"
   },
-  "mac": "blake3v3:abc123...",
-  "hmac_key": "0a1b2c3d..."
+  "mac": "blake3v4:abc123...",
+  "hmac_key": "0a1b2c3d...",
+  "groups": {
+    "prod": ["age1abc...", "age1xyz..."]
+  }
 }
 ```
 
@@ -161,6 +173,8 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
 
 `hmac_key` is a hex-encoded 32-byte random key used for BLAKE3 keyed hashing. Generated fresh on each save.
 
+`groups` maps a group name to its member pubkeys (a subset of `recipients`). Stored here, not in the plaintext header, so org structure — who is in which group — does not leak. Members are covered by the MAC. The field is omitted entirely when the vault has no named groups, keeping group-free vaults byte-identical to pre-groups murk.
+
 ### Integrity
 
 The MAC is a BLAKE3 keyed hash covering, in order:
@@ -169,12 +183,14 @@ The MAC is a BLAKE3 keyed hash covering, in order:
 2. **Per-key encrypted values** — for each key (sorted):
    - The shared ciphertext, followed by `\x00`
    - For each scoped entry (sorted by pubkey): the pubkey followed by `\x01`, the scoped ciphertext followed by `\x00`
+   - (v6 only) For each grouped entry (sorted by group name): `\x03`, the group name followed by `\x00`, the grouped ciphertext followed by `\x00`
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
 4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`, then the lifecycle fields `created`, `updated`, `rotation_interval_days` (decimal text), and `expires_at` — each emitted as its bytes (empty if unset) followed by `\x00`
+5. **Group definitions** (v6 only) — for each group (sorted by name): `\x04`, the group name followed by `\x00`, then each member pubkey (sorted) prefixed by `\x05`
 
-The resulting digest is prefixed with `blake3v3:` and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
+The resulting digest is prefixed with `blake3v4:` (v6) when the vault has at least one group, or `blake3v3:` (v5) when it has none, and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), and `blake3v2:` (v4, no lifecycle-metadata coverage) are accepted for backward compatibility. On save, murk always writes `blake3v3:` with a fresh key. (A vault written by a newer murk therefore cannot be MAC-verified by an older binary that predates `blake3v3:`.)
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), and `blake3v3:` (v5, no group coverage) are accepted for backward compatibility. On save, murk writes `blake3v4:` if any group exists, otherwise `blake3v3:`, always with a fresh key. Gating the version bump on the first group keeps group-free vaults byte-identical to pre-groups murk. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
 
 Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
@@ -194,19 +210,19 @@ Interactive setup. Prompts for a display name. Then:
 
 ---
 
-### `murk add KEY [--scoped] [--desc DESC] [--tag TAG] [--vault NAME]`
+### `murk add KEY [--group NAME] [--desc DESC] [--tag TAG] [--vault NAME]`
 
 Adds or updates a secret. Prompts for the value interactively (hidden input via rpassword) or reads from stdin when piped.
 
-Without `--scoped`, encrypts to all recipients (shared/murk layer). With `--scoped`, encrypts to only your key (scoped/mote layer).
+`--group` selects who can read it: `everyone` (the default; the shared/murk layer), `me` (only your key; the scoped/mote layer), or a named group (encrypted to that group's members; you must be a member). Assigning a secret to a named group makes that group its sole base tier — any existing shared value is dropped. `--scoped` is a deprecated alias for `--group me`.
 
 Key names are validated as shell identifiers. Invalid names are rejected.
 
 ---
 
-### `murk generate KEY [--length N] [--hex] [--desc DESC] [--tag TAG] [--vault NAME]`
+### `murk generate KEY [--length N] [--hex] [--group NAME] [--desc DESC] [--tag TAG] [--vault NAME]`
 
-Generates a cryptographically random value and stores it as a shared secret. Default length is 32 bytes, output as URL-safe base64 (no padding). Use `--hex` for hexadecimal output. Uses the same RNG as key generation.
+Generates a cryptographically random value and stores it. Default length is 32 bytes, output as URL-safe base64 (no padding). Use `--hex` for hexadecimal output. `--group` works as for `murk add`. Uses the same RNG as key generation.
 
 ---
 
@@ -244,9 +260,9 @@ Sets metadata for a key in the plaintext schema. Does not touch encrypted values
 
 ---
 
-### `murk edit [KEY] [--scoped] [--vault NAME]`
+### `murk edit [KEY] [--scoped] [--group NAME] [--vault NAME]`
 
-Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits scoped overrides (motes) instead of shared values.
+Opens secrets in `$EDITOR`. With KEY, edits a single value; without, edits all secrets as `KEY=VALUE` lines. With `--scoped`, edits scoped overrides (motes) instead of shared values; with `--group NAME`, edits the values for that named group (you must be a member).
 
 The plaintext buffer is written to a mode-0600 temp file (preferring `XDG_RUNTIME_DIR`), then overwritten with zeros and deleted after the editor exits. An empty value or non-zero editor exit aborts without saving.
 
@@ -293,9 +309,9 @@ Emits schema-only context safe to paste into an AI agent prompt — key names, d
 
 ---
 
-### `murk import [FILE] [--vault NAME]`
+### `murk import [FILE] [--group NAME] [--vault NAME]`
 
-Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning.
+Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning. `--group` assigns all imported secrets to a tier (`everyone` default, `me`, or a named group), as for `murk add`.
 
 ---
 
@@ -325,9 +341,33 @@ Lists all recipients. With `MURK_KEY`, shows display names from the encrypted me
 
 ---
 
-### `murk circle authorize PUBKEY [--name NAME] [--vault NAME]`
+### `murk circle authorize PUBKEY [--name NAME] [--group NAME] [--vault NAME]`
 
-Adds a new recipient. Re-encrypts all shared secrets to include the new public key. Accepts `age1...`, `ssh-ed25519 ...`, or `github:username` formats.
+Adds a new recipient. Re-encrypts all shared secrets to include the new public key. Accepts `age1...`, `ssh-ed25519 ...`, or `github:username` formats. With `--group`, also adds the new recipient(s) to that group in the same step (you must be a member of the group).
+
+---
+
+### `murk group create NAME [--vault NAME]`
+
+Creates a new named recipient group, seeded with you as its first member so you can always read and re-encrypt it. Reserved names (`everyone`, `me`, `all`, `self`, `mine`, `shared`) are rejected.
+
+---
+
+### `murk group ls [--json] [--vault NAME]`
+
+Lists groups and their members (resolved to display names; the current user is marked with `*`). Requires `MURK_KEY` to decrypt membership.
+
+---
+
+### `murk group add NAME --member RECIPIENT [--vault NAME]`
+
+Adds a recipient (by pubkey or display name) to a group. You must already be a member. The group's secrets are re-encrypted to include the new member on save.
+
+---
+
+### `murk group rm NAME [--member RECIPIENT] [--vault NAME]`
+
+With `--member`, removes a recipient from the group and re-encrypts its secrets so the removed member loses access to current values (git history stays readable — rotate to fully close). Without `--member`, deletes the group entirely; refused if any secret is still assigned to it. You must be a member to modify a group.
 
 ---
 

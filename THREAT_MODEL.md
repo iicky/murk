@@ -24,7 +24,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Historical access after revocation.** Revoking a recipient re-encrypts the vault going forward, but old `.murk` versions remain in git history. The revoked recipient can still decrypt any version they previously had access to. Always rotate credentials after revocation. murk warns about this at revocation time.
 
-**Fine-grained access control.** All authorized recipients can decrypt all shared secrets. Per-key access metadata is stored but not enforced cryptographically in v1. If a recipient's public key is in the recipient list, they can read everything in the shared layer.
+**Fine-grained access control.** All authorized recipients can decrypt all *shared* secrets — anything in the `everyone` layer is readable by every recipient. Named recipient groups narrow this: a secret assigned to a group is age-encrypted only to that group's members, so a leaked member key can read only the groups it belongs to (plus the shared layer), not the whole vault. This is enforced cryptographically by age, and group membership is covered by the keyed MAC (`blake3v4:`) so it can't be altered undetected. Limits: group *names* and which key belongs to which group are plaintext in the header (only membership is hidden, in the encrypted meta); managing a group requires being a member of it (you can't re-encrypt what you can't read); and the historical-access caveat above applies per group — removing a member re-encrypts going forward, but old `.murk` versions in git remain readable, so rotate.
 
 **Audit logging.** murk has no built-in audit trail beyond git history. It does not log who decrypted what or when. For regulated environments requiring provable access controls, use a dedicated secrets server.
 
@@ -80,6 +80,7 @@ murk includes a git merge driver (`murk merge-driver`) that performs three-way m
 - The merge driver operates without a key. It cannot verify the MAC of any version. Integrity is verified on the next `load_vault` after merge.
 - Recipient additions and removals on only one side produce a merge conflict. Both sides must agree on recipient changes for a clean merge.
 - Secret additions from one side are accepted if the other side did not touch secrets. If both sides modified secrets (e.g. from a re-encryption after recipient change), all overlapping secrets conflict.
+- Group membership lives in the encrypted meta, which the merge driver cannot read without a key. When a key is available it merges memberships (union, ours-wins, dropping non-recipients); without one it keeps `ours` meta. Either way, group definitions are covered by the `blake3v4:` MAC, so any inconsistency between merged group ciphertexts and membership is caught on the next `load_vault`.
 
 **What the merge driver prevents:**
 - Silent recipient removal (one-sided removal → conflict)

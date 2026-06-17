@@ -26,6 +26,7 @@ pub mod error;
 pub(crate) mod export;
 pub(crate) mod git;
 pub mod github;
+pub(crate) mod groups;
 pub mod hardening;
 pub(crate) mod info;
 pub(crate) mod init;
@@ -58,6 +59,9 @@ pub use export::{
 };
 pub use git::{MergeDriverSetupStep, setup_merge_driver};
 pub use github::{GitHubError, fetch_keys};
+pub use groups::{
+    add_member, create_group, delete_group, remove_member, resolve_member, validate_group_name,
+};
 pub use info::{InfoEntry, VaultInfo, format_info_lines, lifecycle_segment, vault_info};
 pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
@@ -66,8 +70,8 @@ pub use recipients::{
     list_recipients, revoke_recipient, truncate_pubkey,
 };
 pub use secrets::{
-    EXPIRY_WARN_DAYS, RotationIssue, add_secret, describe_key, get_secret, import_secrets,
-    list_keys, remove_secret, rotation_health,
+    EXPIRY_WARN_DAYS, RotationIssue, add_grouped_secret, add_secret, describe_key, get_secret,
+    import_secrets, list_keys, remove_secret, rotation_health,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -219,27 +223,29 @@ pub fn decrypt_vault(
 
     // Verify integrity BEFORE decrypting secrets — a tampered vault should fail
     // with an integrity error, not a misleading "you are not a recipient" message.
-    let (recipients, legacy_mac, github_pins) = match decrypt_meta(vault, identity) {
+    let (recipients, groups, legacy_mac, github_pins) = match decrypt_meta(vault, identity) {
         Some(meta) if !meta.mac.is_empty() => {
             let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
-            if !verify_mac(vault, &meta.mac, mac_key.as_ref()) {
-                let expected = compute_mac(vault, mac_key.as_ref());
+            if !verify_mac(vault, &meta.groups, &meta.mac, mac_key.as_ref()) {
+                let expected = compute_mac(vault, &meta.groups, mac_key.as_ref());
                 return Err(MurkError::Integrity(format!(
                     "vault may have been tampered with (expected {expected}, got {})",
                     meta.mac
                 )));
             }
             let legacy = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
-            (meta.recipients, legacy, meta.github_pins)
+            (meta.recipients, meta.groups, legacy, meta.github_pins)
         }
-        Some(meta) if vault.secrets.is_empty() => (meta.recipients, false, meta.github_pins),
+        Some(meta) if vault.secrets.is_empty() => {
+            (meta.recipients, meta.groups, false, meta.github_pins)
+        }
         Some(_) => {
             return Err(MurkError::Integrity(
                 "vault has secrets but MAC is empty — vault may have been tampered with".into(),
             ));
         }
         None if vault.secrets.is_empty() && vault.meta.is_empty() => {
-            (HashMap::new(), false, HashMap::new())
+            (HashMap::new(), BTreeMap::new(), false, HashMap::new())
         }
         None => {
             return Err(MurkError::Integrity(
@@ -280,10 +286,30 @@ pub fn decrypt_vault(
         }
     }
 
+    // Decrypt named-group values we're a member of. age tells us whether our
+    // identity is a recipient, so we just try each group ciphertext and keep the
+    // ones that decrypt — non-members silently fall through.
+    let mut grouped: HashMap<String, HashMap<String, Zeroizing<String>>> = HashMap::new();
+    for (key, entry) in &vault.secrets {
+        for (group, encoded) in &entry.grouped {
+            if let Ok(value) = decrypt_value(encoded, identity).and_then(|pt| {
+                plaintext_bytes_to_zeroizing_string(&pt)
+                    .map_err(|e| MurkError::Secret(e.to_string()))
+            }) {
+                grouped
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(group.clone(), value);
+            }
+        }
+    }
+
     Ok(types::Murk {
         values,
         recipients,
         scoped,
+        grouped,
+        groups,
         legacy_mac,
         github_pins,
     })
@@ -309,6 +335,113 @@ pub fn load_vault(
     Ok((vault, murk, identity))
 }
 
+/// Re-encrypt a key's shared (everyone) ciphertext, reusing the existing one
+/// when the value and recipient set are unchanged (for minimal git diffs).
+fn rebuild_shared(
+    key: &str,
+    vault: &types::Vault,
+    recipients: &[crypto::MurkRecipient],
+    recipients_changed: bool,
+    original: &types::Murk,
+    current: &types::Murk,
+) -> Result<String, MurkError> {
+    let Some(value) = current.values.get(key) else {
+        // Scoped/group-only key — no shared ciphertext.
+        return Ok(String::new());
+    };
+    // Reuse the stored ciphertext when the value and recipient set are unchanged.
+    if !recipients_changed
+        && original.values.get(key) == Some(value)
+        && let Some(existing) = vault.secrets.get(key)
+    {
+        return Ok(existing.shared.clone());
+    }
+    encrypt_value(value.as_bytes(), recipients)
+}
+
+/// Re-encrypt a key's scoped (per-recipient) ciphertexts, keeping unchanged
+/// entries and dropping ones removed since load.
+fn rebuild_scoped(
+    key: &str,
+    vault: &types::Vault,
+    original: &types::Murk,
+    current: &types::Murk,
+) -> Result<BTreeMap<String, String>, MurkError> {
+    let mut scoped = vault
+        .secrets
+        .get(key)
+        .map(|e| e.scoped.clone())
+        .unwrap_or_default();
+
+    if let Some(key_scoped) = current.scoped.get(key) {
+        for (pk, val) in key_scoped {
+            let original_val = original.scoped.get(key).and_then(|m| m.get(pk));
+            if original_val != Some(val) {
+                let recipient = crypto::parse_recipient(pk)?;
+                scoped.insert(pk.clone(), encrypt_value(val.as_bytes(), &[recipient])?);
+            }
+        }
+    }
+
+    if let Some(orig_key_scoped) = original.scoped.get(key) {
+        for pk in orig_key_scoped.keys() {
+            let still_present = current.scoped.get(key).is_some_and(|m| m.contains_key(pk));
+            if !still_present {
+                scoped.remove(pk);
+            }
+        }
+    }
+
+    Ok(scoped)
+}
+
+/// Re-encrypt a key's named-group ciphertexts to each group's current members.
+/// Re-encrypts when the value changed or the group's membership changed; drops
+/// groups removed since load.
+fn rebuild_grouped(
+    key: &str,
+    vault: &types::Vault,
+    changed_groups: &BTreeSet<&str>,
+    original: &types::Murk,
+    current: &types::Murk,
+) -> Result<BTreeMap<String, String>, MurkError> {
+    let mut grouped = vault
+        .secrets
+        .get(key)
+        .map(|e| e.grouped.clone())
+        .unwrap_or_default();
+
+    if let Some(key_grouped) = current.grouped.get(key) {
+        for (group, val) in key_grouped {
+            let members = current.groups.get(group).ok_or_else(|| {
+                MurkError::Secret(format!("secret {key} references unknown group {group}"))
+            })?;
+            let original_val = original.grouped.get(key).and_then(|m| m.get(group));
+            if original_val != Some(val) || changed_groups.contains(group.as_str()) {
+                let group_recipients = parse_recipients(members)?;
+                grouped.insert(
+                    group.clone(),
+                    encrypt_value(val.as_bytes(), &group_recipients)?,
+                );
+            }
+        }
+    }
+
+    if let Some(orig_key_grouped) = original.grouped.get(key) {
+        for group in orig_key_grouped.keys() {
+            let still_present = current
+                .grouped
+                .get(key)
+                .is_some_and(|m| m.contains_key(group));
+            if !still_present {
+                grouped.remove(group);
+            }
+        }
+    }
+
+    Ok(grouped)
+}
+
 /// Save the vault: compare against original state and only re-encrypt changed values.
 /// Unchanged values keep their original ciphertext for minimal git diffs.
 pub fn save_vault(
@@ -328,56 +461,61 @@ pub fn save_vault(
         current_pks != original_pks
     };
 
+    // Groups whose membership changed since load — their secrets must be
+    // re-encrypted even when the plaintext is unchanged, so a removed member
+    // loses access (and a new one gains it).
+    let changed_groups: BTreeSet<&str> = current
+        .groups
+        .keys()
+        .chain(original.groups.keys())
+        .filter(|g| current.groups.get(*g) != original.groups.get(*g))
+        .map(String::as_str)
+        .collect();
+
     let mut new_secrets = BTreeMap::new();
 
-    // Collect all keys with a shared or scoped value.
+    // Collect all keys with a shared, scoped, or grouped value in the operator's
+    // working state.
     let mut all_keys: BTreeSet<&String> = current.values.keys().collect();
     all_keys.extend(current.scoped.keys());
+    all_keys.extend(current.grouped.keys());
+
+    // Preserve on-disk secrets the operator can't see (other groups' values, or
+    // other recipients' scoped entries). These never enter the decrypted `Murk`,
+    // so without this they'd be silently dropped when a non-member saves. A key
+    // the operator *deleted* was visible at load (in `original`) and is excluded,
+    // so deletions still take effect.
+    let original_visible: BTreeSet<&String> = original
+        .values
+        .keys()
+        .chain(original.scoped.keys())
+        .chain(original.grouped.keys())
+        .collect();
+    for key in vault.secrets.keys() {
+        if !original_visible.contains(key) {
+            all_keys.insert(key);
+        }
+    }
 
     for key in all_keys {
-        let shared = if let Some(value) = current.values.get(key) {
-            if !recipients_changed && original.values.get(key) == Some(value) {
-                if let Some(existing) = vault.secrets.get(key) {
-                    existing.shared.clone()
-                } else {
-                    encrypt_value(value.as_bytes(), &recipients)?
-                }
-            } else {
-                encrypt_value(value.as_bytes(), &recipients)?
-            }
-        } else {
-            // Scoped-only key — no shared ciphertext.
-            String::new()
-        };
-
-        let mut scoped = vault
-            .secrets
-            .get(key)
-            .map(|e| e.scoped.clone())
-            .unwrap_or_default();
-
-        if let Some(key_scoped) = current.scoped.get(key) {
-            for (pk, val) in key_scoped {
-                let original_val = original.scoped.get(key).and_then(|m| m.get(pk));
-                if original_val == Some(val) {
-                    // Unchanged — keep original ciphertext.
-                } else {
-                    let recipient = crypto::parse_recipient(pk)?;
-                    scoped.insert(pk.clone(), encrypt_value(val.as_bytes(), &[recipient])?);
-                }
-            }
-        }
-
-        if let Some(orig_key_scoped) = original.scoped.get(key) {
-            for pk in orig_key_scoped.keys() {
-                let still_present = current.scoped.get(key).is_some_and(|m| m.contains_key(pk));
-                if !still_present {
-                    scoped.remove(pk);
-                }
-            }
-        }
-
-        new_secrets.insert(key.clone(), types::SecretEntry { shared, scoped });
+        let shared = rebuild_shared(
+            key,
+            vault,
+            &recipients,
+            recipients_changed,
+            original,
+            current,
+        )?;
+        let scoped = rebuild_scoped(key, vault, original, current)?;
+        let grouped = rebuild_grouped(key, vault, &changed_groups, original, current)?;
+        new_secrets.insert(
+            key.clone(),
+            types::SecretEntry {
+                shared,
+                scoped,
+                grouped,
+            },
+        );
     }
 
     vault.secrets = new_secrets;
@@ -385,12 +523,13 @@ pub fn save_vault(
     // Update meta — always generate a fresh BLAKE3 key on save.
     let mac_key_hex = generate_mac_key();
     let mac_key = decode_mac_key(&mac_key_hex).unwrap();
-    let mac = compute_mac(vault, Some(&mac_key));
+    let mac = compute_mac(vault, &current.groups, Some(&mac_key));
     let meta = types::Meta {
         recipients: current.recipients.clone(),
         mac,
         mac_key: Some(mac_key_hex),
         github_pins: current.github_pins.clone(),
+        groups: current.groups.clone(),
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
@@ -399,13 +538,21 @@ pub fn save_vault(
     Ok(vault::write(Path::new(vault_path), vault)?)
 }
 
-/// Compute an integrity MAC over the vault's secrets, scoped entries, recipients, and schema.
+/// Compute an integrity MAC over the vault's secrets, scoped entries, grouped
+/// entries, recipients, schema, and group membership.
 ///
-/// If an HMAC key is provided, uses BLAKE3 keyed hash v5 (written as `blake3v3:`),
-/// which covers schema plus per-key lifecycle metadata. Otherwise falls back to
-/// unkeyed SHA-256 v2 for legacy compatibility.
-pub(crate) fn compute_mac(vault: &types::Vault, mac_key: Option<&[u8; 32]>) -> String {
+/// With a key and at least one group, uses BLAKE3 keyed hash v6 (`blake3v4:`),
+/// which additionally covers the grouped ciphertexts and group definitions. With
+/// a key and no groups, uses v5 (`blake3v3:`) so group-free vaults stay
+/// byte-identical to before groups existed. Without a key, falls back to unkeyed
+/// SHA-256 v2 for legacy compatibility.
+pub(crate) fn compute_mac(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    mac_key: Option<&[u8; 32]>,
+) -> String {
     match mac_key {
+        Some(key) if !groups.is_empty() => compute_mac_v6(vault, groups, key),
         Some(key) => compute_mac_v5(vault, key),
         None => compute_mac_v2(vault),
     }
@@ -655,16 +802,139 @@ fn compute_mac_v5(vault: &types::Vault, key: &[u8; 32]) -> String {
     format!("blake3v3:{hash}")
 }
 
+/// Append the v5/v6 schema byte stream to `data`. Kept identical to the inline
+/// loop in `compute_mac_v5` so v6 reuses the exact schema encoding without
+/// risking a change to v5's bytes.
+fn schema_mac_bytes(vault: &types::Vault, data: &mut Vec<u8>) {
+    for (key_name, entry) in &vault.schema {
+        data.push(0x02);
+        data.extend_from_slice(key_name.as_bytes());
+        data.push(0x00);
+        data.extend_from_slice(entry.description.as_bytes());
+        data.push(0x00);
+        if let Some(example) = &entry.example {
+            data.extend_from_slice(example.as_bytes());
+        }
+        data.push(0x00);
+        for tag in &entry.tags {
+            data.extend_from_slice(tag.as_bytes());
+            data.push(0x00);
+        }
+        if let Some(created) = &entry.created {
+            data.extend_from_slice(created.as_bytes());
+        }
+        data.push(0x00);
+        if let Some(updated) = &entry.updated {
+            data.extend_from_slice(updated.as_bytes());
+        }
+        data.push(0x00);
+        if let Some(days) = entry.rotation_interval_days {
+            data.extend_from_slice(days.to_string().as_bytes());
+        }
+        data.push(0x00);
+        if let Some(expires) = &entry.expires_at {
+            data.extend_from_slice(expires.as_bytes());
+        }
+        data.push(0x00);
+    }
+}
+
+/// v6 MAC (`blake3v4:`). Extends v5 with the per-secret grouped ciphertexts and
+/// the group membership map, so a named group's members and the values encrypted
+/// to them cannot be tampered with undetected. Only emitted once a vault has at
+/// least one group; group-free vaults keep writing v5 and stay byte-identical.
+fn compute_mac_v6(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+
+    for key_name in vault.secrets.keys() {
+        data.extend_from_slice(key_name.as_bytes());
+        data.push(0x00);
+    }
+
+    for entry in vault.secrets.values() {
+        data.extend_from_slice(entry.shared.as_bytes());
+        data.push(0x00);
+
+        let mut scoped_pks: Vec<&String> = entry.scoped.keys().collect();
+        scoped_pks.sort();
+        for pk in scoped_pks {
+            data.extend_from_slice(pk.as_bytes());
+            data.push(0x01);
+            data.extend_from_slice(entry.scoped[pk].as_bytes());
+            data.push(0x00);
+        }
+
+        // Grouped ciphertexts, sorted by group name. `0x03` marks each entry so
+        // the group stream can't be confused with the scoped (`0x01`) stream.
+        let mut group_names: Vec<&String> = entry.grouped.keys().collect();
+        group_names.sort();
+        for g in group_names {
+            data.push(0x03);
+            data.extend_from_slice(g.as_bytes());
+            data.push(0x00);
+            data.extend_from_slice(entry.grouped[g].as_bytes());
+            data.push(0x00);
+        }
+    }
+
+    let mut pks = vault.recipients.clone();
+    pks.sort();
+    for pk in &pks {
+        data.extend_from_slice(pk.as_bytes());
+        data.push(0x00);
+    }
+
+    schema_mac_bytes(vault, &mut data);
+
+    // Group definitions (sorted by name; members sorted). `0x04` separates each
+    // group, `0x05` each member, so membership can't be tampered with undetected.
+    for (name, members) in groups {
+        data.push(0x04);
+        data.extend_from_slice(name.as_bytes());
+        data.push(0x00);
+        let mut sorted = members.clone();
+        sorted.sort();
+        for member in &sorted {
+            data.push(0x05);
+            data.extend_from_slice(member.as_bytes());
+        }
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3v4:{hash}")
+}
+
 /// Verify a stored MAC against the vault, accepting v1, v2, blake3, blake3v2,
-/// and blake3v3 schemes.
+/// blake3v3, and blake3v4 schemes.
 pub(crate) fn verify_mac(
     vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
     stored_mac: &str,
     mac_key: Option<&[u8; 32]>,
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
-    let expected = if stored_mac.starts_with("blake3v3:") {
+    // Group data is only covered by v6 (`blake3v4:`). A vault carrying any
+    // grouped ciphertext or group membership but stamped with an older MAC is
+    // either tampered (an attacker injected a `grouped` entry that the old MAC
+    // ignores, then relies on group-before-shared resolution) or inconsistent.
+    // Reject it rather than verify against a scheme that doesn't cover groups.
+    let touches_groups =
+        !groups.is_empty() || vault.secrets.values().any(|e| !e.grouped.is_empty());
+    if touches_groups && !stored_mac.starts_with("blake3v4:") {
+        return false;
+    }
+
+    let expected = if stored_mac.starts_with("blake3v4:") {
+        match mac_key {
+            Some(key) => compute_mac_v6(vault, groups, key),
+            None => return false,
+        }
+    } else if stored_mac.starts_with("blake3v3:") {
         match mac_key {
             Some(key) => compute_mac_v5(vault, key),
             None => return false,
@@ -860,13 +1130,13 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac1 = compute_mac(&vault, Some(&key));
-        let mac2 = compute_mac(&vault, Some(&key));
+        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
+        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_eq!(mac1, mac2);
         assert!(mac1.starts_with("blake3v3:"));
 
         // Without key, falls back to sha256v2
-        let mac_legacy = compute_mac(&vault, None);
+        let mac_legacy = compute_mac(&vault, &std::collections::BTreeMap::new(), None);
         assert!(mac_legacy.starts_with("sha256v2:"));
     }
 
@@ -884,17 +1154,18 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac_empty = compute_mac(&vault, Some(&key));
+        let mac_empty = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
 
         vault.secrets.insert(
             "KEY".into(),
             types::SecretEntry {
                 shared: "ciphertext".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
-        let mac_with_secret = compute_mac(&vault, Some(&key));
+        let mac_with_secret = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(mac_empty, mac_with_secret);
     }
 
@@ -912,9 +1183,9 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac1 = compute_mac(&vault, Some(&key));
+        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         vault.recipients.push("age1xyz".into());
-        let mac2 = compute_mac(&vault, Some(&key));
+        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(mac1, mac2);
     }
 
@@ -944,6 +1215,7 @@ mod tests {
             types::SecretEntry {
                 shared: shared.clone(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -955,6 +1227,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         let current = original.clone();
@@ -1001,6 +1274,7 @@ mod tests {
             types::SecretEntry {
                 shared,
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1012,6 +1286,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         let mut current = original.clone();
@@ -1051,6 +1326,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
         vault.secrets.insert(
@@ -1058,6 +1334,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val2", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1072,6 +1349,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         let mut current = original.clone();
@@ -1111,6 +1389,7 @@ mod tests {
             types::SecretEntry {
                 shared: shared.clone(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1122,6 +1401,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         let mut current_recipients = HashMap::new();
@@ -1133,6 +1413,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         save_vault(path.to_str().unwrap(), &mut vault, &original, &current).unwrap();
@@ -1172,6 +1453,7 @@ mod tests {
             types::SecretEntry {
                 shared,
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1183,6 +1465,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         // Add a scoped override.
@@ -1246,6 +1529,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1257,6 +1541,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         // save_vault needs MURK_KEY set to encrypt meta.
@@ -1313,6 +1598,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[recipient]).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1324,6 +1610,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1372,6 +1659,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[other_recipient]).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1384,6 +1672,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         unsafe { std::env::set_var("MURK_KEY", &other_secret) };
@@ -1443,6 +1732,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1490,6 +1780,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", &[recipient]).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1501,6 +1792,7 @@ mod tests {
             scoped: HashMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
 
         unsafe { std::env::set_var("MURK_KEY", &secret) };
@@ -1556,6 +1848,7 @@ mod tests {
             types::SecretEntry {
                 shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
@@ -1567,6 +1860,7 @@ mod tests {
             mac: String::new(),
             mac_key: None,
             github_pins: HashMap::new(),
+            ..Default::default()
         };
         let meta_json = serde_json::to_vec(&meta).unwrap();
         vault.meta = encrypt_value(&meta_json, &[recipient]).unwrap();
@@ -1607,11 +1901,12 @@ mod tests {
             types::SecretEntry {
                 shared: "ciphertext".into(),
                 scoped: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
             },
         );
 
         let key = [0u8; 32];
-        let mac_no_scoped = compute_mac(&vault, Some(&key));
+        let mac_no_scoped = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
 
         vault
             .secrets
@@ -1620,7 +1915,7 @@ mod tests {
             .scoped
             .insert("age1bob".into(), "scoped-ct".into());
 
-        let mac_with_scoped = compute_mac(&vault, Some(&key));
+        let mac_with_scoped = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(mac_no_scoped, mac_with_scoped);
     }
 
@@ -1641,26 +1936,123 @@ mod tests {
         let v1_mac = compute_mac_v1(&vault);
         let v2_mac = compute_mac_v2(&vault);
         let v3_mac = compute_mac_v3(&vault, &key);
-        assert!(verify_mac(&vault, &v1_mac, None));
-        assert!(verify_mac(&vault, &v2_mac, None));
-        assert!(verify_mac(&vault, &v3_mac, Some(&key)));
-        assert!(!verify_mac(&vault, "sha256:bogus", None));
-        assert!(!verify_mac(&vault, "blake3:bogus", Some(&key)));
-        assert!(!verify_mac(&vault, "blake3v2:bogus", Some(&key)));
-        assert!(!verify_mac(&vault, "blake3v3:bogus", Some(&key)));
-        assert!(!verify_mac(&vault, "unknown:prefix", None));
+        assert!(verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &v1_mac,
+            None
+        ));
+        assert!(verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &v2_mac,
+            None
+        ));
+        assert!(verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &v3_mac,
+            Some(&key)
+        ));
+        assert!(!verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            "sha256:bogus",
+            None
+        ));
+        assert!(!verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            "blake3:bogus",
+            Some(&key)
+        ));
+        assert!(!verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            "blake3v2:bogus",
+            Some(&key)
+        ));
+        assert!(!verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            "blake3v3:bogus",
+            Some(&key)
+        ));
+        assert!(!verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            "unknown:prefix",
+            None
+        ));
 
         // v4 (blake3v2) — includes schema; still accepted as legacy
         let v4_mac = compute_mac_v4(&vault, &key);
         assert!(v4_mac.starts_with("blake3v2:"));
-        assert!(verify_mac(&vault, &v4_mac, Some(&key)));
+        assert!(verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &v4_mac,
+            Some(&key)
+        ));
 
         // v5 (blake3v3) — current scheme, includes lifecycle metadata
         let v5_mac = compute_mac_v5(&vault, &key);
         assert!(v5_mac.starts_with("blake3v3:"));
-        assert!(verify_mac(&vault, &v5_mac, Some(&key)));
-        // compute_mac now emits v5 by default
-        assert!(compute_mac(&vault, Some(&key)).starts_with("blake3v3:"));
+        assert!(verify_mac(
+            &vault,
+            &std::collections::BTreeMap::new(),
+            &v5_mac,
+            Some(&key)
+        ));
+        // compute_mac emits v5 when there are no groups
+        assert!(
+            compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key))
+                .starts_with("blake3v3:")
+        );
+
+        // v6 (blake3v4) — emitted once a group exists; verifies and round-trips
+        let groups = BTreeMap::from([("prod".to_string(), vec!["age1abc".to_string()])]);
+        let v6_mac = compute_mac(&vault, &groups, Some(&key));
+        assert!(v6_mac.starts_with("blake3v4:"));
+        assert!(verify_mac(&vault, &groups, &v6_mac, Some(&key)));
+        // Tampering with membership changes the MAC.
+        let tampered = BTreeMap::from([(
+            "prod".to_string(),
+            vec!["age1abc".to_string(), "age1evil".to_string()],
+        )]);
+        assert!(!verify_mac(&vault, &tampered, &v6_mac, Some(&key)));
+    }
+
+    #[test]
+    fn verify_mac_rejects_grouped_under_legacy_prefix() {
+        // A v5 (blake3v3) MAC doesn't cover grouped ciphertext. Injecting a
+        // grouped entry must not verify against the old scheme — otherwise an
+        // attacker without a key could add a group value that wins on read.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        let key = [7u8; 32];
+        let no_groups = BTreeMap::new();
+        let v5_mac = compute_mac(&vault, &no_groups, Some(&key));
+        assert!(v5_mac.starts_with("blake3v3:"));
+        assert!(verify_mac(&vault, &no_groups, &v5_mac, Some(&key)));
+
+        // Attacker injects a grouped entry; the v5 MAC is now invalid for it.
+        vault.secrets.insert(
+            "STOLEN".into(),
+            types::SecretEntry {
+                grouped: BTreeMap::from([("prod".to_string(), "injected-ct".to_string())]),
+                ..Default::default()
+            },
+        );
+        assert!(!verify_mac(&vault, &no_groups, &v5_mac, Some(&key)));
     }
 
     #[test]
@@ -1685,7 +2077,7 @@ mod tests {
         );
 
         let key = [0u8; 32];
-        let baseline = compute_mac(&vault, Some(&key));
+        let baseline = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
 
         // Setting a rotation interval changes the MAC — tamper-evident.
         vault
@@ -1693,12 +2085,12 @@ mod tests {
             .get_mut("API_KEY")
             .unwrap()
             .rotation_interval_days = Some(90);
-        let with_interval = compute_mac(&vault, Some(&key));
+        let with_interval = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(baseline, with_interval);
 
         // So does an expiry.
         vault.schema.get_mut("API_KEY").unwrap().expires_at = Some("2026-09-01T23:59:59Z".into());
-        let with_expiry = compute_mac(&vault, Some(&key));
+        let with_expiry = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(with_interval, with_expiry);
 
         // v4 (which ignores these fields) is blind to the change — the reason
@@ -1727,7 +2119,7 @@ mod tests {
         };
 
         let key = [0u8; 32];
-        let mac_no_schema = compute_mac(&vault, Some(&key));
+        let mac_no_schema = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
 
         vault.schema.insert(
             "API_KEY".into(),
@@ -1738,13 +2130,13 @@ mod tests {
             },
         );
 
-        let mac_with_schema = compute_mac(&vault, Some(&key));
+        let mac_with_schema = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(mac_no_schema, mac_with_schema);
 
         // Changing a tag changes the MAC
         let mac_before_retag = mac_with_schema;
         vault.schema.get_mut("API_KEY").unwrap().tags = vec!["ops".into()];
-        let mac_after_retag = compute_mac(&vault, Some(&key));
+        let mac_after_retag = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key));
         assert_ne!(mac_before_retag, mac_after_retag);
     }
 
@@ -1788,8 +2180,8 @@ mod tests {
 
         let key1 = [0u8; 32];
         let key2 = [1u8; 32];
-        let mac1 = compute_mac(&vault, Some(&key1));
-        let mac2 = compute_mac(&vault, Some(&key2));
+        let mac1 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key1));
+        let mac2 = compute_mac(&vault, &std::collections::BTreeMap::new(), Some(&key2));
         assert_ne!(mac1, mac2);
     }
 

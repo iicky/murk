@@ -55,6 +55,9 @@ enum Command {
         /// Overwrite existing secrets without prompting
         #[arg(long)]
         force: bool,
+        /// Assign imported secrets to this group (default: everyone)
+        #[arg(long)]
+        group: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -67,8 +70,11 @@ enum Command {
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
-        /// Encrypt to only your key (scoped override)
+        /// Who can read it: a group name, `everyone` (default), or `me`
         #[arg(long)]
+        group: Option<String>,
+        /// Deprecated alias for `--group me`
+        #[arg(long, hide = true)]
         scoped: bool,
         /// Tag for grouping (repeatable)
         #[arg(long)]
@@ -91,6 +97,9 @@ enum Command {
         /// Description for this key
         #[arg(long)]
         desc: Option<String>,
+        /// Who can read it: a group name, `everyone` (default), or `me`
+        #[arg(long)]
+        group: Option<String>,
         /// Tag for grouping (repeatable)
         #[arg(long)]
         tag: Vec<String>,
@@ -207,6 +216,9 @@ enum Command {
         /// Edit scoped overrides instead of shared secrets
         #[arg(long)]
         scoped: bool,
+        /// Edit values for this group instead of shared secrets
+        #[arg(long)]
+        group: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -275,6 +287,12 @@ enum Command {
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
+    },
+
+    /// Manage recipient groups
+    Group {
+        #[command(subcommand)]
+        sub: GroupCommand,
     },
 
     /// Write a .envrc for direnv integration
@@ -418,6 +436,9 @@ enum CircleCommand {
         /// Display name for this recipient
         #[arg(long)]
         name: Option<String>,
+        /// Also add the new recipient to this group
+        #[arg(long)]
+        group: Option<String>,
         /// Accept changed GitHub keys without confirmation
         #[arg(long)]
         force: bool,
@@ -436,6 +457,52 @@ enum CircleCommand {
         /// Rotate the secrets they had access to in the same session
         #[arg(long)]
         rotate: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum GroupCommand {
+    /// Create a new recipient group (you become its first member)
+    Create {
+        /// Group name
+        name: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// List groups and their members
+    Ls {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Add a member to a group
+    Add {
+        /// Group name
+        name: String,
+        /// Recipient pubkey or display name to add
+        #[arg(long)]
+        member: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Remove a member from a group, or delete the group entirely
+    Rm {
+        /// Group name
+        name: String,
+        /// Recipient pubkey or display name to remove (omit to delete the group)
+        #[arg(long)]
+        member: Option<String>,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -711,10 +778,133 @@ fn random_secret(length: usize, hex: bool) -> zeroize::Zeroizing<String> {
     zeroize::Zeroizing::new(value)
 }
 
+/// Resolved destination tier for a secret command, from `--group`/`--scoped`.
+enum SecretTier {
+    /// The shared value, encrypted to all recipients (the default).
+    Everyone,
+    /// A personal scoped value, encrypted to the caller only.
+    Me,
+    /// A named group, encrypted to that group's members.
+    Group(String),
+}
+
+/// Map `--group`/`--scoped` onto a tier. The reserved names `everyone`/`me`
+/// route to the shared/scoped tiers; `--scoped` is a deprecated alias for
+/// `--group me`. Both flags at once is a usage error.
+fn resolve_secret_tier(group: Option<&str>, scoped: bool) -> SecretTier {
+    if let Some(g) = group {
+        if scoped {
+            die(
+                &format_args!("pass either --group or --scoped, not both"),
+                1,
+            );
+        }
+        match g {
+            "everyone" | "all" | "shared" => SecretTier::Everyone,
+            "me" | "self" | "mine" => SecretTier::Me,
+            _ => SecretTier::Group(g.to_string()),
+        }
+    } else if scoped {
+        eprintln!(
+            "{} --scoped is deprecated; use --group me",
+            "warn".yellow().bold()
+        );
+        SecretTier::Me
+    } else {
+        SecretTier::Everyone
+    }
+}
+
+impl SecretTier {
+    /// Short suffix for status lines, e.g. ` (group prod)`.
+    fn label(&self) -> String {
+        match self {
+            SecretTier::Everyone => String::new(),
+            SecretTier::Me => " (me)".to_string(),
+            SecretTier::Group(name) => format!(" (group {name})"),
+        }
+    }
+}
+
+/// Read a key's value for the given tier from the working state.
+fn tier_get(
+    current: &murk_cli::types::Murk,
+    tier: &SecretTier,
+    pubkey: &str,
+    key: &str,
+) -> Option<zeroize::Zeroizing<String>> {
+    match tier {
+        SecretTier::Everyone => current.values.get(key).cloned(),
+        SecretTier::Me => current.scoped.get(key).and_then(|m| m.get(pubkey)).cloned(),
+        SecretTier::Group(name) => current.grouped.get(key).and_then(|m| m.get(name)).cloned(),
+    }
+}
+
+/// Set a key's value for the given tier in the working state.
+fn tier_set(
+    current: &mut murk_cli::types::Murk,
+    tier: &SecretTier,
+    pubkey: &str,
+    key: &str,
+    value: zeroize::Zeroizing<String>,
+) {
+    match tier {
+        SecretTier::Everyone => {
+            // everyone is the base tier — drop any group assignment so the
+            // shared value isn't shadowed by stale grouped ciphertext.
+            current.grouped.remove(key);
+            current.values.insert(key.to_string(), value);
+        }
+        SecretTier::Me => {
+            // me is an override; leave the base tier untouched.
+            current
+                .scoped
+                .entry(key.to_string())
+                .or_default()
+                .insert(pubkey.to_string(), value);
+        }
+        SecretTier::Group(name) => {
+            // the named group becomes the sole base tier.
+            current.values.remove(key);
+            let entry = current.grouped.entry(key.to_string()).or_default();
+            entry.clear();
+            entry.insert(name.to_string(), value);
+        }
+    }
+}
+
+/// List all (key, value) pairs visible at the given tier, sorted by key.
+fn tier_list(
+    current: &murk_cli::types::Murk,
+    tier: &SecretTier,
+    pubkey: &str,
+) -> Vec<(String, zeroize::Zeroizing<String>)> {
+    let mut entries: Vec<(String, zeroize::Zeroizing<String>)> = match tier {
+        SecretTier::Everyone => current
+            .values
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        SecretTier::Me => current
+            .scoped
+            .iter()
+            .filter_map(|(k, m)| m.get(pubkey).map(|v| (k.clone(), v.clone())))
+            .collect(),
+        SecretTier::Group(name) => current
+            .grouped
+            .iter()
+            .filter_map(|(k, m)| m.get(name).map(|v| (k.clone(), v.clone())))
+            .collect(),
+    };
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
 fn cmd_add(
     key: &str,
     value: &str,
     desc: Option<&str>,
+    group: Option<&str>,
     scoped: bool,
     tags: &[String],
     vault_path: &str,
@@ -729,26 +919,51 @@ fn cmd_add(
         );
     }
 
+    let tier = resolve_secret_tier(group, scoped);
+
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
-    let needs_desc_hint = murk_cli::add_secret(
-        &mut vault,
-        &mut current,
-        key,
-        value,
-        desc,
-        scoped,
-        tags,
-        &identity,
-    );
+    let (needs_desc_hint, label) = match &tier {
+        SecretTier::Group(name) => {
+            let pubkey = try_or_die(identity.pubkey_string());
+            let needs = try_or_die(murk_cli::add_grouped_secret(
+                &mut vault,
+                &mut current,
+                key,
+                value,
+                desc,
+                name,
+                tags,
+                &pubkey,
+            ));
+            (needs, format!(" (group {name})"))
+        }
+        tier => {
+            let scoped = matches!(tier, SecretTier::Me);
+            let needs = murk_cli::add_secret(
+                &mut vault,
+                &mut current,
+                key,
+                value,
+                desc,
+                scoped,
+                tags,
+                &identity,
+            );
+            (
+                needs,
+                if scoped {
+                    " (me)".to_string()
+                } else {
+                    String::new()
+                },
+            )
+        }
+    };
 
-    if scoped {
-        eprintln!("{} added {} (scoped)", "✦".yellow(), key.bold());
-    } else {
-        eprintln!("{} added {}", "◆".magenta(), key.bold());
-    }
+    eprintln!("{} added {}{label}", "◆".magenta(), key.bold());
 
     if needs_desc_hint {
         eprintln!(
@@ -760,7 +975,8 @@ fn cmd_add(
     save_vault(vault_path, &mut vault, &original, &current);
 }
 
-fn cmd_import(file: &str, force: bool, vault_path: &str) {
+fn cmd_import(file: &str, force: bool, group: Option<&str>, vault_path: &str) {
+    let tier = resolve_secret_tier(group, false);
     // Wrap the raw file contents in Zeroizing so the plaintext is wiped
     // from memory as soon as parsing completes, not when the function returns.
     let contents = zeroize::Zeroizing::new(
@@ -805,15 +1021,19 @@ fn cmd_import(file: &str, force: bool, vault_path: &str) {
         return;
     }
 
-    let (mut vault, murk, _identity, _lock) = load_vault_locked(vault_path);
+    let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
-    // Check for collisions with existing secrets.
+    // Check for collisions with existing secrets (any tier).
     if !force {
         let collisions: Vec<&str> = pairs
             .iter()
-            .filter(|(k, _)| current.values.contains_key(k))
+            .filter(|(k, _)| {
+                current.values.contains_key(k)
+                    || current.grouped.contains_key(k)
+                    || current.scoped.contains_key(k)
+            })
             .map(|(k, _)| k.as_str())
             .collect();
         if !collisions.is_empty() {
@@ -831,7 +1051,40 @@ fn cmd_import(file: &str, force: bool, vault_path: &str) {
         }
     }
 
-    let imported = murk_cli::import_secrets(&mut vault, &mut current, &pairs);
+    let imported: Vec<String> = match &tier {
+        SecretTier::Everyone => murk_cli::import_secrets(&mut vault, &mut current, &pairs),
+        SecretTier::Me => {
+            for (key, value) in &pairs {
+                murk_cli::add_secret(
+                    &mut vault,
+                    &mut current,
+                    key,
+                    value,
+                    None,
+                    true,
+                    &[],
+                    &identity,
+                );
+            }
+            pairs.iter().map(|(k, _)| k.clone()).collect()
+        }
+        SecretTier::Group(name) => {
+            let pubkey = try_or_die(identity.pubkey_string());
+            for (key, value) in &pairs {
+                try_or_die(murk_cli::add_grouped_secret(
+                    &mut vault,
+                    &mut current,
+                    key,
+                    value,
+                    None,
+                    name,
+                    &[],
+                    &pubkey,
+                ));
+            }
+            pairs.iter().map(|(k, _)| k.clone()).collect()
+        }
+    };
 
     for key in &imported {
         eprintln!("  {} {}", "◆".magenta(), key.bold());
@@ -839,8 +1092,13 @@ fn cmd_import(file: &str, force: bool, vault_path: &str) {
 
     save_vault(vault_path, &mut vault, &original, &current);
     let count = imported.len();
+    let label = match &tier {
+        SecretTier::Group(name) => format!(" into group {name}"),
+        SecretTier::Me => " (me)".to_string(),
+        SecretTier::Everyone => String::new(),
+    };
     eprintln!(
-        "{} imported {count} secret{}",
+        "{} imported {count} secret{}{label}",
         "◆".magenta(),
         if count == 1 { "" } else { "s" }
     );
@@ -851,6 +1109,7 @@ fn cmd_generate(
     length: usize,
     hex: bool,
     desc: Option<&str>,
+    group: Option<&str>,
     tags: &[String],
     vault_path: &str,
 ) {
@@ -864,24 +1123,49 @@ fn cmd_generate(
         );
     }
 
+    let tier = resolve_secret_tier(group, false);
     let value = random_secret(length, hex);
 
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
 
-    murk_cli::add_secret(
-        &mut vault,
-        &mut current,
-        key,
-        &value,
-        desc,
-        false,
-        tags,
-        &identity,
-    );
+    let label = match &tier {
+        SecretTier::Group(name) => {
+            let pubkey = try_or_die(identity.pubkey_string());
+            try_or_die(murk_cli::add_grouped_secret(
+                &mut vault,
+                &mut current,
+                key,
+                &value,
+                desc,
+                name,
+                tags,
+                &pubkey,
+            ));
+            format!(" (group {name})")
+        }
+        tier => {
+            let scoped = matches!(tier, SecretTier::Me);
+            murk_cli::add_secret(
+                &mut vault,
+                &mut current,
+                key,
+                &value,
+                desc,
+                scoped,
+                tags,
+                &identity,
+            );
+            if scoped {
+                " (me)".to_string()
+            } else {
+                String::new()
+            }
+        }
+    };
 
-    eprintln!("{} generated {}", "◆".magenta(), key.bold());
+    eprintln!("{} generated {}{label}", "◆".magenta(), key.bold());
 
     save_vault(vault_path, &mut vault, &original, &current);
 }
@@ -1117,64 +1401,52 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     }
 }
 
-fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
+fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &str) {
+    let tier = resolve_secret_tier(group, scoped);
+
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
+    if let SecretTier::Group(name) = &tier {
+        match current.groups.get(name) {
+            None => die(&format_args!("group not found: {name}"), 1),
+            Some(members) if !members.contains(&pubkey) => die(
+                &format_args!("you must be a member of group \"{name}\" to edit it"),
+                1,
+            ),
+            Some(_) => {}
+        }
+    }
+
+    let tier_label = tier.label();
+
     // Build the edit buffer.
     let (header, entries) = if let Some(k) = key {
         // Single key: just the raw value.
-        let value = if scoped {
-            current.scoped.get(k).and_then(|m| m.get(&pubkey)).cloned()
-        } else {
-            current.values.get(k).cloned()
-        };
-        let value = value.unwrap_or_else(|| {
-            die(
-                &format_args!(
-                    "key {} not found{}",
-                    k.bold(),
-                    if scoped { " (scoped)" } else { "" }
-                ),
-                1,
-            );
+        let value = tier_get(&current, &tier, &pubkey, k).unwrap_or_else(|| {
+            die(&format_args!("key {} not found{tier_label}", k.bold()), 1);
         });
         (
             format!(
-                "# Editing {}{}\n# Save and quit to apply. Empty value or exit non-zero to abort.\n",
-                k,
-                if scoped { " (scoped)" } else { "" }
+                "# Editing {k}{tier_label}\n# Save and quit to apply. Empty value or exit non-zero to abort.\n",
             ),
             vec![(k.to_string(), value)] as Vec<(String, zeroize::Zeroizing<String>)>,
         )
     } else {
         // All keys: KEY=VALUE format.
-        let mut entries: Vec<(String, zeroize::Zeroizing<String>)> = if scoped {
-            current
-                .scoped
-                .iter()
-                .filter_map(|(k, m)| m.get(&pubkey).map(|v| (k.clone(), v.clone())))
-                .collect()
-        } else {
-            current
-                .values
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
+        let entries = tier_list(&current, &tier, &pubkey);
+        let scope_note = match &tier {
+            SecretTier::Everyone => String::new(),
+            SecretTier::Me => "# Editing your personal (me) values.\n".to_string(),
+            SecretTier::Group(name) => format!("# Editing group {name} values.\n"),
         };
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
         let header = format!(
             "# Edit secrets below. Lines starting with # are ignored.\n\
              # Format: KEY=VALUE (one per line).\n\
              # Delete a line to remove that secret. Add KEY=VALUE to create.\n\
-             # Save and quit to apply. Exit non-zero to abort.\n{}\n",
-            if scoped {
-                "# Editing scoped overrides.\n"
-            } else {
-                ""
-            }
+             # Save and quit to apply. Exit non-zero to abort.\n{scope_note}\n",
         );
         (header, entries)
     };
@@ -1283,33 +1555,17 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
             return;
         }
 
-        let old_value: Option<zeroize::Zeroizing<String>> = if scoped {
-            current.scoped.get(k).and_then(|m| m.get(&pubkey)).cloned()
-        } else {
-            current.values.get(k).cloned()
-        };
+        let old_value = tier_get(&current, &tier, &pubkey, k);
 
         if old_value.as_ref().map(|v| v.as_str()) == Some(new_value.as_str()) {
             eprintln!("{} no changes", "◆".magenta());
             return;
         }
 
-        if scoped {
-            current
-                .scoped
-                .entry(k.into())
-                .or_default()
-                .insert(pubkey.clone(), new_value);
-        } else {
-            current.values.insert(k.into(), new_value);
-        }
+        tier_set(&mut current, &tier, &pubkey, k, new_value);
 
         save_vault(vault_path, &mut vault, &original, &current);
-        if scoped {
-            eprintln!("{} updated {} (scoped)", "✦".yellow(), k.bold());
-        } else {
-            eprintln!("{} updated {}", "◆".magenta(), k.bold());
-        }
+        eprintln!("{} updated {}{tier_label}", "◆".magenta(), k.bold());
     } else {
         // Multi-key: parse KEY=VALUE lines, diff against original.
         let mut new_entries: std::collections::BTreeMap<String, zeroize::Zeroizing<String>> =
@@ -1349,27 +1605,11 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
             match old_entries.get(k) {
                 Some(old_v) if old_v.as_str() == v.as_str() => {} // Unchanged.
                 Some(_) => {
-                    if scoped {
-                        current
-                            .scoped
-                            .entry(k.clone())
-                            .or_default()
-                            .insert(pubkey.clone(), v.clone());
-                    } else {
-                        current.values.insert(k.clone(), v.clone());
-                    }
+                    tier_set(&mut current, &tier, &pubkey, k, v.clone());
                     updated += 1;
                 }
                 None => {
-                    if scoped {
-                        current
-                            .scoped
-                            .entry(k.clone())
-                            .or_default()
-                            .insert(pubkey.clone(), v.clone());
-                    } else {
-                        current.values.insert(k.clone(), v.clone());
-                    }
+                    tier_set(&mut current, &tier, &pubkey, k, v.clone());
                     // Ensure schema entry exists for new keys.
                     vault
                         .schema
@@ -1383,14 +1623,23 @@ fn cmd_edit(key: Option<&str>, scoped: bool, vault_path: &str) {
         // Remove deleted keys.
         for k in old_entries.keys() {
             if !new_entries.contains_key(k) {
-                if scoped {
-                    if let Some(m) = current.scoped.get_mut(k) {
-                        m.remove(&pubkey);
+                match &tier {
+                    SecretTier::Everyone => {
+                        current.values.remove(k);
+                        current.scoped.remove(k);
+                        current.grouped.remove(k);
+                        vault.schema.remove(k);
                     }
-                } else {
-                    current.values.remove(k);
-                    current.scoped.remove(k);
-                    vault.schema.remove(k);
+                    SecretTier::Me => {
+                        if let Some(m) = current.scoped.get_mut(k) {
+                            m.remove(&pubkey);
+                        }
+                    }
+                    SecretTier::Group(name) => {
+                        if let Some(m) = current.grouped.get_mut(k) {
+                            m.remove(name);
+                        }
+                    }
                 }
                 removed += 1;
             }
@@ -1756,9 +2005,24 @@ fn reject_rsa_keys(keys: &[String], allow: bool) {
     );
 }
 
+/// Add freshly-authorized pubkeys to `group` (if set). The caller must be a
+/// member of the group. Dies on error.
+fn add_recipients_to_group(
+    current: &mut murk_cli::types::Murk,
+    group: Option<&str>,
+    pubkeys: &[String],
+    operator_pubkey: &str,
+) {
+    let Some(g) = group else { return };
+    for pk in pubkeys {
+        try_or_die(murk_cli::add_member(current, g, pk, operator_pubkey));
+    }
+}
+
 fn cmd_authorize(
     pubkey: &str,
     name: Option<&str>,
+    group: Option<&str>,
     force: bool,
     allow_ssh_rsa: bool,
     vault_path: &str,
@@ -1766,6 +2030,7 @@ fn cmd_authorize(
     let (mut vault, murk, identity, _lock) = load_vault_locked(vault_path);
     let original = murk.clone();
     let mut current = murk;
+    let operator_pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     if let Some(username) = pubkey.strip_prefix("github:") {
         // Fetch all SSH keys from GitHub.
@@ -1817,6 +2082,7 @@ fn cmd_authorize(
 
         let display_name = format!("{username}@github");
         let mut added = 0;
+        let mut authorized: Vec<String> = Vec::new();
         let mut type_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
 
@@ -1835,8 +2101,11 @@ fn cmd_authorize(
 
             let key_type = murk_cli::github::key_type_label(key_string);
             *type_counts.entry(key_type.to_string()).or_default() += 1;
+            authorized.push((*key_string).clone());
             added += 1;
         }
+
+        add_recipients_to_group(&mut current, group, &authorized, &operator_pubkey);
 
         if added == 0 {
             eprintln!(
@@ -1916,6 +2185,13 @@ fn cmd_authorize(
             name,
         ));
 
+        add_recipients_to_group(
+            &mut current,
+            group,
+            std::slice::from_ref(&key_string),
+            &operator_pubkey,
+        );
+
         save_vault(vault_path, &mut vault, &original, &current);
 
         let display = name
@@ -1931,6 +2207,13 @@ fn cmd_authorize(
             pubkey,
             name,
         ));
+
+        add_recipients_to_group(
+            &mut current,
+            group,
+            std::slice::from_ref(&pubkey.to_string()),
+            &operator_pubkey,
+        );
 
         save_vault(vault_path, &mut vault, &original, &current);
 
@@ -1999,6 +2282,151 @@ fn cmd_revoke(recipient: &str, rotate: bool, vault_path: &str) {
         "  {}",
         "this recipient can still decrypt previous versions from git history".dimmed()
     );
+}
+
+fn cmd_group(sub: GroupCommand) {
+    match sub {
+        GroupCommand::Create { name, vault } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (mut vault, murk, identity, _lock) = load_vault_locked(&vault_path);
+            let original = murk.clone();
+            let mut current = murk;
+            let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+
+            try_or_die(murk_cli::create_group(&mut current, &name, &pubkey));
+            save_vault(&vault_path, &mut vault, &original, &current);
+            eprintln!("{} created group {}", "◆".magenta(), name.bold());
+        }
+
+        GroupCommand::Ls { json, vault } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (_vault, murk, identity) = load_vault(&vault_path);
+            let self_pubkey = identity.pubkey_string().ok();
+
+            if json {
+                let map: serde_json::Map<String, serde_json::Value> = murk
+                    .groups
+                    .iter()
+                    .map(|(name, members)| {
+                        let arr: Vec<serde_json::Value> = members
+                            .iter()
+                            .map(|pk| serde_json::Value::String(pk.clone()))
+                            .collect();
+                        (name.clone(), serde_json::Value::Array(arr))
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&map).unwrap());
+                return;
+            }
+
+            if murk.groups.is_empty() {
+                eprintln!(
+                    "{}",
+                    "no groups — create one with `murk group create`".dimmed()
+                );
+                return;
+            }
+
+            for (name, members) in &murk.groups {
+                eprintln!("{} {}", "◆".magenta(), name.bold());
+                for pk in members {
+                    let label = murk
+                        .recipients
+                        .get(pk)
+                        .filter(|n| !n.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| murk_cli::truncate_pubkey(pk));
+                    let marker = if Some(pk) == self_pubkey.as_ref() {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    eprintln!("  {marker} {}", label.green().bold());
+                }
+            }
+        }
+
+        GroupCommand::Add {
+            name,
+            member,
+            vault,
+        } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (mut vault, murk, identity, _lock) = load_vault_locked(&vault_path);
+            let original = murk.clone();
+            let mut current = murk;
+            let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+
+            let member_pk = try_or_die(murk_cli::resolve_member(&vault, &current, &member));
+            let added = try_or_die(murk_cli::add_member(
+                &mut current,
+                &name,
+                &member_pk,
+                &pubkey,
+            ));
+            if !added {
+                eprintln!(
+                    "{} {} is already in group {}",
+                    "◆".magenta(),
+                    member.bold(),
+                    name.bold()
+                );
+                return;
+            }
+            save_vault(&vault_path, &mut vault, &original, &current);
+            eprintln!(
+                "{} added {} to group {}",
+                "◆".magenta(),
+                member.bold(),
+                name.bold()
+            );
+        }
+
+        GroupCommand::Rm {
+            name,
+            member,
+            vault,
+        } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (mut vault, murk, identity, _lock) = load_vault_locked(&vault_path);
+            let original = murk.clone();
+            let mut current = murk;
+            let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+
+            match member {
+                Some(member) => {
+                    let member_pk = try_or_die(murk_cli::resolve_member(&vault, &current, &member));
+                    let removed = try_or_die(murk_cli::remove_member(
+                        &mut current,
+                        &name,
+                        &member_pk,
+                        &pubkey,
+                    ));
+                    if !removed {
+                        eprintln!(
+                            "{} {} is not in group {}",
+                            "◆".magenta(),
+                            member.bold(),
+                            name.bold()
+                        );
+                        return;
+                    }
+                    save_vault(&vault_path, &mut vault, &original, &current);
+                    eprintln!(
+                        "{} removed {} from group {}",
+                        "◆".magenta(),
+                        member.bold(),
+                        name.bold()
+                    );
+                }
+                None => {
+                    try_or_die(murk_cli::delete_group(&vault, &mut current, &name));
+                    save_vault(&vault_path, &mut vault, &original, &current);
+                    eprintln!("{} deleted group {}", "◆".magenta(), name.bold());
+                }
+            }
+        }
+    }
 }
 
 /// Rotate the given keys in the still-locked session after a revoke, prompting
@@ -2809,25 +3237,45 @@ fn main() {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
         Command::Restore => cmd_restore(),
-        Command::Import { file, force, vault } => {
-            cmd_import(&file, force, &murk_cli::resolve_vault_path(&vault));
+        Command::Import {
+            file,
+            force,
+            group,
+            vault,
+        } => {
+            cmd_import(
+                &file,
+                force,
+                group.as_deref(),
+                &murk_cli::resolve_vault_path(&vault),
+            );
         }
         Command::Add {
             key,
             desc,
+            group,
             scoped,
             tag,
             vault,
         } => {
             let vault = murk_cli::resolve_vault_path(&vault);
             let resolved = resolve_value(&key);
-            cmd_add(&key, &resolved, desc.as_deref(), scoped, &tag, &vault);
+            cmd_add(
+                &key,
+                &resolved,
+                desc.as_deref(),
+                group.as_deref(),
+                scoped,
+                &tag,
+                &vault,
+            );
         }
         Command::Generate {
             key,
             length,
             hex,
             desc,
+            group,
             tag,
             vault,
         } => cmd_generate(
@@ -2835,6 +3283,7 @@ fn main() {
             length,
             hex,
             desc.as_deref(),
+            group.as_deref(),
             &tag,
             &murk_cli::resolve_vault_path(&vault),
         ),
@@ -2881,10 +3330,16 @@ fn main() {
         Command::Export { tag, json, vault } => {
             cmd_export(&tag, json, &murk_cli::resolve_vault_path(&vault));
         }
-        Command::Edit { key, scoped, vault } => {
+        Command::Edit {
+            key,
+            scoped,
+            group,
+            vault,
+        } => {
             cmd_edit(
                 key.as_deref(),
                 scoped,
+                group.as_deref(),
                 &murk_cli::resolve_vault_path(&vault),
             );
         }
@@ -2910,6 +3365,7 @@ fn main() {
         } => cmd_authorize(
             &pubkey,
             name.as_deref(),
+            None,
             force,
             allow_ssh_rsa,
             &murk_cli::resolve_vault_path(&vault),
@@ -2931,6 +3387,7 @@ fn main() {
                 Some(CircleCommand::Authorize {
                     pubkey,
                     name,
+                    group,
                     force,
                     allow_ssh_rsa,
                     vault,
@@ -2939,6 +3396,7 @@ fn main() {
         } => cmd_authorize(
             &pubkey,
             name.as_deref(),
+            group.as_deref(),
             force,
             allow_ssh_rsa,
             &murk_cli::resolve_vault_path(&vault),
@@ -2952,6 +3410,7 @@ fn main() {
                 }),
             ..
         } => cmd_revoke(&recipient, rotate, &murk_cli::resolve_vault_path(&vault)),
+        Command::Group { sub } => cmd_group(sub),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,

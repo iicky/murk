@@ -3558,3 +3558,279 @@ fn scan_reports_multiple_leaks() {
         .stderr(predicate::str::contains("notes.txt"))
         .stderr(predicate::str::contains("2 leaked secrets found"));
 }
+
+// ── groups ──
+
+#[test]
+fn group_secret_readable_only_by_members() {
+    let dir = TempDir::new().unwrap();
+    let (alice_key, _alice_pk) = init_vault(&dir);
+
+    // Second recipient (bob) becomes a group member; third (carol) does not.
+    let bob_dir = TempDir::new().unwrap();
+    let (bob_key, bob_pk) = init_vault(&bob_dir);
+    let carol_dir = TempDir::new().unwrap();
+    let (carol_key, carol_pk) = init_vault(&carol_dir);
+
+    // Authorize carol as a plain recipient (not in any group).
+    murk(&dir, &alice_key)
+        .args([
+            "circle",
+            "authorize",
+            &carol_pk,
+            "--name",
+            "carol",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Create the prod group, then authorize bob straight into it.
+    murk(&dir, &alice_key)
+        .args(["group", "create", "prod", "--vault", "test.murk"])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args([
+            "circle",
+            "authorize",
+            &bob_pk,
+            "--name",
+            "bob",
+            "--group",
+            "prod",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Add a secret encrypted to the prod group only.
+    murk(&dir, &alice_key)
+        .args([
+            "add",
+            "STRIPE_KEY",
+            "--group",
+            "prod",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("sk_live_123\n")
+        .assert()
+        .success();
+
+    // group ls shows prod with both members.
+    murk(&dir, &alice_key)
+        .args(["group", "ls", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("prod").and(predicate::str::contains("bob")));
+
+    // Bob (a member) can read it.
+    murk(&dir, &bob_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_123"));
+
+    // Carol (a recipient but not a prod member) cannot.
+    murk(&dir, &carol_key)
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn group_rm_member_revokes_access_after_reencrypt() {
+    let dir = TempDir::new().unwrap();
+    let (alice_key, _alice_pk) = init_vault(&dir);
+
+    let bob_dir = TempDir::new().unwrap();
+    let (bob_key, bob_pk) = init_vault(&bob_dir);
+
+    murk(&dir, &alice_key)
+        .args(["group", "create", "prod", "--vault", "test.murk"])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args([
+            "circle",
+            "authorize",
+            &bob_pk,
+            "--name",
+            "bob",
+            "--group",
+            "prod",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args(["add", "PROD_DB", "--group", "prod", "--vault", "test.murk"])
+        .write_stdin("prod_secret\n")
+        .assert()
+        .success();
+
+    // Bob can read before removal.
+    murk(&dir, &bob_key)
+        .args(["get", "PROD_DB", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("prod_secret"));
+
+    // Remove bob from the group (alice is a member, so she re-encrypts).
+    murk(&dir, &alice_key)
+        .args([
+            "group",
+            "rm",
+            "prod",
+            "--member",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Bob can no longer read the current ciphertext.
+    murk(&dir, &bob_key)
+        .args(["get", "PROD_DB", "--vault", "test.murk"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn group_create_rejects_reserved_name() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["group", "create", "me", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("reserved"));
+}
+
+#[test]
+fn non_member_save_preserves_group_secret() {
+    // Regression: a recipient who is NOT in a group must not drop that group's
+    // secrets when they save an unrelated change. The group ciphertext never
+    // enters their decrypted view, so save_vault must carry it through.
+    let dir = TempDir::new().unwrap();
+    let (alice_key, _alice_pk) = init_vault(&dir);
+
+    let bob_dir = TempDir::new().unwrap();
+    let (bob_key, bob_pk) = init_vault(&bob_dir);
+
+    // Alice creates prod and adds bob; both are members.
+    murk(&dir, &alice_key)
+        .args(["group", "create", "prod", "--vault", "test.murk"])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args([
+            "circle",
+            "authorize",
+            &bob_pk,
+            "--name",
+            "bob",
+            "--group",
+            "prod",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args(["add", "PROD_DB", "--group", "prod", "--vault", "test.murk"])
+        .write_stdin("prod_secret\n")
+        .assert()
+        .success();
+
+    // Remove alice from prod — now bob is the sole member; alice is a recipient
+    // but cannot read PROD_DB.
+    murk(&dir, &alice_key)
+        .args([
+            "group",
+            "rm",
+            "prod",
+            "--member",
+            "testuser",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args(["get", "PROD_DB", "--vault", "test.murk"])
+        .assert()
+        .failure();
+
+    // Alice (non-member) saves an unrelated change.
+    murk(&dir, &alice_key)
+        .args(["add", "UNRELATED", "--vault", "test.murk"])
+        .write_stdin("x\n")
+        .assert()
+        .success();
+
+    // Bob can still read PROD_DB — it was not dropped.
+    murk(&dir, &bob_key)
+        .args(["get", "PROD_DB", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("prod_secret"));
+}
+
+#[test]
+fn add_shared_clears_group_assignment() {
+    // Regression: assigning a key to everyone must drop its prior group entry,
+    // so the new shared value isn't shadowed by stale grouped ciphertext.
+    let dir = TempDir::new().unwrap();
+    let (alice_key, _alice_pk) = init_vault(&dir);
+
+    let carol_dir = TempDir::new().unwrap();
+    let (carol_key, carol_pk) = init_vault(&carol_dir);
+    murk(&dir, &alice_key)
+        .args([
+            "circle",
+            "authorize",
+            &carol_pk,
+            "--name",
+            "carol",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &alice_key)
+        .args(["group", "create", "prod", "--vault", "test.murk"])
+        .assert()
+        .success();
+    murk(&dir, &alice_key)
+        .args(["add", "TOKEN", "--group", "prod", "--vault", "test.murk"])
+        .write_stdin("group_val\n")
+        .assert()
+        .success();
+    // carol (not in prod) can't read it yet.
+    murk(&dir, &carol_key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .failure();
+
+    // Reassign to everyone.
+    murk(&dir, &alice_key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("shared_val\n")
+        .assert()
+        .success();
+
+    // carol now reads the shared value (not the stale group ciphertext).
+    murk(&dir, &carol_key)
+        .args(["get", "TOKEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("shared_val"));
+}
