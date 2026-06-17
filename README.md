@@ -283,18 +283,31 @@ For production use, point `MURK_KEY_FILE` at an [age plugin identity file](https
 Example setup with a YubiKey:
 
 ```bash
-# Install the plugin, then generate an identity bound to the YubiKey
+# Install the plugin (must be on $PATH — murk shells out to it on decrypt)
 brew install age-plugin-yubikey
-age-plugin-yubikey --generate > ~/.config/murk/yubikey.txt
+
+# Generate an identity bound to the YubiKey. Prompts for the PIV PIN
+# (default 123456) and a touch. --touch-policy always requires a physical
+# tap for every decrypt; --pin-policy once caches the PIN per session.
+age-plugin-yubikey --generate --touch-policy always --pin-policy once \
+  > ~/.config/murk/yubikey.txt
+
+# murk refuses identity files readable by others
+chmod 600 ~/.config/murk/yubikey.txt
 
 # Point murk at the identity file
 echo 'export MURK_KEY_FILE=~/.config/murk/yubikey.txt' >> .env
 
 # Authorize the YubiKey's public key on your vault
 murk authorize $(grep -i recipient ~/.config/murk/yubikey.txt | awk '{print $NF}')
+
+# Read a secret — the YubiKey blinks; tap it to decrypt
+murk get SOME_KEY
 ```
 
 The identity file contains a `#    Recipient: age1yubikey1...` header followed by an `AGE-PLUGIN-YUBIKEY-1...` pointer. murk reads the pubkey from the header (no plugin call needed for scoped secret lookup) and invokes the plugin only when actually decrypting — at which point the YubiKey prompts you to tap it.
+
+If the plugin binary isn't on `$PATH`, murk fails with `age-plugin-yubikey unavailable` — install it and retry. `MURK_KEY` (the inline env var) rejects `AGE-PLUGIN-...` strings: a bare plugin identity doesn't carry the recipient pubkey, so use `MURK_KEY_FILE` pointing at the identity file.
 
 **No BIP39 recovery for hardware identities.** The whole point of hardware-backed keys is that the raw key bytes never leave the device, so there are no bytes to encode as a recovery phrase. Instead, enroll a second hardware device at setup and add both pubkeys as recipients (`murk authorize <backup-pubkey>`) — if you lose one, the backup still decrypts.
 
