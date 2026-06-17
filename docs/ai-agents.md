@@ -31,8 +31,37 @@ murk gives agents access to secrets without exposing them in plaintext.
    ```
    Paste the output into agent system prompts so they know what env vars exist and how to reference them, without ever seeing the values.
 
-   Reach for `murk info` when you want a fuller picture (recipients, your key source, scoped overrides). Reach for `murk skeleton` when you want a distributable vault file shaped like the real one but with `recipients` / `secrets` / `meta` blanked.
+   Reach for `murk info` when you want a fuller picture (recipients, your key source, private overrides). Reach for `murk skeleton` when you want a distributable vault file shaped like the real one but with `recipients` / `secrets` / `meta` blanked.
 
-## What's next
+## Short-lived agent grants
 
-Future versions of murk will support scoped agent keys — short-lived recipient keys you create for an agent session, authorize for specific secrets, and revoke when done. Until then, `murk exec` and `murk info` are the safe path.
+`murk agent exec` is the safest pattern: the agent's command gets secret *values* in its environment and never sees a key. Reach for a **grant** when the agent has to run `murk` itself over a session — for example a long-running agent that calls `murk get` as it works.
+
+`murk agent grant` mints a fresh ephemeral age identity and gives it read access to exactly the keys you name — never your `MURK_KEY`:
+
+```bash
+murk agent grant --name codex --only STRIPE_SECRET_KEY --ttl 2h
+murk agent grant --name codex --only DATABASE_URL --only PG_PASSWORD --ttl 30m
+```
+
+It writes the agent key to `~/.config/murk/agent-keys/<vault-hash>-<name>` (or `--out PATH`, or `--out -` to stream it to stdout) and prints how to use it. Run the agent with that key and `MURK_STRICT=1` so it can't fall back to your stored key:
+
+```bash
+MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_STRICT=1 \
+  murk agent exec --only STRIPE_SECRET_KEY -- python scripts/refund.py
+```
+
+The granted key reads only its keys — anything else returns "key not found". It is excluded from the shared layer entirely.
+
+List and revoke grants:
+
+```bash
+murk agent ls                       # name, scope, TTL status
+murk agent revoke codex --rotate    # remove the grant and rotate its keys
+```
+
+Three things to keep in mind:
+
+- **The TTL is advisory.** age keys can't self-destruct, and old vault versions stay readable in git, so a leaked grant key works until you `agent revoke` and rotate. The TTL tells you *when* to revoke; `agent ls` flags expired grants. Revoke + rotate is the real close.
+- **The key is a bearer credential.** Whoever holds the key file has the access. Treat it like the secret it unlocks.
+- **Real isolation is the OS's job.** An agent running as you, with read access to your home directory, can read `~/.config/murk/keys` directly and bypass murk. `MURK_STRICT` stops murk from *handing over* your key, but for true containment run the agent in a sandbox, container, or under a separate user that can't read your key directory.
