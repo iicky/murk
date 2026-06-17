@@ -82,7 +82,8 @@ impl MurkIdentity {
     ///
     /// For age keys: `age1...`. For SSH keys: `ssh-ed25519 AAAA...` or
     /// `ssh-rsa AAAA...`. For plugin keys: the `age1<plugin>1...` recipient
-    /// that was parsed from the identity file's `# public key:` header.
+    /// that was parsed from the identity file's recipient header
+    /// (`# Recipient:` or `# public key:`).
     pub fn pubkey_string(&self) -> Result<String, CryptoError> {
         match self {
             MurkIdentity::Age(id) => Ok(id.to_public().to_string()),
@@ -129,9 +130,10 @@ pub fn parse_recipient(pubkey: &str) -> Result<MurkRecipient, CryptoError> {
 /// Accepts three shapes:
 /// - A bare age secret key (`AGE-SECRET-KEY-1...`)
 /// - An SSH PEM-encoded private key (unencrypted only; encrypted keys are rejected)
-/// - A plugin identity file — multi-line text with a `# public key: age1...`
-///   header followed by an `AGE-PLUGIN-<NAME>-1...` pointer, as produced by
-///   tools like `age-plugin-yubikey --identity`
+/// - A plugin identity file — multi-line text with a recipient header
+///   (`# Recipient: age1...` or `# public key: age1...`) followed by an
+///   `AGE-PLUGIN-<NAME>-1...` pointer, as produced by tools like
+///   `age-plugin-yubikey --identity`
 ///
 /// Comments and blank lines are permitted anywhere.
 pub fn parse_identity(input: &str) -> Result<MurkIdentity, CryptoError> {
@@ -159,20 +161,25 @@ pub fn parse_identity(input: &str) -> Result<MurkIdentity, CryptoError> {
         }
     }
 
-    // Identity-file form: walk lines, capture `# public key:` header, then
-    // accept a following plugin pointer.
+    // Identity-file form: walk lines, capture the recipient-pubkey header, then
+    // accept a following plugin pointer. age x25519/ssh files use
+    // `# public key:`; age-plugin-yubikey emits `# Recipient:`. Accept either,
+    // case-insensitively, so real plugin output parses without rewriting.
     let mut pubkey: Option<String> = None;
     for line in input.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(rest) = line
-            .strip_prefix('#')
-            .map(str::trim)
-            .and_then(|s| s.strip_prefix("public key:"))
-        {
-            pubkey = Some(rest.trim().to_string());
+        if let Some(rest) = line.strip_prefix('#').map(str::trim).and_then(|s| {
+            let lower = s.to_ascii_lowercase();
+            ["public key:", "recipient:"].iter().find_map(|p| {
+                lower
+                    .starts_with(p)
+                    .then(|| s[p.len()..].trim().to_string())
+            })
+        }) {
+            pubkey = Some(rest);
             continue;
         }
         if line.starts_with('#') {
@@ -181,10 +188,11 @@ pub fn parse_identity(input: &str) -> Result<MurkIdentity, CryptoError> {
         if let Ok(identity) = line.parse::<PluginIdentity>() {
             let pk = pubkey.ok_or_else(|| {
                 CryptoError::InvalidKey(
-                    "plugin identity is missing its `# public key: age1...` header. Save the \
-                     plugin output (the header line PLUS the AGE-PLUGIN-... line) to a file and \
-                     set MURK_KEY_FILE to its path — setting MURK_KEY to just the identity \
-                     string is not enough, because murk needs the recipient pubkey"
+                    "plugin identity is missing its recipient header (`# public key: age1...` \
+                     or `# Recipient: age1...`). Save the plugin output (the header line PLUS \
+                     the AGE-PLUGIN-... line) to a file and set MURK_KEY_FILE to its path — \
+                     setting MURK_KEY to just the identity string is not enough, because murk \
+                     needs the recipient pubkey"
                         .into(),
                 )
             })?;
@@ -406,6 +414,25 @@ mod tests {
             _ => panic!("expected Plugin variant, got {id:?}"),
         }
         assert_eq!(id.pubkey_string().unwrap(), pubkey_str);
+    }
+
+    #[test]
+    fn parse_identity_plugin_file_recipient_header() {
+        // age-plugin-yubikey 0.5.1 emits `# Recipient:`, not `# public key:`.
+        // murk must accept it so the native identity file parses unmodified.
+        let (identity_str, pubkey_str) = make_plugin_pair("yubikey");
+        let file = format!(
+            "#       Serial: 17600929, Slot: 1\n#         Name: murk-test\n\
+             #    Recipient: {pubkey_str}\n{identity_str}\n"
+        );
+        let id = parse_identity(&file).expect("parses `# Recipient:` plugin file");
+        match &id {
+            MurkIdentity::Plugin { identity, pubkey } => {
+                assert_eq!(identity.plugin(), "yubikey");
+                assert_eq!(pubkey, &pubkey_str);
+            }
+            _ => panic!("expected Plugin variant, got {id:?}"),
+        }
     }
 
     #[test]
