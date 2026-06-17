@@ -291,10 +291,10 @@ age-plugin-yubikey --generate > ~/.config/murk/yubikey.txt
 echo 'export MURK_KEY_FILE=~/.config/murk/yubikey.txt' >> .env
 
 # Authorize the YubiKey's public key on your vault
-murk authorize $(grep 'public key' ~/.config/murk/yubikey.txt | awk '{print $NF}')
+murk authorize $(grep -i recipient ~/.config/murk/yubikey.txt | awk '{print $NF}')
 ```
 
-The identity file contains a `# public key: age1yubikey1...` header followed by an `AGE-PLUGIN-YUBIKEY-1...` pointer. murk reads the pubkey from the header (no plugin call needed for scoped secret lookup) and invokes the plugin only when actually decrypting — at which point the YubiKey prompts you to tap it.
+The identity file contains a `#    Recipient: age1yubikey1...` header followed by an `AGE-PLUGIN-YUBIKEY-1...` pointer. murk reads the pubkey from the header (no plugin call needed for scoped secret lookup) and invokes the plugin only when actually decrypting — at which point the YubiKey prompts you to tap it.
 
 **No BIP39 recovery for hardware identities.** The whole point of hardware-backed keys is that the raw key bytes never leave the device, so there are no bytes to encode as a recovery phrase. Instead, enroll a second hardware device at setup and add both pubkeys as recipients (`murk authorize <backup-pubkey>`) — if you lose one, the backup still decrypts.
 
