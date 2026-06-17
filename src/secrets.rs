@@ -22,7 +22,7 @@ pub fn add_secret(
         // does not change which group owns the key, so shared/grouped are left
         // untouched.
         let pubkey = identity.pubkey_string().expect("valid identity has pubkey");
-        murk.scoped
+        murk.private
             .entry(key.into())
             .or_default()
             .insert(pubkey, Zeroizing::new(value.to_owned()));
@@ -113,7 +113,7 @@ fn upsert_schema(vault: &mut types::Vault, key: &str, desc: Option<&str>, tags: 
 /// Remove a secret from the working state and schema.
 pub fn remove_secret(vault: &mut types::Vault, murk: &mut types::Murk, key: &str) {
     murk.values.remove(key);
-    murk.scoped.remove(key);
+    murk.private.remove(key);
     murk.grouped.remove(key);
     vault.schema.remove(key);
 }
@@ -122,7 +122,7 @@ pub fn remove_secret(vault: &mut types::Vault, murk: &mut types::Murk, key: &str
 /// a personal scoped override, then a named-group value we can read, then the
 /// shared (everyone) value.
 pub fn get_secret<'a>(murk: &'a types::Murk, key: &str, pubkey: &str) -> Option<&'a str> {
-    if let Some(value) = murk.scoped.get(key).and_then(|m| m.get(pubkey)) {
+    if let Some(value) = murk.private.get(key).and_then(|m| m.get(pubkey)) {
         return Some(value.as_str());
     }
     if let Some(value) = murk.grouped.get(key).and_then(|m| m.values().next()) {
@@ -409,7 +409,7 @@ mod tests {
         );
 
         assert!(!murk.values.contains_key("KEY"));
-        assert_eq!(murk.scoped["KEY"][&pubkey].as_str(), "scoped_val");
+        assert_eq!(murk.private["KEY"][&pubkey].as_str(), "scoped_val");
     }
 
     #[test]
@@ -485,12 +485,12 @@ mod tests {
         murk.values.insert("KEY".into(), secret("val"));
         let mut scoped = HashMap::new();
         scoped.insert("age1pk".into(), secret("scoped_val"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         remove_secret(&mut vault, &mut murk, "KEY");
 
         assert!(!murk.values.contains_key("KEY"));
-        assert!(!murk.scoped.contains_key("KEY"));
+        assert!(!murk.private.contains_key("KEY"));
         assert!(!vault.schema.contains_key("KEY"));
     }
 
@@ -508,7 +508,7 @@ mod tests {
         murk.values.insert("KEY".into(), secret("shared_val"));
         let mut scoped = HashMap::new();
         scoped.insert("age1pk".into(), secret("scoped_val"));
-        murk.scoped.insert("KEY".into(), scoped);
+        murk.private.insert("KEY".into(), scoped);
 
         assert_eq!(get_secret(&murk, "KEY", "age1pk"), Some("scoped_val"));
     }
@@ -694,7 +694,7 @@ mod tests {
         );
         // Shared value still exists, scoped override added.
         assert_eq!(murk.values["KEY"].as_str(), "shared_val");
-        assert_eq!(murk.scoped["KEY"][&pubkey].as_str(), "scoped_val");
+        assert_eq!(murk.private["KEY"][&pubkey].as_str(), "scoped_val");
     }
 
     #[test]

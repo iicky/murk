@@ -98,7 +98,7 @@ pub fn vault_info(
                     .secrets
                     .get(key.as_str())
                     .map(|s| {
-                        s.scoped
+                        s.private
                             .keys()
                             .map(|pk| {
                                 meta.recipients.get(pk).cloned().unwrap_or_else(|| {

@@ -70,7 +70,7 @@ pub fn parse_ttl(s: &str) -> Result<Duration, MurkError> {
 
 /// Create an agent grant in the working state. The caller mints the ephemeral
 /// identity, adds `agent_pubkey` to the vault recipients, and registers its
-/// display name *before* calling this. Encrypts a scoped copy of each scope
+/// display name *before* calling this. Encrypts a private copy of each scope
 /// key's shared value to the agent and records the grant metadata.
 ///
 /// Errors if the name is invalid or already used, the scope is empty, or a scope
@@ -108,7 +108,7 @@ pub fn create_grant(
             ))
         })?;
         current
-            .scoped
+            .private
             .entry(key.clone())
             .or_default()
             .insert(agent_pubkey.to_string(), value.clone());
@@ -126,7 +126,7 @@ pub fn create_grant(
 }
 
 /// Remove a grant by name, returning its metadata so the caller can revoke the
-/// agent recipient (which clears its scoped entries) and rotate the scope.
+/// agent recipient (which clears its private entries) and rotate the scope.
 pub fn remove_grant(current: &mut types::Murk, name: &str) -> Result<types::GrantEntry, MurkError> {
     current
         .grants
@@ -202,12 +202,12 @@ mod tests {
         assert_eq!(entry.expires_at, "2026-06-16T02:00:00Z");
         assert_eq!(entry.issuer, "age1owner");
 
-        // A scoped copy is staged for the agent on the granted key only.
+        // A private copy is staged for the agent on the granted key only.
         assert_eq!(
-            current.scoped["STRIPE_KEY"]["age1agent"].as_str(),
+            current.private["STRIPE_KEY"]["age1agent"].as_str(),
             "sk_live_1"
         );
-        assert!(!current.scoped.contains_key("OTHER"));
+        assert!(!current.private.contains_key("OTHER"));
         assert!(current.grants.contains_key("codex"));
     }
 

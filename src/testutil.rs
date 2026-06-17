@@ -47,14 +47,14 @@ pub fn empty_murk() -> types::Murk {
     types::Murk {
         values: HashMap::new(),
         recipients: HashMap::new(),
-        scoped: HashMap::new(),
+        private: HashMap::new(),
         legacy_mac: false,
         github_pins: HashMap::new(),
         ..Default::default()
     }
 }
 
-/// Wrap a string in `Zeroizing` for test inserts into `Murk.values` / `Murk.scoped`.
+/// Wrap a string in `Zeroizing` for test inserts into `Murk.values` / `Murk.private`.
 pub fn secret(s: &str) -> Zeroizing<String> {
     Zeroizing::new(s.to_string())
 }
