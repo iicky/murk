@@ -96,6 +96,9 @@ A `.murk` file is a single JSON document. All fields except encrypted values and
       "description": "openai api key"
     }
   },
+  "policy": {
+    "agent_allow_tags": ["agents"]
+  },
   "secrets": {
     "DATABASE_URL": {
       "shared": "<base64 age ciphertext>",
@@ -138,6 +141,14 @@ Entries also carry optional lifecycle metadata:
 Set the last two with `murk describe KEY "desc" --rotate-every 90d --expires 2026-09-01` (`never` clears either). All four fields are covered by the integrity MAC (see Integrity), so rotation policy cannot be silently weakened without a key.
 
 Key names must be valid shell identifiers: `[A-Za-z_][A-Za-z0-9_]*`.
+
+### Policy
+
+Optional agent access policy, in the plaintext header so it is readable without a key and at the same trust level as the recipient list. It is **not** access control — every recipient can read every shared secret by design, and an insider can use age directly or an old murk binary. Its value is constraining what the murk binary exposes to *agents*, enforced at the agent entry points (`agent exec`, `agent grant`).
+
+- `agent_allow_tags` — in agent mode, a secret may be injected or granted only if its schema carries at least one of these tags. Once a policy is set it is default-deny: an untagged or wrong-tagged key is refused with a clear error (no override — the operator edits the policy). An empty list locks agents out entirely.
+
+The policy is covered by the integrity MAC (see Integrity), so it cannot be stripped or weakened without a key. The field is omitted entirely when no policy is set, keeping policy-free vaults byte-identical to pre-policy murk.
 
 ### Secrets
 
@@ -198,11 +209,12 @@ The MAC is a BLAKE3 keyed hash covering, in order:
 3. **Recipient pubkeys** — sorted, each followed by `\x00`
 4. **Schema** — for each key (sorted): `\x02`, then the key name, description, and example (empty if unset) each followed by `\x00`, then each tag followed by `\x00`, then the lifecycle fields `created`, `updated`, `rotation_interval_days` (decimal text), and `expires_at` — each emitted as its bytes (empty if unset) followed by `\x00`
 5. **Group definitions** (v6 and v7) — for each group (sorted by name): `\x04`, the group name followed by `\x00`, then each member pubkey (sorted) prefixed by `\x05`
-6. **Grant definitions** (v7 only) — for each grant (sorted by name): `\x06`, then the grant name, agent pubkey, `issued_at`, `expires_at`, and issuer each followed by `\x00`, then each scope key (sorted) prefixed by `\x07`
+6. **Grant definitions** (v7 and v8) — for each grant (sorted by name): `\x06`, then the grant name, agent pubkey, `issued_at`, `expires_at`, and issuer each followed by `\x00`, then each scope key (sorted) prefixed by `\x07`
+7. **Policy** (v8 only) — `\x08` opens the policy block, then each agent allow-tag (sorted) is length-prefixed (4-byte big-endian length + bytes) so tag contents can't forge a boundary
 
-The resulting digest is prefixed with `blake3v5:` (v7) when the vault has at least one grant, `blake3v4:` (v6) when it has a group but no grant, or `blake3v3:` (v5) when it has neither, and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
+The resulting digest is prefixed with `blake3v6:` (v8) when the vault has a policy, `blake3v5:` (v7) when it has a grant but no policy, `blake3v4:` (v6) when it has a group but neither, or `blake3v3:` (v5) when it has none, and stored as the `mac` field in meta. The 32-byte BLAKE3 key is stored as `hmac_key` in the same encrypted meta blob.
 
-On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), `blake3v3:` (v5, no group coverage), and `blake3v4:` (v6, no grant coverage) are accepted for backward compatibility. On save, murk writes `blake3v5:` if any grant exists, else `blake3v4:` if any group exists, otherwise `blake3v3:`, always with a fresh key. Gating each version bump on the first group/grant keeps simpler vaults byte-identical to older murk. A vault carrying groups or grants is rejected under an older prefix that doesn't cover them, so an attacker can't strip coverage by downgrading the MAC. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
+On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), `blake3v3:` (v5, no group coverage), `blake3v4:` (v6, no grant coverage), and `blake3v5:` (v7, no policy coverage) are accepted for backward compatibility. On save, murk writes the lowest version that covers the vault's contents (`blake3v6:` if a policy exists, else `blake3v5:` for grants, `blake3v4:` for groups, otherwise `blake3v3:`), always with a fresh key. Gating each version bump on the first group/grant/policy keeps simpler vaults byte-identical to older murk. A vault carrying groups, grants, or a policy is rejected under an older prefix that doesn't cover them, so an attacker can't strip coverage by downgrading the MAC. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
 
 Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
 
@@ -398,6 +410,24 @@ Adds a recipient (by pubkey or display name) to a group. You must already be a m
 ### `murk group rm NAME [--member RECIPIENT] [--vault NAME]`
 
 With `--member`, removes a recipient from the group and re-encrypts its secrets so the removed member loses access to current values (git history stays readable — rotate to fully close). Without `--member`, deletes the group entirely; refused if any secret is still assigned to it. You must be a member to modify a group.
+
+---
+
+### `murk policy show [--json] [--vault NAME]`
+
+Prints the agent access policy. Works without a key — the policy is in the plaintext header. Shows the allowed tags, or notes that agent mode is unrestricted (no policy) or locked out (empty allow-list).
+
+---
+
+### `murk policy set --allow-tag TAG... [--vault NAME]`
+
+Sets the agent allow-list: in agent mode (`agent exec`, `agent grant`) a secret may be injected or granted only if it carries one of these tags. `--allow-tag` is repeatable and required. Default-deny once set. Writes the policy into the header and bumps the MAC to `blake3v6:`.
+
+---
+
+### `murk policy clear [--vault NAME]`
+
+Removes the policy. Agent mode becomes unrestricted again.
 
 ---
 

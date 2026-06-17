@@ -38,6 +38,7 @@ pub fn empty_vault() -> types::Vault {
         repo: String::new(),
         recipients: vec![],
         schema: BTreeMap::new(),
+        policy: None,
         secrets: BTreeMap::new(),
         meta: String::new(),
     }

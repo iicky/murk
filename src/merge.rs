@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::types::{SecretEntry, Vault};
+use crate::types::{Policy, SecretEntry, Vault};
 
 /// A single conflict discovered during merge.
 #[derive(Debug)]
@@ -75,11 +75,44 @@ pub fn merge_vaults(base: &Vault, ours: &Vault, theirs: &Vault) -> MergeResult {
         repo,
         recipients,
         schema,
+        policy: merge_policy(
+            base.policy.as_ref(),
+            ours.policy.as_ref(),
+            theirs.policy.as_ref(),
+            &mut conflicts,
+        ),
         secrets,
         meta,
     };
 
     MergeResult { vault, conflicts }
+}
+
+/// Merge the header policy three-way. The policy is a security guardrail, so a
+/// change on either side must not be silently dropped (taking "ours" blindly
+/// would discard a tightening from the other branch and re-MAC it as valid).
+/// Take the side that changed from base; if both changed differently, keep ours
+/// and flag a conflict for a human to resolve.
+fn merge_policy(
+    base: Option<&Policy>,
+    ours: Option<&Policy>,
+    theirs: Option<&Policy>,
+    conflicts: &mut Vec<MergeConflict>,
+) -> Option<Policy> {
+    if ours == theirs {
+        return ours.cloned();
+    }
+    if ours == base {
+        return theirs.cloned(); // only theirs changed — take it
+    }
+    if theirs == base {
+        return ours.cloned(); // only ours changed — take it
+    }
+    conflicts.push(MergeConflict {
+        field: "policy".into(),
+        reason: "agent policy changed on both sides".into(),
+    });
+    ours.cloned()
 }
 
 /// Merge recipient lists as sets: union additions, honor removals.
@@ -723,6 +756,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1alice".into(), "age1bob".into()],
             schema,
+            policy: None,
             secrets,
             meta: "base-meta".into(),
         }
@@ -1257,6 +1291,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1alice".into()],
             schema: BTreeMap::new(),
+            policy: None,
             secrets: BTreeMap::new(),
             meta: String::new(),
         };
@@ -1290,5 +1325,37 @@ mod tests {
         // Both changed the same schema entry — ours wins (schema conflicts are
         // reported but the merge still produces a result).
         assert_eq!(r.vault.schema["DB_URL"].description, "ours desc");
+    }
+
+    // -- Policy merge --
+
+    fn policy(tags: &[&str]) -> Policy {
+        Policy {
+            agent_allow_tags: tags.iter().map(|t| (*t).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn merge_policy_takes_the_side_that_changed() {
+        // Only theirs set a policy — it must be kept, not silently dropped.
+        let base = base_vault();
+        let mut theirs = base_vault();
+        theirs.policy = Some(policy(&["agents"]));
+        let r = merge_vaults(&base, &base, &theirs);
+        assert_eq!(r.vault.policy, Some(policy(&["agents"])));
+        assert!(!r.conflicts.iter().any(|c| c.field == "policy"));
+    }
+
+    #[test]
+    fn merge_policy_conflict_when_both_change() {
+        let base = base_vault();
+        let mut ours = base_vault();
+        ours.policy = Some(policy(&["agents"]));
+        let mut theirs = base_vault();
+        theirs.policy = Some(policy(&["dev"]));
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Divergent change is flagged, not silently resolved; ours is kept.
+        assert!(r.conflicts.iter().any(|c| c.field == "policy"));
+        assert_eq!(r.vault.policy, Some(policy(&["agents"])));
     }
 }

@@ -206,6 +206,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1test".into()],
             schema,
+            policy: None,
             secrets: BTreeMap::new(),
             meta: "encrypted-meta".into(),
         }

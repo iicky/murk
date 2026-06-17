@@ -23,6 +23,8 @@ pub enum MurkError {
     Group(String),
     /// Agent grant management (grant, revoke, list).
     Grant(String),
+    /// Agent access policy violation or management error.
+    Policy(String),
     /// GitHub key fetch.
     GitHub(GitHubError),
     /// General I/O.
@@ -41,6 +43,7 @@ impl std::fmt::Display for MurkError {
             MurkError::Secret(msg) => write!(f, "{msg}"),
             MurkError::Group(msg) => write!(f, "{msg}"),
             MurkError::Grant(msg) => write!(f, "{msg}"),
+            MurkError::Policy(msg) => write!(f, "{msg}"),
             MurkError::GitHub(e) => write!(f, "{e}"),
             MurkError::Io(e) => write!(f, "I/O error: {e}"),
         }

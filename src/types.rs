@@ -25,6 +25,13 @@ pub struct Vault {
     pub recipients: Vec<String>,
     /// Key metadata — public, readable without decryption.
     pub schema: BTreeMap<String, SchemaEntry>,
+    /// Optional agent access policy. Lives in the plaintext header (like schema)
+    /// so it is readable on no-key paths and at the same trust level as the
+    /// recipient list. Covered by the keyed MAC (`blake3v6:`) so it is
+    /// tamper-evident. Absent when no policy is set, keeping policy-free vaults
+    /// byte-identical to pre-policy murk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<Policy>,
     /// Per-value encrypted secrets. Each value is a separate age ciphertext.
     pub secrets: BTreeMap<String, SecretEntry>,
     /// Encrypted metadata blob: recipient names and integrity MAC.
@@ -97,6 +104,23 @@ pub struct GrantEntry {
     pub expires_at: String,
     /// Pubkey of the recipient who issued the grant (minimal accountability).
     pub issuer: String,
+}
+
+/// Agent access policy: machine-enforceable guardrails that travel with the
+/// vault. This is NOT access control — every recipient can read every shared
+/// secret by design, and an insider can use age directly or an old murk binary.
+/// Its value is constraining what the murk binary will expose to *agents* (CI,
+/// AI coding agents), enforced at the agent entry points (`agent exec`,
+/// `agent grant`). Lives in the plaintext header and is MAC-covered so it can't
+/// be silently weakened.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    /// Agent allow-list: in agent mode, a secret may be injected or granted only
+    /// if it carries at least one of these tags. Default-deny once a policy is
+    /// set — an untagged or wrong-tagged key is refused with a clear error. An
+    /// empty list means no key is agent-injectable (agents fully locked out).
+    #[serde(default)]
+    pub agent_allow_tags: Vec<String>,
 }
 
 // -- Meta (encrypted, stored in vault.meta) --

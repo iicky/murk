@@ -295,6 +295,12 @@ enum Command {
         sub: GroupCommand,
     },
 
+    /// Manage the agent access policy
+    Policy {
+        #[command(subcommand)]
+        sub: PolicyCommand,
+    },
+
     /// Write a .envrc for direnv integration
     Env {
         /// Vault filename
@@ -544,6 +550,36 @@ enum GroupCommand {
         /// Recipient pubkey or display name to remove (omit to delete the group)
         #[arg(long)]
         member: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyCommand {
+    /// Show the agent access policy (works without a key)
+    Show {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Set the agent allow-list: agents may only receive secrets carrying one of these tags
+    Set {
+        /// Tag agents are allowed to receive (repeatable, required)
+        #[arg(long = "allow-tag", required = true)]
+        allow_tag: Vec<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Remove the policy — agent mode becomes unrestricted again
+    Clear {
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -1729,6 +1765,7 @@ fn cmd_exec(
     only: &[String],
     tags: &[String],
     clean_env: bool,
+    agent_mode: bool,
     vault_path: &str,
 ) {
     let (vault, murk, identity) = load_vault(vault_path);
@@ -1743,6 +1780,13 @@ fn cmd_exec(
                 die(&format_args!("key not found: {key}"), 1);
             }
         }
+    }
+
+    // In agent mode, the vault's policy decides which keys may be injected.
+    // Fails closed before any secret reaches the child environment.
+    if agent_mode {
+        let keys: Vec<String> = secrets.keys().cloned().collect();
+        try_or_die(murk_cli::check_agent_keys(&vault, &keys));
     }
 
     let program = &command[0];
@@ -2474,6 +2518,67 @@ fn cmd_group(sub: GroupCommand) {
     }
 }
 
+fn cmd_policy(sub: PolicyCommand) {
+    match sub {
+        PolicyCommand::Show { json, vault } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            // Policy lives in the plaintext header — no key needed to read it.
+            let v = murk_cli::vault::read(Path::new(&vault_path)).unwrap_or_else(|e| die(&e, 1));
+            let tags = v.policy.as_ref().map(|p| p.agent_allow_tags.clone());
+            if json {
+                let out = serde_json::json!({ "agent_allow_tags": tags });
+                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                return;
+            }
+            match tags {
+                None => eprintln!(
+                    "{} no agent policy — agent mode is unrestricted",
+                    "◆".magenta()
+                ),
+                Some(tags) if tags.is_empty() => eprintln!(
+                    "{} agents are locked out (allow-list is empty)",
+                    "⚠".yellow()
+                ),
+                Some(tags) => {
+                    eprintln!("{} agents may only receive secrets tagged:", "◆".magenta());
+                    eprintln!("  {}", tags.join(", ").bold());
+                }
+            }
+        }
+        PolicyCommand::Set { allow_tag, vault } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (mut vault, murk, _identity, _lock) = load_vault_locked(&vault_path);
+            let original = murk.clone();
+            let current = murk;
+            vault.policy = Some(murk_cli::types::Policy {
+                agent_allow_tags: allow_tag.clone(),
+            });
+            save_vault(&vault_path, &mut vault, &original, &current);
+            eprintln!(
+                "{} agent allow-list set to {}",
+                "◆".magenta(),
+                allow_tag.join(", ").bold()
+            );
+        }
+        PolicyCommand::Clear { vault } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            let (mut vault, murk, _identity, _lock) = load_vault_locked(&vault_path);
+            if vault.policy.is_none() {
+                eprintln!("{} no policy to clear", "◆".magenta());
+                return;
+            }
+            let original = murk.clone();
+            let current = murk;
+            vault.policy = None;
+            save_vault(&vault_path, &mut vault, &original, &current);
+            eprintln!(
+                "{} policy cleared — agent mode is unrestricted",
+                "◆".magenta()
+            );
+        }
+    }
+}
+
 /// Rotate the given keys in the still-locked session after a revoke, prompting
 /// for each new value. `baseline` is the post-revoke state already on disk; we
 /// diff against it so only the rotated ciphertexts are re-encrypted.
@@ -2881,6 +2986,9 @@ fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
         repo: vault.repo,
         recipients: Vec::new(),
         schema: vault.schema,
+        // Policy is public header metadata (like schema) — keep it in the
+        // skeleton so the agent posture travels with the shared shape.
+        policy: vault.policy,
         secrets: BTreeMap::new(),
         meta: String::new(),
     };
@@ -2908,7 +3016,14 @@ fn cmd_agent_exec(command: &[String], only: &[String], vault_path: &str) {
         eprintln!("  {}", key.dimmed());
     }
 
-    cmd_exec(command, only, &[], /* clean_env */ true, vault_path);
+    cmd_exec(
+        command,
+        only,
+        &[],
+        /* clean_env */ true,
+        /* agent_mode */ true,
+        vault_path,
+    );
 }
 
 fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, vault_path: &str) {
@@ -2921,6 +3036,9 @@ fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, va
     let issuer = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
     let original = murk.clone();
     let mut current = murk;
+
+    // The vault's policy decides which keys may be granted to an agent.
+    try_or_die(murk_cli::check_agent_keys(&vault, only));
 
     // Mint a fresh ephemeral identity for the agent — never the operator's key.
     let agent_id = age::x25519::Identity::generate();
@@ -3506,6 +3624,22 @@ fn cmd_completion_install(shell: clap_complete::Shell) {
 }
 
 fn main() {
+    // clap's derive-generated parser uses large stack frames, and the command
+    // tree here is big. On Windows the default 1 MiB main-thread stack can
+    // overflow during argument parsing, so run everything on a thread with a
+    // generous stack. (Other platforms default to ~8 MiB and are unaffected, but
+    // running uniformly keeps behavior consistent.)
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn main thread");
+    // Propagate a panic in `run` as a non-zero exit, same as a normal main.
+    if handle.join().is_err() {
+        process::exit(1);
+    }
+}
+
+fn run() {
     murk_cli::hardening::disable_core_dumps();
     let cli = Cli::parse();
 
@@ -3630,6 +3764,7 @@ fn main() {
             &only,
             &tag,
             clean_env,
+            /* agent_mode */ false,
             &murk_cli::resolve_vault_path(&vault),
         ),
         Command::Authorize {
@@ -3687,6 +3822,7 @@ fn main() {
             ..
         } => cmd_revoke(&recipient, rotate, &murk_cli::resolve_vault_path(&vault)),
         Command::Group { sub } => cmd_group(sub),
+        Command::Policy { sub } => cmd_policy(sub),
         Command::Env { vault } => cmd_env(&vault),
         Command::Diff {
             git_ref,

@@ -144,6 +144,7 @@ mod tests {
             repo: String::new(),
             recipients: vec!["age1exampleabc".into()],
             schema,
+            policy: None,
             secrets: BTreeMap::new(),
             meta: "encrypted-meta-blob".into(),
         }
