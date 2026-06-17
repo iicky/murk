@@ -3624,6 +3624,22 @@ fn cmd_completion_install(shell: clap_complete::Shell) {
 }
 
 fn main() {
+    // clap's derive-generated parser uses large stack frames, and the command
+    // tree here is big. On Windows the default 1 MiB main-thread stack can
+    // overflow during argument parsing, so run everything on a thread with a
+    // generous stack. (Other platforms default to ~8 MiB and are unaffected, but
+    // running uniformly keeps behavior consistent.)
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn main thread");
+    // Propagate a panic in `run` as a non-zero exit, same as a normal main.
+    if handle.join().is_err() {
+        process::exit(1);
+    }
+}
+
+fn run() {
     murk_cli::hardening::disable_core_dumps();
     let cli = Cli::parse();
 
