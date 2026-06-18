@@ -31,15 +31,22 @@ case "$os" in
         ;;
 esac
 
-# Get latest release tag.
-tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+# Resolve the release tag. MURK_TAG pins a version (and skips the API lookup),
+# which also lets a smoke test install from a fixture without a live release.
+tag="${MURK_TAG:-}"
+if [ -z "$tag" ]; then
+    tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+fi
 if [ -z "$tag" ]; then
     echo "error: could not determine latest release" >&2
     exit 1
 fi
 
 archive="murk-${tag}-${target}.tar.gz"
-url="https://github.com/$REPO/releases/download/$tag/$archive"
+# Download base. MURK_BASE_URL overrides it to install from a local fixture or
+# a mirror; it defaults to the GitHub release for this tag.
+base_url="${MURK_BASE_URL:-https://github.com/$REPO/releases/download/$tag}"
+url="$base_url/$archive"
 
 echo "installing murk $tag ($target)"
 
@@ -49,7 +56,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 curl -fsSL "$url" -o "$tmpdir/$archive"
 
 # Verify checksum.
-checksums_url="https://github.com/$REPO/releases/download/$tag/SHA256SUMS"
+checksums_url="$base_url/SHA256SUMS"
 curl -fsSL "$checksums_url" -o "$tmpdir/SHA256SUMS"
 expected=$(grep "$archive" "$tmpdir/SHA256SUMS" | cut -d' ' -f1)
 if [ -z "$expected" ]; then
@@ -74,17 +81,18 @@ fi
 # If gh CLI is installed, attestation MUST succeed — a failure is treated
 # as fatal so a tampered release channel cannot silently defeat the check.
 # If gh is not installed, warn loudly and continue. Set MURK_REQUIRE_ATTESTATION=1
-# to refuse install without attestation.
-if command -v gh >/dev/null 2>&1; then
+# to refuse install without attestation, or MURK_SKIP_ATTESTATION=1 to bypass it
+# (not recommended; used by the install smoke test against a local fixture).
+if [ "${MURK_SKIP_ATTESTATION:-0}" = "1" ]; then
+    echo "warning: skipping provenance verification (MURK_SKIP_ATTESTATION=1)" >&2
+elif command -v gh >/dev/null 2>&1; then
     if gh attestation verify "$tmpdir/$archive" --repo "$REPO" >/dev/null 2>&1; then
         echo "verified build provenance attestation"
     else
         echo "error: attestation verification failed — aborting install" >&2
         echo "hint: this binary may not have been built by CI, or the release was tampered with" >&2
         echo "hint: to bypass, set MURK_SKIP_ATTESTATION=1 (not recommended)" >&2
-        if [ "${MURK_SKIP_ATTESTATION:-0}" != "1" ]; then
-            exit 1
-        fi
+        exit 1
     fi
 elif [ "${MURK_REQUIRE_ATTESTATION:-0}" = "1" ]; then
     echo "error: MURK_REQUIRE_ATTESTATION is set but gh CLI is not installed" >&2
