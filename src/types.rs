@@ -60,6 +60,14 @@ pub struct SchemaEntry {
     /// e.g. a token. `doctor` flags it as expired or expiring soon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// Set to the revoke time (ISO-8601 UTC) when a recipient who could read
+    /// this key is revoked and rotation is deferred. Its *presence* is the
+    /// obligation: the revoked recipient can still decrypt the live value from
+    /// git history until it changes. Any value write (`add`/`edit`/`rotate`/
+    /// `import`) clears it, so a set `revoked_at` always means "still owed a
+    /// rotation since this revoke". `doctor` flags it until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

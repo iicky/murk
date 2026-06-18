@@ -93,6 +93,9 @@ fn upsert_schema(vault: &mut types::Vault, key: &str, desc: Option<&str>, tags: 
             }
         }
         entry.updated = Some(now);
+        // A value write satisfies any outstanding post-revoke rotation, so the
+        // marker is cleared — its presence always means "still owed a rotation".
+        entry.revoked_at = None;
     } else {
         vault.schema.insert(
             key.into(),
@@ -108,6 +111,24 @@ fn upsert_schema(vault: &mut types::Vault, key: &str, desc: Option<&str>, tags: 
     }
 
     is_new && desc.is_none()
+}
+
+/// Mark `keys` as owing a post-revoke rotation, stamping each with `revoked_at`.
+///
+/// Called when a recipient is revoked and rotation is deferred: the revoked
+/// recipient can still decrypt the live value from git history until it changes,
+/// so the obligation is recorded durably (and survives the user declining the
+/// rotation prompt). `doctor` surfaces it until a value write clears it. Keys
+/// without a schema entry are skipped — `rotation_health` only reads the schema,
+/// so an unschematized key could not be flagged anyway. `now` is injected to keep
+/// this testable and consistent with [`rotation_health`].
+pub fn mark_revoked(vault: &mut types::Vault, keys: &[String], now: chrono::DateTime<chrono::Utc>) {
+    let ts = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    for key in keys {
+        if let Some(entry) = vault.schema.get_mut(key) {
+            entry.revoked_at = Some(ts.clone());
+        }
+    }
 }
 
 /// Remove a secret from the working state and schema.
@@ -162,6 +183,8 @@ pub fn import_secrets(
 
         if let Some(entry) = vault.schema.get_mut(key.as_str()) {
             entry.updated = Some(now.clone());
+            // A value write clears any outstanding post-revoke rotation marker.
+            entry.revoked_at = None;
         } else {
             vault.schema.insert(
                 key.clone(),
@@ -223,6 +246,7 @@ pub fn describe_key(
                 // a clear (Some(None)) and an absent patch (None) both mean None.
                 rotation_interval_days: rotation_interval_days.flatten(),
                 expires_at: expires_at.flatten().map(Into::into),
+                revoked_at: None,
             },
         );
     }
@@ -255,6 +279,10 @@ pub enum RotationIssue {
         expires_at: String,
         days_left: i64,
     },
+    /// A recipient who could read this key was revoked and it has not been
+    /// rotated since — the revoked recipient can still decrypt the live value
+    /// from git history. Driven by the `revoked_at` marker's presence.
+    RevokePending { key: String, since: String },
     /// A stored timestamp could not be parsed as RFC-3339.
     BadTimestamp {
         key: String,
@@ -326,6 +354,15 @@ pub fn rotation_health(
                     value: ts.clone(),
                 }),
             }
+        }
+
+        // Outstanding post-revoke rotation. The marker's presence is the signal
+        // (a value write clears it), so this is independent of `now`.
+        if let Some(since) = &entry.revoked_at {
+            issues.push(RotationIssue::RevokePending {
+                key: key.clone(),
+                since: since.clone(),
+            });
         }
     }
     issues
@@ -897,5 +934,51 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rotation_health_flags_revoke_pending() {
+        // The marker's presence is the signal — independent of `now` and of any
+        // interval/expiry policy.
+        let vault = vault_with(types::SchemaEntry {
+            revoked_at: Some("2026-06-18T00:00:00Z".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            &rotation_health(&vault, ts("2030-01-01T00:00:00Z"))[0],
+            RotationIssue::RevokePending { key, since }
+                if key == "K" && since == "2026-06-18T00:00:00Z"
+        ));
+    }
+
+    #[test]
+    fn mark_revoked_stamps_only_existing_schema_entries() {
+        let mut vault = vault_with(types::SchemaEntry::default());
+        mark_revoked(
+            &mut vault,
+            &["K".into(), "ABSENT".into()],
+            ts("2026-06-18T12:00:00Z"),
+        );
+        assert_eq!(
+            vault.schema["K"].revoked_at.as_deref(),
+            Some("2026-06-18T12:00:00Z")
+        );
+        // A key with no schema entry is silently skipped — nothing to flag.
+        assert!(!vault.schema.contains_key("ABSENT"));
+    }
+
+    #[test]
+    fn value_write_clears_revoke_marker() {
+        // A rotation (any value write) must clear the obligation: presence of
+        // `revoked_at` always means "still owed a rotation since the revoke".
+        let mut vault = vault_with(types::SchemaEntry {
+            description: "d".into(),
+            revoked_at: Some("2026-06-18T00:00:00Z".into()),
+            ..Default::default()
+        });
+        let mut murk = empty_murk();
+        import_secrets(&mut vault, &mut murk, &[("K".into(), secret("new"))]);
+        assert_eq!(vault.schema["K"].revoked_at, None);
+        assert!(rotation_health(&vault, ts("2030-01-01T00:00:00Z")).is_empty());
     }
 }
