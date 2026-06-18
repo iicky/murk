@@ -10,7 +10,7 @@
 //! policy is set it is default-deny — untagged or wrong-tagged keys are refused.
 
 use crate::error::MurkError;
-use crate::types::{Policy, Vault};
+use crate::types::{Murk, Policy, Vault};
 
 /// Check that every key in `keys` is permitted to agents by the vault's policy.
 ///
@@ -45,6 +45,42 @@ pub fn check_agent_keys(vault: &Vault, keys: &[String]) -> Result<(), MurkError>
     )))
 }
 
+/// True when `pubkey` identifies a granted agent for this decrypted vault state.
+///
+/// Agent grants live in the encrypted meta and are carried into [`Murk::grants`]
+/// after decryption, so this is the same "am I an agent" test the CLI makes when
+/// it decrypts as an agent (`lib::decrypt_vault`). An operator (or any plain
+/// recipient) is not in `grants`, so this returns `false` for them.
+pub fn is_agent_identity(murk: &Murk, pubkey: &str) -> bool {
+    murk.grants.values().any(|g| g.pubkey == pubkey)
+}
+
+/// Apply [`check_agent_keys`], but only when the caller is a granted agent.
+///
+/// The library bindings (Python/Node) load a vault and read secrets directly,
+/// without the CLI's `agent exec` policy gate. This is that gate for them: when
+/// the loaded identity is an agent grant, the same policy the CLI enforces at
+/// `agent exec` applies here too — so a policy vault is strict from every entry
+/// point. For an operator identity it is a no-op, matching the CLI, where plain
+/// `get`/`export` are never policy-gated.
+///
+/// The real boundary is cryptographic: an agent's ephemeral key is not a
+/// recipient of out-of-scope secrets, so it cannot decrypt them regardless. This
+/// check is defense-in-depth, and it makes a later policy or tag change apply to
+/// agents retroactively at read time (the agent's old scoped ciphertext lingers,
+/// but the binding refuses to hand it over).
+pub fn enforce_agent_policy(
+    vault: &Vault,
+    murk: &Murk,
+    pubkey: &str,
+    keys: &[String],
+) -> Result<(), MurkError> {
+    if is_agent_identity(murk, pubkey) {
+        check_agent_keys(vault, keys)?;
+    }
+    Ok(())
+}
+
 /// True if `key` carries at least one of the policy's allowed tags.
 fn key_allowed(vault: &Vault, policy: &Policy, key: &str) -> bool {
     vault.schema.get(key).is_some_and(|entry| {
@@ -58,8 +94,23 @@ fn key_allowed(vault: &Vault, policy: &Policy, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Policy, SchemaEntry, Vault};
+    use crate::types::{GrantEntry, Murk, Policy, SchemaEntry, Vault};
     use std::collections::BTreeMap;
+
+    fn agent_murk(pubkey: &str) -> Murk {
+        let mut grants = BTreeMap::new();
+        grants.insert(
+            "codex".to_string(),
+            GrantEntry {
+                pubkey: pubkey.to_string(),
+                ..Default::default()
+            },
+        );
+        Murk {
+            grants,
+            ..Default::default()
+        }
+    }
 
     fn vault_with(tags: &[(&str, &[&str])], policy: Option<Policy>) -> Vault {
         let mut schema = BTreeMap::new();
@@ -129,5 +180,43 @@ mod tests {
         let v = vault_with(&[("TEST_KEY", &["agents"])], Some(policy(&[])));
         let err = check_agent_keys(&v, &["TEST_KEY".into()]).unwrap_err();
         assert!(err.to_string().contains("locks agents out"));
+    }
+
+    #[test]
+    fn is_agent_identity_matches_granted_pubkey() {
+        let murk = agent_murk("age1agent");
+        assert!(is_agent_identity(&murk, "age1agent"));
+        assert!(!is_agent_identity(&murk, "age1operator"));
+        assert!(!is_agent_identity(&Murk::default(), "age1agent"));
+    }
+
+    #[test]
+    fn enforce_agent_policy_is_noop_for_operator() {
+        // A policy that would forbid PROD_DB, but the caller is not an agent.
+        let v = vault_with(&[("PROD_DB", &["production"])], Some(policy(&["agents"])));
+        let operator = Murk::default();
+        assert!(enforce_agent_policy(&v, &operator, "age1operator", &["PROD_DB".into()]).is_ok());
+    }
+
+    #[test]
+    fn enforce_agent_policy_applies_to_agents() {
+        let v = vault_with(
+            &[("PROD_DB", &["production"]), ("TEST_KEY", &["agents"])],
+            Some(policy(&["agents"])),
+        );
+        let agent = agent_murk("age1agent");
+        // Allowed key passes.
+        assert!(enforce_agent_policy(&v, &agent, "age1agent", &["TEST_KEY".into()]).is_ok());
+        // Forbidden key is refused for the agent.
+        let err = enforce_agent_policy(&v, &agent, "age1agent", &["PROD_DB".into()]).unwrap_err();
+        assert!(err.to_string().contains("PROD_DB"));
+    }
+
+    #[test]
+    fn enforce_agent_policy_noop_without_policy() {
+        // No policy set: even an agent reads anything (backward compatible).
+        let v = vault_with(&[("PROD_DB", &["production"])], None);
+        let agent = agent_murk("age1agent");
+        assert!(enforce_agent_policy(&v, &agent, "age1agent", &["PROD_DB".into()]).is_ok());
     }
 }

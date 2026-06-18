@@ -78,6 +78,10 @@ Check if a `MURK_KEY` is available in the environment.
 
 Scoped (per-user) overrides are applied automatically — if you have a scoped value for a key, it takes priority over the shared value.
 
+## Agent policy
+
+When the loaded key is an agent grant (minted with `murk agent grant`), the vault's agent policy is enforced on read, the same way the CLI enforces it at `murk agent exec`: `get()` and `export()` throw if the policy forbids a key. Operator keys are unaffected. This makes a policy vault strict from every entry point — though an agent already cannot decrypt out-of-scope secrets at all, since its ephemeral key is not a recipient of them.
+
 ## Requirements
 
 - Node.js >= 16

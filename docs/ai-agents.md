@@ -77,6 +77,8 @@ murk policy set --allow-tag agents              # default-deny everything else
 
 Now `agent exec` and `agent grant` only work for keys tagged `agents`; asking for an untagged or production key fails closed with a clear error — there's no override flag, so a misbehaving agent can't talk its way past it. `agents` is just an example tag; use whatever tags fit your vault (`dev`, `ci`, ...). The policy lives in the vault header (MAC-covered, readable with `murk policy show` even without a key) so it travels with the repo and applies in CI. Note this is a guardrail enforced by the murk binary, not access control — see THREAT_MODEL.md.
 
+A granted agent is held to the policy no matter how it reads — `murk get`, `murk agent exec`, or the Python/Node bindings (`murk-secrets`). `get()` and `export()` from the bindings refuse a forbidden key just like the CLI, so the allow-list is enforced from every entry point. Tightening the policy applies retroactively: drop a tag and the agent loses access on its next read, even though its old grant key still exists.
+
 ## Auditing agent activity
 
 There's no separate agent log to consult — **git is the record.** Every admin change to a grant or policy is a commit, so:
