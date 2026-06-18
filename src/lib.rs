@@ -76,7 +76,7 @@ pub use recipients::{
 };
 pub use secrets::{
     EXPIRY_WARN_DAYS, RotationIssue, add_grouped_secret, add_secret, describe_key, get_secret,
-    import_secrets, list_keys, remove_secret, rotation_health,
+    import_secrets, list_keys, mark_revoked, remove_secret, rotation_health,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -682,6 +682,9 @@ pub(crate) fn compute_mac(
     mac_key: Option<&[u8; 32]>,
 ) -> String {
     match mac_key {
+        Some(key) if vault.schema.values().any(|e| e.revoked_at.is_some()) => {
+            compute_mac_v9(vault, groups, grants, key)
+        }
         Some(key) if vault.policy.is_some() => compute_mac_v8(vault, groups, grants, key),
         Some(key) if !grants.is_empty() => compute_mac_v7(vault, groups, grants, key),
         Some(key) if !groups.is_empty() => compute_mac_v6(vault, groups, key),
@@ -1097,18 +1100,16 @@ fn compute_mac_v7(
     format!("blake3v5:{hash}")
 }
 
-/// v8 MAC (`blake3v6:`). Extends v7 with the plaintext header policy object, so a
-/// vault's agent access policy cannot be weakened or stripped undetected. Only
-/// emitted once a vault has a policy; policy-free vaults keep writing v5/v6/v7
-/// and stay byte-identical.
-fn compute_mac_v8(
+/// Append the v8 byte stream (v7 bytes plus the header policy block) to `data`.
+/// Factored out so v9 can extend the exact same bytes without risking a change
+/// to v8's encoding.
+fn v8_mac_bytes(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
     grants: &BTreeMap<String, types::GrantEntry>,
-    key: &[u8; 32],
-) -> String {
-    let mut data = Vec::new();
-    v7_mac_bytes(vault, groups, grants, &mut data);
+    data: &mut Vec<u8>,
+) {
+    v7_mac_bytes(vault, groups, grants, data);
 
     // Policy (header). `0x08` opens the policy block (present only when a policy
     // exists, so Some-but-empty is distinct from None). Each agent allow-tag is
@@ -1128,13 +1129,58 @@ fn compute_mac_v8(
             data.extend_from_slice(bytes);
         }
     }
+}
 
+/// v8 MAC (`blake3v6:`). Extends v7 with the plaintext header policy object, so a
+/// vault's agent access policy cannot be weakened or stripped undetected. Only
+/// emitted once a vault has a policy; policy-free vaults keep writing v5/v6/v7
+/// and stay byte-identical.
+fn compute_mac_v8(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v8_mac_bytes(vault, groups, grants, &mut data);
     let hash = blake3::keyed_hash(key, &data);
     format!("blake3v6:{hash}")
 }
 
+/// v9 MAC (`blake3v7:`). Extends v8 with each schema entry's `revoked_at` marker,
+/// so the "still owed a rotation since a revoke" flag is tamper-evident — an
+/// attacker editing `.murk` can't silently clear it. Only emitted once a vault
+/// has at least one `revoked_at` set; vaults without one keep writing v5–v8 and
+/// stay byte-identical.
+fn compute_mac_v9(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    key: &[u8; 32],
+) -> String {
+    let mut data = Vec::new();
+    v8_mac_bytes(vault, groups, grants, &mut data);
+
+    // Revoked-at markers, in schema order (BTreeMap → sorted by key name). `0x09`
+    // opens each marker so the stream can't be confused with the schema (`0x02`)
+    // or policy (`0x08`) blocks; absent markers emit nothing, so a vault that
+    // sets one then clears it hashes identically to one that never set it.
+    for (key_name, entry) in &vault.schema {
+        if let Some(revoked_at) = &entry.revoked_at {
+            data.push(0x09);
+            data.extend_from_slice(key_name.as_bytes());
+            data.push(0x00);
+            data.extend_from_slice(revoked_at.as_bytes());
+            data.push(0x00);
+        }
+    }
+
+    let hash = blake3::keyed_hash(key, &data);
+    format!("blake3v7:{hash}")
+}
+
 /// Verify a stored MAC against the vault, accepting v1, v2, blake3, blake3v2,
-/// blake3v3, blake3v4, blake3v5, and blake3v6 schemes.
+/// blake3v3, blake3v4, blake3v5, blake3v6, and blake3v7 schemes.
 pub(crate) fn verify_mac(
     vault: &types::Vault,
     groups: &BTreeMap<String, Vec<String>>,
@@ -1144,38 +1190,56 @@ pub(crate) fn verify_mac(
 ) -> bool {
     use constant_time_eq::constant_time_eq;
 
-    // Policy is only covered by v8 (`blake3v6:`). A vault carrying a policy but
+    // `revoked_at` is only covered by v9 (`blake3v7:`). A vault carrying one but
     // stamped with an older MAC is tampered or inconsistent — reject it so an
-    // attacker can't strip or weaken the policy by downgrading the MAC.
-    if vault.policy.is_some() && !stored_mac.starts_with("blake3v6:") {
-        return false;
-    }
-
-    // Grant metadata is covered by v7 (`blake3v5:`) and v8 (`blake3v6:`). A vault
-    // carrying grants but stamped with an older MAC is tampered or inconsistent.
-    if !grants.is_empty()
-        && !stored_mac.starts_with("blake3v5:")
-        && !stored_mac.starts_with("blake3v6:")
+    // attacker can't clear a pending-rotation flag by downgrading the MAC.
+    if vault.schema.values().any(|e| e.revoked_at.is_some()) && !stored_mac.starts_with("blake3v7:")
     {
         return false;
     }
 
-    // Group data is covered by v6, v7, and v8. A vault carrying any grouped
-    // ciphertext or group membership but stamped with an older MAC is either
-    // tampered (an attacker injected a `grouped` entry that the old MAC ignores,
-    // then relies on group-before-shared resolution) or inconsistent. Reject it
-    // rather than verify against a scheme that doesn't cover groups.
+    // Policy is covered by v8 (`blake3v6:`) and v9 (`blake3v7:`). A vault carrying
+    // a policy but stamped with an older MAC is tampered or inconsistent — reject
+    // it so an attacker can't strip or weaken the policy by downgrading the MAC.
+    if vault.policy.is_some()
+        && !stored_mac.starts_with("blake3v6:")
+        && !stored_mac.starts_with("blake3v7:")
+    {
+        return false;
+    }
+
+    // Grant metadata is covered by v7 (`blake3v5:`) and up. A vault carrying
+    // grants but stamped with an older MAC is tampered or inconsistent.
+    if !grants.is_empty()
+        && !stored_mac.starts_with("blake3v5:")
+        && !stored_mac.starts_with("blake3v6:")
+        && !stored_mac.starts_with("blake3v7:")
+    {
+        return false;
+    }
+
+    // Group data is covered by v6 and up. A vault carrying any grouped ciphertext
+    // or group membership but stamped with an older MAC is either tampered (an
+    // attacker injected a `grouped` entry that the old MAC ignores, then relies on
+    // group-before-shared resolution) or inconsistent. Reject it rather than
+    // verify against a scheme that doesn't cover groups.
     let touches_groups =
         !groups.is_empty() || vault.secrets.values().any(|e| !e.grouped.is_empty());
     if touches_groups
         && !stored_mac.starts_with("blake3v4:")
         && !stored_mac.starts_with("blake3v5:")
         && !stored_mac.starts_with("blake3v6:")
+        && !stored_mac.starts_with("blake3v7:")
     {
         return false;
     }
 
-    let expected = if stored_mac.starts_with("blake3v6:") {
+    let expected = if stored_mac.starts_with("blake3v7:") {
+        match mac_key {
+            Some(key) => compute_mac_v9(vault, groups, grants, key),
+            None => return false,
+        }
+    } else if stored_mac.starts_with("blake3v6:") {
         match mac_key {
             Some(key) => compute_mac_v8(vault, groups, grants, key),
             None => return false,
@@ -2687,6 +2751,63 @@ mod tests {
             .rotation_interval_days = None;
         cleared.schema.get_mut("API_KEY").unwrap().expires_at = None;
         assert_eq!(compute_mac_v4(&vault, &key), compute_mac_v4(&cleared, &key));
+    }
+
+    #[test]
+    fn compute_mac_v9_covers_revoked_at() {
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec!["age1abc".into()],
+            schema: BTreeMap::new(),
+            policy: None,
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.schema.insert(
+            "API_KEY".into(),
+            types::SchemaEntry {
+                description: "Main API key".into(),
+                updated: Some("2026-02-28T00:00:00Z".into()),
+                ..Default::default()
+            },
+        );
+        let key = [0u8; 32];
+        let groups = BTreeMap::new();
+        let grants = BTreeMap::new();
+
+        // No marker → v8 falls through to v5 (no policy/grants/groups here).
+        let baseline = compute_mac(&vault, &groups, &grants, Some(&key));
+        assert!(baseline.starts_with("blake3v3:"));
+
+        // Setting `revoked_at` switches the written scheme to v9 and changes the MAC.
+        vault.schema.get_mut("API_KEY").unwrap().revoked_at = Some("2026-06-18T00:00:00Z".into());
+        let with_marker = compute_mac(&vault, &groups, &grants, Some(&key));
+        assert!(with_marker.starts_with("blake3v7:"));
+        assert_ne!(baseline, with_marker);
+
+        // The v9 MAC round-trips, and a downgraded (v8) MAC is rejected while the
+        // marker is present — an attacker can't clear it by stamping an older scheme.
+        assert!(verify_mac(
+            &vault,
+            &groups,
+            &grants,
+            &with_marker,
+            Some(&key)
+        ));
+        let v8_mac = compute_mac_v8(&vault, &groups, &grants, &key);
+        assert!(!verify_mac(&vault, &groups, &grants, &v8_mac, Some(&key)));
+
+        // v8 (which ignores the marker) is blind to it — confirms `revoked_at` is
+        // what moved the v9 digest, mirroring the v5 rotation-metadata test.
+        let mut cleared = vault.clone();
+        cleared.schema.get_mut("API_KEY").unwrap().revoked_at = None;
+        assert_eq!(
+            compute_mac_v8(&vault, &groups, &grants, &key),
+            compute_mac_v8(&cleared, &groups, &grants, &key)
+        );
     }
 
     #[test]

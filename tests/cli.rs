@@ -1212,6 +1212,58 @@ fn revoke_without_rotate_keeps_value() {
         .stdout(predicate::str::contains("old_value"));
 }
 
+#[test]
+fn revoke_marks_keys_for_rotation_until_rotated() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("old_value\n")
+        .assert()
+        .success();
+
+    let second_pubkey = age::x25519::Identity::generate().to_public().to_string();
+    murk(&dir, &key)
+        .args([
+            "circle",
+            "authorize",
+            &second_pubkey,
+            "--name",
+            "bob",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // Deferring rotation on revoke records the obligation durably.
+    murk(&dir, &key)
+        .args(["circle", "revoke", "bob", "--vault", "test.murk"])
+        .assert()
+        .success();
+
+    // doctor surfaces it across sessions (no key needed for the schema read).
+    murk(&dir, &key)
+        .args(["doctor", "--vault", "test.murk"])
+        .assert()
+        .stderr(predicate::str::contains(
+            "TOKEN not rotated since a recipient was revoked",
+        ));
+
+    // Rotating the value clears the marker — doctor no longer flags it.
+    murk(&dir, &key)
+        .args(["add", "TOKEN", "--vault", "test.murk"])
+        .write_stdin("new_value\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args(["doctor", "--vault", "test.murk"])
+        .assert()
+        .stderr(predicate::str::contains("not rotated since a recipient was revoked").not());
+}
+
 // ── no MURK_KEY scenarios ──
 
 #[test]

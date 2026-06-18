@@ -2322,6 +2322,11 @@ fn cmd_revoke(recipient: &str, rotate: bool, vault_path: &str) {
         recipient,
     ));
 
+    // Record that the exposed keys now owe a rotation before persisting, so the
+    // obligation survives the user declining the prompt below (or the process
+    // dying). An in-session rotation clears the marker again via `add_secret`.
+    murk_cli::mark_revoked(&mut vault, &result.exposed_keys, chrono::Utc::now());
+
     // Persist the removal first so the recipient is durably revoked even if the
     // user aborts the rotation prompts below.
     save_vault(vault_path, &mut vault, &original, &current);
@@ -3541,6 +3546,14 @@ fn rotation_finding(issue: &murk_cli::RotationIssue) -> Finding {
             category: "expiry",
             message: format!("{key} expires in {days_left}d ({})", day(expires_at)),
             fix: Some(format!("rotate it before it lapses: `murk rotate {key}`")),
+        },
+        RevokePending { key, since } => Finding {
+            category: "rotation",
+            message: format!(
+                "{key} not rotated since a recipient was revoked on {}",
+                day(since)
+            ),
+            fix: Some(format!("rotate it: `murk rotate {key}`")),
         },
         BadTimestamp { key, field, value } => Finding {
             category: "schema",
