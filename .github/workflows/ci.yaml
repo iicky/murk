@@ -107,6 +107,78 @@ jobs:
       - run: sudo apt-get install -y direnv
       - run: make test-demos
 
+  # Exercises the end-user install path: install.sh against a locally-built
+  # release fixture, then a real encrypt/decrypt roundtrip with the installed
+  # binary. The other channels are intentionally not installed here — they are
+  # built and tested elsewhere: crates.io (cargo build/test in this file),
+  # PyPI bindings (python.yaml), npm bindings (node.yaml), and Homebrew (the
+  # tap formula is bumped by release.yaml). This job guards install.sh, the
+  # path with no other coverage.
+  install-smoke:
+    name: Install smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+      - run: cargo build --release
+      - name: Smoke-test install.sh against a local fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          target=$(rustc -vV | sed -n 's/^host: //p')
+          tag=v0.0.0-smoke
+          archive="murk-${tag}-${target}.tar.gz"
+
+          # Build a fixture shaped like a real GitHub release: a tarball holding
+          # the murk binary, plus a matching SHA256SUMS.
+          rel="$RUNNER_TEMP/release"
+          mkdir -p "$rel" "$RUNNER_TEMP/stage"
+          cp target/release/murk "$RUNNER_TEMP/stage/murk"
+          tar czf "$rel/$archive" -C "$RUNNER_TEMP/stage" murk
+          if command -v sha256sum >/dev/null; then
+            ( cd "$rel" && sha256sum "$archive" > SHA256SUMS )
+          else
+            ( cd "$rel" && shasum -a 256 "$archive" > SHA256SUMS )
+          fi
+
+          # Serve the fixture and install through install.sh as a fresh user
+          # would, pointed at the fixture instead of github.com.
+          python3 -m http.server 8099 --directory "$rel" >/dev/null 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do
+            curl -fsS http://localhost:8099/SHA256SUMS -o /dev/null 2>/dev/null && break
+            sleep 0.25
+          done
+
+          bindir="$RUNNER_TEMP/bin"
+          mkdir -p "$bindir"
+          MURK_TAG="$tag" \
+          MURK_BASE_URL=http://localhost:8099 \
+          MURK_SKIP_ATTESTATION=1 \
+          MURK_INSTALL_DIR="$bindir" \
+            sh install.sh
+
+          # The installed binary must start and complete an encrypt/decrypt
+          # roundtrip in a clean temp directory with an isolated HOME.
+          export PATH="$bindir:$PATH"
+          murk --version
+          export HOME="$RUNNER_TEMP/home"
+          vault="$RUNNER_TEMP/vault"
+          mkdir -p "$HOME" "$vault"
+          cd "$vault"
+          printf 'smoke-user\n' | murk init
+          . ./.env
+          printf 'hunter2\n' | murk add SMOKE_KEY
+          got=$(murk get SMOKE_KEY)
+          test "$got" = "hunter2"
+          echo "install smoke passed: install.sh + init/add/get roundtrip"
+
   vhs-build:
     name: VHS Build Binary
     runs-on: ubuntu-latest
