@@ -1,8 +1,11 @@
 //! Vault initialization logic.
 
 use std::collections::{BTreeMap, HashMap};
-use std::env;
 use std::process::Command;
+// Only the tests touch the process environment directly; the runtime key read
+// now goes through env::key_from_env_only (see tests/invariants.rs).
+#[cfg(test)]
+use std::env;
 
 use crate::{crypto, encrypt_value, now_utc, types};
 
@@ -48,23 +51,9 @@ pub struct DiscoveredKey {
 /// variables into the environment, so the environment is the authoritative
 /// source and `.env` is only a write-only convenience populated by `murk init`.
 pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
-    let raw = if let Some(k) = env::var(crate::env::ENV_MURK_KEY)
-        .ok()
-        .filter(|k| !k.is_empty())
-    {
-        Some(k)
-    } else if let Ok(path) = env::var(crate::env::ENV_MURK_KEY_FILE) {
-        let p = std::path::Path::new(&path);
-        crate::env::reject_symlink(p, "MURK_KEY_FILE")?;
-        Some(
-            std::fs::read_to_string(p)
-                .map_err(|e| format!("cannot read MURK_KEY_FILE: {e}"))?
-                .trim()
-                .to_string(),
-        )
-    } else {
-        None
-    };
+    // The env vars are read in one place (the env module) so the auth read path
+    // stays auditable — see tests/invariants.rs.
+    let raw = crate::env::key_from_env_only()?;
 
     match raw {
         Some(key) => {

@@ -155,6 +155,35 @@ pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
     resolve_key_with_source(vault_path).map(|(k, _)| k)
 }
 
+/// Read a key the environment supplied directly — `MURK_KEY`, or the file at
+/// `MURK_KEY_FILE` — and nothing else. Unlike [`resolve_key_with_source`] this
+/// does NOT fall back to auto-discovery in `~/.config/murk/keys`: it answers only
+/// "did the current environment hand us a key?". `murk init` uses it to reuse an
+/// already-present identity instead of generating a new one, which is why it must
+/// ignore the stored key it would otherwise be about to create.
+///
+/// Returns `Ok(None)` when neither variable is set. The result is trimmed (init
+/// stores it as a plain key string); the runtime path deliberately does not trim,
+/// to keep plugin identity files intact.
+///
+/// This is the single place, alongside [`resolve_key_with_source`], that reads
+/// the key environment variables — see `tests/invariants.rs`.
+pub fn key_from_env_only() -> Result<Option<String>, String> {
+    if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
+        return Ok(Some(k));
+    }
+    if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
+        let p = std::path::Path::new(&path);
+        reject_symlink(p, "MURK_KEY_FILE")?;
+        let key = std::fs::read_to_string(p)
+            .map_err(|e| format!("cannot read MURK_KEY_FILE: {e}"))?
+            .trim()
+            .to_string();
+        return Ok(Some(key));
+    }
+    Ok(None)
+}
+
 /// Parse a .env file into key-value pairs.
 /// Skips comments, blank lines, `MURK_*` keys, and strips quotes and `export` prefixes.
 ///
