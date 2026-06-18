@@ -14,6 +14,13 @@ keywords = ["secrets", "encryption", "age", "dotenv", "security"]
 categories = ["command-line-utilities", "cryptography"]
 exclude = ["CLAUDE.md", "AGENTS.md", "SPEC.md", ".beads/"]
 
+[lints.clippy]
+# Secret-handling guardrail: dbg! prints the Debug of any value — including a
+# decrypted secret — and must never ship. It is allow-by-default (restriction
+# group), so `-D warnings` alone won't catch it; deny it explicitly. Source-level
+# invariants clippy can't express live in tests/invariants.rs. (murk-p9o.2)
+dbg_macro = "deny"
+
 [lib]
 name = "murk_cli"
 path = "src/lib.rs"
