@@ -21,9 +21,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Reading main's full branch protection needs the `administration` scope,
+      # which the workflow GITHUB_TOKEN cannot carry. Mint a short-lived (~1h)
+      # installation token instead, down-scoped to the three read permissions
+      # preflight needs — smaller blast radius than a long-lived admin PAT.
+      #
+      # Setup (one-time): create a GitHub App on this repo with repository
+      # permissions Administration: read, Contents: read, Pull requests: read;
+      # install it on iicky/murk; store its App ID as the PREFLIGHT_APP_ID
+      # secret and its private key as PREFLIGHT_APP_PRIVATE_KEY. Until then this
+      # job fails closed — by design, an unverifiable protection baseline must
+      # not let a release through.
+      - name: Mint protection-read token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.PREFLIGHT_APP_ID }}
+          private-key: ${{ secrets.PREFLIGHT_APP_PRIVATE_KEY }}
+          permission-administration: read
+          permission-contents: read
+          permission-pull-requests: read
+
       - name: Preflight checks
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Required status checks main must enforce. Extra checks are fine; a
+          # *dropped* one is drift. Keep in sync with the protection config.
+          REQUIRED_CHECKS: "Test VHS Lint"
         run: |
           set -euo pipefail
           git fetch origin main:refs/remotes/origin/main
@@ -32,13 +56,37 @@ jobs:
           git merge-base --is-ancestor "$TAG_SHA" refs/remotes/origin/main \
             || { echo "::error::Tag ${GITHUB_REF_NAME} ($TAG_SHA) is not on main"; exit 1; }
 
-          [ "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')" = "true" ] \
-            || { echo "::error::main is not branch-protected"; exit 1; }
+          # Read the *full* protection config and assert the baseline. A 404 here
+          # means main is unprotected (or the App lacks administration:read) —
+          # either way fail loudly: the old `.protected` flag couldn't see admin
+          # enforcement or which checks are required, so a silently-weakened
+          # config (admins exempted, a required check dropped) would slip through.
+          PROT=$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection") \
+            || { echo "::error::cannot read branch protection for main (unprotected, or the protection App lacks administration:read)"; exit 1; }
+
+          drift=0
+          assert() {  # assert <label> <actual> <expected>
+            if [ "$2" != "$3" ]; then
+              echo "::error::branch-protection drift: $1 is '$2', expected '$3'"
+              drift=1
+            fi
+          }
+
+          assert "enforce_admins"     "$(jq -r '.enforce_admins.enabled'     <<<"$PROT")" "true"
+          assert "allow_force_pushes" "$(jq -r '.allow_force_pushes.enabled' <<<"$PROT")" "false"
+          assert "allow_deletions"    "$(jq -r '.allow_deletions.enabled'    <<<"$PROT")" "false"
+          for ctx in $REQUIRED_CHECKS; do
+            assert "required check '$ctx'" \
+              "$(jq -r --arg c "$ctx" 'any(.required_status_checks.contexts[]?; . == $c)' <<<"$PROT")" "true"
+          done
+
+          [ "$drift" = "0" ] \
+            || { echo "::error::main's branch protection does not match the release baseline"; exit 1; }
 
           [ "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG_SHA}/pulls" --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length')" != "0" ] \
             || { echo "::error::Tag ${GITHUB_REF_NAME} ($TAG_SHA) has no PR merged into main"; exit 1; }
 
-          echo "Preflight ok: $TAG_SHA on main, branch-protected, merged via PR"
+          echo "Preflight ok: $TAG_SHA on main, protection baseline matched, merged via PR"
 
   build:
     name: Build (${{ matrix.target }})
