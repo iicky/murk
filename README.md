@@ -190,9 +190,19 @@ murk restore
 
 ## Commands
 
+**Setup & recovery**
+
 | Command | Description |
 |---------|-------------|
 | `murk init` | Generate keypair and create vault |
+| `murk env` | Write a `.envrc` for direnv integration |
+| `murk restore` | Recover key from BIP39 phrase |
+| `murk recover` | Show recovery phrase for current key |
+
+**Secrets**
+
+| Command | Description |
+|---------|-------------|
 | `murk add KEY [--scoped]` | Add or update a secret (prompts for value) |
 | `murk generate KEY [--hex] [--length N]` | Generate a random secret and store it |
 | `murk rotate KEY [--generate]` | Rotate a secret with a new value |
@@ -202,27 +212,64 @@ murk restore
 | `murk edit [KEY] [--scoped]` | Edit secrets in `$EDITOR` |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
-| `murk exec CMD...` | Run a command with secrets in the environment (`--only`, `--clean-env`) |
-| `murk agent plan` | Emit schema-only context for AI agent prompts (no key required) |
-| `murk agent exec --only KEY -- CMD...` | Run a command with strict agent-safe defaults (clean env, no `MURK_KEY`) |
-| `murk env` | Write a `.envrc` for direnv integration |
-| `murk diff [REF]` | Show secret changes since a git ref |
 | `murk import [FILE]` | Import secrets from a .env file |
+
+**Metadata**
+
+| Command | Description |
+|---------|-------------|
 | `murk describe KEY "..."` | Set description for a key |
 | `murk info` | Show public schema (no key required) |
-| `murk verify` | Check MAC, recipients, and key access without decrypting secrets |
-| `murk doctor` | Scan the surrounding repo for hygiene issues |
-| `murk scan [PATHS...]` | Scan files for leaked secret values |
 | `murk skeleton` | Export schema-only vault with no secrets or recipients |
+
+**Run**
+
+| Command | Description |
+|---------|-------------|
+| `murk exec CMD...` | Run a command with secrets in the environment (`--only`, `--clean-env`) |
+
+**Agents**
+
+| Command | Description |
+|---------|-------------|
+| `murk agent plan` | Emit schema-only context for AI agent prompts (no key required) |
+| `murk agent exec --only KEY -- CMD...` | Run a command with strict agent-safe defaults (clean env, no `MURK_KEY`) |
+| `murk agent grant --name NAME --only KEY --ttl DUR` | Mint a short-lived key that reads only the named secrets |
+| `murk agent ls` | List active agent grants and their TTLs |
+| `murk agent revoke NAME [--rotate]` | Revoke a grant and rotate the keys it could read |
+| `murk policy show\|set\|clear` | Manage the agent allow-list (tags agents may receive) |
+
+**Recipients & groups**
+
+| Command | Description |
+|---------|-------------|
 | `murk circle` | List recipients |
 | `murk circle authorize PUBKEY [--name NAME] [--allow-ssh-rsa]` | Add a recipient (age key, `ssh:path`, or `github:user`) |
 | `murk circle revoke RECIPIENT` | Remove a recipient |
-| `murk setup-merge-driver` | Configure git to merge `.murk` vaults without decrypting |
-| `murk completion generate\|install SHELL` | Generate or install shell completions |
-| `murk restore` | Recover key from BIP39 phrase |
-| `murk recover` | Show recovery phrase for current key |
+| `murk group create\|ls\|add\|rm NAME` | Manage named recipient groups (encrypt a secret to a subset) |
 
-Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `info`, and `exec` filter by `--tag`; `ls`, `export`, `info`, and `diff` support `--json`. See `murk <command> --help` for the full flag list.
+**Checks**
+
+| Command | Description |
+|---------|-------------|
+| `murk verify` | Check MAC, recipients, and key access without decrypting secrets |
+| `murk doctor` | Scan the surrounding repo for hygiene issues |
+| `murk scan [PATHS...]` | Scan files for leaked secret values |
+
+**Git**
+
+| Command | Description |
+|---------|-------------|
+| `murk diff [REF]` | Show secret changes since a git ref |
+| `murk setup-merge-driver` | Configure git to merge `.murk` vaults without decrypting |
+
+**Shell**
+
+| Command | Description |
+|---------|-------------|
+| `murk completion generate\|install SHELL` | Generate or install shell completions |
+
+Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `info`, `exec`, and `agent plan` filter by `--tag`; `ls`, `export`, `info`, `diff`, and `agent plan` support `--json`. See `murk <command> --help` for the full flag list.
 
 ## Design
 
