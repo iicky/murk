@@ -229,6 +229,9 @@ jobs:
     needs: vhs-record
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: vhs-publish-demo
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
