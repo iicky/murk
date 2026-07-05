@@ -32,11 +32,13 @@ pub mod hardening;
 pub(crate) mod info;
 pub(crate) mod init;
 pub(crate) mod merge;
+pub mod pins;
 pub(crate) mod policy;
 pub(crate) mod recipients;
 pub mod recovery;
 pub mod scan;
 pub(crate) mod secrets;
+pub mod signing;
 pub mod types;
 pub mod vault;
 
@@ -60,7 +62,7 @@ pub use export::{
     DiffEntry, DiffKind, decrypt_vault_values, diff_secrets, export_secrets, format_diff_lines,
     parse_and_decrypt_values, resolve_secrets,
 };
-pub use git::{MergeDriverSetupStep, setup_merge_driver};
+pub use git::{CommitSignature, MergeDriverSetupStep, last_commit_signature, setup_merge_driver};
 pub use github::{GitHubError, fetch_keys};
 pub use grants::{create_grant, parse_ttl, remove_grant, validate_grant_name};
 pub use groups::{
@@ -224,6 +226,44 @@ struct MetaState {
     grants: BTreeMap<String, types::GrantEntry>,
     legacy_mac: bool,
     github_pins: HashMap<String, Vec<String>>,
+    signers: BTreeMap<String, String>,
+    signature: types::SignatureState,
+}
+
+/// Determine the signature state of a decrypted meta, treating a present-but-
+/// invalid signature as tampering (hard error). An absent signature is
+/// `Unsigned` — integrity then rests on git, and the caller warns.
+fn check_signature(
+    vault: &types::Vault,
+    meta: &types::Meta,
+) -> Result<types::SignatureState, MurkError> {
+    match &meta.sig {
+        Some(sig) => {
+            if verify_vault_signature(
+                vault,
+                &meta.groups,
+                &meta.grants,
+                &meta.github_pins,
+                &meta.signers,
+                sig,
+            ) {
+                Ok(types::SignatureState::Signed {
+                    signer: sig.signer.clone(),
+                    // ssh-ed25519 keys are self-authenticating (vk in the recipient
+                    // string). age keys are anchored only by a matching local pin,
+                    // which `load_vault` confirms; default to not-yet-anchored here.
+                    anchored: sig.signer.starts_with("ssh-ed25519 "),
+                })
+            } else {
+                Err(MurkError::Integrity(
+                    "vault signature is invalid — it may have been tampered with, or a signer's \
+                     verifying key changed. Run `murk verify` for details"
+                        .into(),
+                ))
+            }
+        }
+        None => Ok(types::SignatureState::Unsigned),
+    }
 }
 
 /// Decrypt the meta blob and verify the vault's integrity MAC, returning the
@@ -251,21 +291,29 @@ fn resolve_meta_state(
                 )));
             }
             let legacy_mac = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
+            let signature = check_signature(vault, &meta)?;
             Ok(MetaState {
                 recipients: meta.recipients,
                 groups: meta.groups,
                 grants: meta.grants,
                 legacy_mac,
                 github_pins: meta.github_pins,
+                signers: meta.signers,
+                signature,
             })
         }
-        Some(meta) if vault.secrets.is_empty() => Ok(MetaState {
-            recipients: meta.recipients,
-            groups: meta.groups,
-            grants: meta.grants,
-            legacy_mac: false,
-            github_pins: meta.github_pins,
-        }),
+        Some(meta) if vault.secrets.is_empty() => {
+            let signature = check_signature(vault, &meta)?;
+            Ok(MetaState {
+                recipients: meta.recipients,
+                groups: meta.groups,
+                grants: meta.grants,
+                legacy_mac: false,
+                github_pins: meta.github_pins,
+                signers: meta.signers,
+                signature,
+            })
+        }
         Some(_) => Err(MurkError::Integrity(
             "vault has secrets but MAC is empty — vault may have been tampered with".into(),
         )),
@@ -275,6 +323,8 @@ fn resolve_meta_state(
             grants: BTreeMap::new(),
             legacy_mac: false,
             github_pins: HashMap::new(),
+            signers: BTreeMap::new(),
+            signature: types::SignatureState::Unsigned,
         }),
         None => Err(MurkError::Integrity(
             "vault has secrets but no meta — vault may have been tampered with".into(),
@@ -301,6 +351,8 @@ pub fn decrypt_vault(
         grants,
         legacy_mac,
         github_pins,
+        signers,
+        signature,
     } = resolve_meta_state(vault, identity)?;
 
     // An agent grant is a recipient of the meta blob (so it can verify integrity
@@ -374,6 +426,8 @@ pub fn decrypt_vault(
         grants,
         legacy_mac,
         github_pins,
+        signers,
+        signature,
     })
 }
 
@@ -392,7 +446,39 @@ pub fn load_vault(
     })?;
 
     let vault = read_vault(vault_path)?;
-    let murk = decrypt_vault(&vault, &identity)?;
+    let mut murk = decrypt_vault(&vault, &identity)?;
+
+    // Enforce the signer-registry pin as part of the trusted load path, so
+    // bindings get it too — not just the CLI. The age `signers` registry lives in
+    // the re-encryptable meta, so a repo-writer could register their own verifying
+    // key under an existing recipient's pubkey and forge that recipient's
+    // signature (`verify_vault_signature` would accept it against the swapped
+    // key). A pubkey's verifying key is a fixed derivation, so a *changed* key for
+    // an already-pinned pubkey is never legitimate: fail hard. `MURK_NO_SIGNER_PIN`
+    // opts out.
+    match pins::reconcile(vault_path, &murk.signers) {
+        pins::PinVerdict::Conflict { signer } => {
+            return Err(MurkError::Integrity(format!(
+                "signer {signer}'s verifying key changed since first seen — the signer registry \
+                 may have been tampered with to forge a signature. Inspect \
+                 `git log -p -- {vault_path}`; if the change is legitimate, clear the pin under \
+                 ~/.config/murk/signer-pins/ or set MURK_NO_SIGNER_PIN=1"
+            )));
+        }
+        pins::PinVerdict::Ok { first_use } => {
+            // An age signature is authenticated authorship only once its key is
+            // anchored by a matching prior pin. On a fresh clone (first-use) the
+            // registry key is trust-on-first-use, so mark it not-yet-anchored —
+            // git commit signing is the real anchor there. (ssh signers were
+            // already anchored=true in `check_signature`.)
+            if let types::SignatureState::Signed { signer, anchored } = &mut murk.signature
+                && !*anchored
+                && !first_use.contains(signer.as_str())
+            {
+                *anchored = true;
+            }
+        }
+    }
 
     Ok((vault, murk, identity))
 }
@@ -648,23 +734,54 @@ pub fn save_vault(
 
     vault.secrets = new_secrets;
 
-    // Update meta — always generate a fresh BLAKE3 key on save.
+    let meta = build_meta(vault_path, vault, current);
+    let meta_json =
+        serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
+    vault.meta = encrypt_value(&meta_json, &recipients)?;
+
+    Ok(vault::write(Path::new(vault_path), vault)?)
+}
+
+/// Build the meta blob for a save: a fresh MAC key + MAC, and a signature when
+/// the operator holds a signing-capable identity (see [`sign_vault`]). The
+/// signer registry is carried forward from `current` so every recipient's
+/// verifying key persists across saves.
+fn build_meta(vault_path: &str, vault: &types::Vault, current: &types::Murk) -> types::Meta {
+    // Always generate a fresh BLAKE3 key on save.
     let mac_key_hex = generate_mac_key();
     let mac_key = decode_mac_key(&mac_key_hex).unwrap();
     let mac = compute_mac(vault, &current.groups, &current.grants, Some(&mac_key));
-    let meta = types::Meta {
+
+    // SSH/hardware identities can't sign, so the vault is written unsigned (a
+    // warning surfaced on next load).
+    let mut signers = current.signers.clone();
+    // Drop registry entries for pubkeys no longer in the recipient set — a
+    // revoked recipient's verifying key is inert (verify requires the signer to
+    // be a current recipient) but shouldn't linger. Prune BEFORE signing so the
+    // signed message matches the stored `signers`. (ssh-ed25519 signers are never
+    // registered, so only age entries are affected.)
+    signers.retain(|pk, _| vault.recipients.iter().any(|r| r == pk));
+    let sig = signing_identity(vault_path).and_then(|identity| {
+        sign_vault(
+            vault,
+            &current.groups,
+            &current.grants,
+            &current.github_pins,
+            &mut signers,
+            &identity,
+        )
+    });
+
+    types::Meta {
         recipients: current.recipients.clone(),
         mac,
         mac_key: Some(mac_key_hex),
         github_pins: current.github_pins.clone(),
         groups: current.groups.clone(),
         grants: current.grants.clone(),
-    };
-    let meta_json =
-        serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;
-    vault.meta = encrypt_value(&meta_json, &recipients)?;
-
-    Ok(vault::write(Path::new(vault_path), vault)?)
+        signers,
+        sig,
+    }
 }
 
 /// Compute an integrity MAC over the vault's secrets, scoped entries, grouped
@@ -1306,6 +1423,155 @@ pub(crate) fn now_utc() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Version of the canonical signed-view serialization. Bumped if the set of
+/// covered fields or their encoding changes, so an older binary refuses a newer
+/// signature rather than misverifying it (mirrors the MAC-prefix downgrade guard).
+const SIGNED_VIEW_VERSION: u32 = 1;
+
+/// Build the canonical, domain-tagged byte message that vault signatures cover.
+///
+/// Covers every security-relevant field — recipients, schema, secrets (all
+/// tiers), policy, groups, grants, github pins, and the signer registry itself
+/// (so a rogue verifying key can't be registered without breaking the signature).
+/// It excludes the `sig` field it produces and the MAC/`mac_key` (a shared secret
+/// the signature supersedes for authenticity). Determinism comes from sorted
+/// maps (`BTreeMap`) and an explicitly sorted recipient list.
+pub(crate) fn signing_message(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    github_pins: &HashMap<String, Vec<String>>,
+    signers: &BTreeMap<String, String>,
+) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct SignedView<'a> {
+        v: u32,
+        version: &'a str,
+        recipients: Vec<&'a str>,
+        schema: &'a BTreeMap<String, types::SchemaEntry>,
+        secrets: &'a BTreeMap<String, types::SecretEntry>,
+        policy: &'a Option<types::Policy>,
+        groups: &'a BTreeMap<String, Vec<String>>,
+        grants: &'a BTreeMap<String, types::GrantEntry>,
+        github_pins: BTreeMap<&'a str, &'a Vec<String>>,
+        signers: &'a BTreeMap<String, String>,
+    }
+
+    let mut recipients: Vec<&str> = vault.recipients.iter().map(String::as_str).collect();
+    recipients.sort_unstable();
+    let pins: BTreeMap<&str, &Vec<String>> =
+        github_pins.iter().map(|(k, v)| (k.as_str(), v)).collect();
+
+    let view = SignedView {
+        v: SIGNED_VIEW_VERSION,
+        version: &vault.version,
+        recipients,
+        schema: &vault.schema,
+        secrets: &vault.secrets,
+        policy: &vault.policy,
+        groups,
+        grants,
+        github_pins: pins,
+        signers,
+    };
+
+    let mut msg = Vec::with_capacity(256);
+    msg.extend_from_slice(b"murk.vault.sig.v1\n");
+    serde_json::to_writer(&mut msg, &view).expect("canonical vault view serializes");
+    msg
+}
+
+/// Sign the vault with `identity` if it is signing-capable, registering its
+/// verifying key in `signers`. Returns `None` for SSH/hardware identities that
+/// cannot sign — the caller leaves the vault unsigned (a warning, not an error).
+pub(crate) fn sign_vault(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    github_pins: &HashMap<String, Vec<String>>,
+    signers: &mut BTreeMap<String, String>,
+    identity: &crypto::MurkIdentity,
+) -> Option<types::VaultSignature> {
+    let signer = identity.pubkey_string().ok()?;
+    // Only a current recipient's signature is meaningful — and verifiable, since
+    // `verify_vault_signature` requires the signer to be a recipient. Signing as
+    // a non-recipient would produce a signature that self-invalidates on load.
+    if !signer_is_recipient(vault, &signer) {
+        return None;
+    }
+    let sk = identity.signing_key()?;
+    // age keys publish their verifying key in the registry (it can't be derived
+    // from the public recipient). ssh-ed25519 keys don't: their verifying key is
+    // recoverable from the recipient string, so they stay out of the registry.
+    if identity.registers_verifying_key() {
+        signers.insert(signer.clone(), signing::verifying_key_b64(&sk));
+    }
+    let msg = signing_message(vault, groups, grants, github_pins, signers);
+    Some(types::VaultSignature {
+        signer,
+        v: SIGNED_VIEW_VERSION,
+        sig: signing::sign(&sk, &msg),
+    })
+}
+
+/// Whether `signer` names a current recipient. ssh-ed25519 signers are matched
+/// ignoring any comment on the stored recipient (a recipient may be stored as
+/// `ssh-ed25519 <b64> user@host` while `signer` is the comment-stripped form).
+fn signer_is_recipient(vault: &types::Vault, signer: &str) -> bool {
+    if signer.starts_with("ssh-ed25519 ") {
+        vault
+            .recipients
+            .iter()
+            .any(|r| signing::ssh_ed25519_key_eq(r, signer))
+    } else {
+        vault.recipients.iter().any(|r| r == signer)
+    }
+}
+
+/// Verify a vault signature. Returns `true` only when the signed-view version is
+/// understood, the signer is a current recipient, and the signature matches the
+/// recomputed canonical message. The verifying key comes from the recipient
+/// string for ssh-ed25519 signers (self-authenticating), or the `signers`
+/// registry for age signers.
+pub(crate) fn verify_vault_signature(
+    vault: &types::Vault,
+    groups: &BTreeMap<String, Vec<String>>,
+    grants: &BTreeMap<String, types::GrantEntry>,
+    github_pins: &HashMap<String, Vec<String>>,
+    signers: &BTreeMap<String, String>,
+    sig: &types::VaultSignature,
+) -> bool {
+    if sig.v != SIGNED_VIEW_VERSION {
+        return false;
+    }
+    if !signer_is_recipient(vault, &sig.signer) {
+        return false;
+    }
+    let vk = if sig.signer.starts_with("ssh-ed25519 ") {
+        // Self-authenticating: the verifying key is in the signer string itself.
+        match signing::ed25519_verifying_key_b64_from_ssh_recipient(&sig.signer) {
+            Some(vk) => vk,
+            None => return false,
+        }
+    } else {
+        match signers.get(&sig.signer) {
+            Some(vk) => vk.clone(),
+            None => return false,
+        }
+    };
+    let msg = signing_message(vault, groups, grants, github_pins, signers);
+    signing::verify(&vk, &sig.sig, &msg)
+}
+
+/// Resolve the operator's identity from the environment for signing on save.
+/// Returns `None` when no key is configured — the vault is then written unsigned
+/// rather than failing the save.
+fn signing_identity(vault_path: &str) -> Option<crypto::MurkIdentity> {
+    use age::secrecy::ExposeSecret;
+    let secret = env::resolve_key_for_vault(vault_path).ok()?;
+    crypto::parse_identity(secret.expose_secret()).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1545,6 +1811,476 @@ mod tests {
             Some(&key),
         );
         assert_ne!(mac1, mac2);
+    }
+
+    /// Build a single-secret vault (value "REAL") with `recipients=[pubkey]`.
+    fn signed_test_vault(pubkey: &str, recipient: &crypto::MurkRecipient) -> types::Vault {
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.to_string()],
+            schema: BTreeMap::new(),
+            policy: None,
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "API_KEY".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"REAL", std::slice::from_ref(recipient)).unwrap(),
+                private: BTreeMap::new(),
+                grouped: BTreeMap::new(),
+            },
+        );
+        vault
+    }
+
+    #[test]
+    fn sign_and_verify_vault_roundtrips() {
+        let (secret, pubkey) = generate_keypair();
+        let identity = make_identity(&secret);
+        let vault = signed_test_vault(&pubkey, &make_recipient(&pubkey));
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        let mut signers = BTreeMap::new();
+        let sig = sign_vault(&vault, &g, &gr, &pins, &mut signers, &identity).unwrap();
+        assert_eq!(sig.signer, pubkey);
+        assert!(verify_vault_signature(
+            &vault, &g, &gr, &pins, &signers, &sig
+        ));
+    }
+
+    #[test]
+    fn signature_detects_ciphertext_tampering() {
+        let (secret, pubkey) = generate_keypair();
+        let identity = make_identity(&secret);
+        let recipient = make_recipient(&pubkey);
+        let mut vault = signed_test_vault(&pubkey, &recipient);
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        let mut signers = BTreeMap::new();
+        let sig = sign_vault(&vault, &g, &gr, &pins, &mut signers, &identity).unwrap();
+
+        // Attacker swaps in a different (still readable) ciphertext but cannot
+        // re-sign without a recipient's signing key.
+        vault.secrets.get_mut("API_KEY").unwrap().shared =
+            encrypt_value(b"POISON", std::slice::from_ref(&recipient)).unwrap();
+        assert!(
+            !verify_vault_signature(&vault, &g, &gr, &pins, &signers, &sig),
+            "tampered ciphertext must fail signature verification"
+        );
+    }
+
+    #[test]
+    fn signature_rejects_non_recipient_signer() {
+        // Outsider knows the victim's pubkey and tampers, then signs with THEIR
+        // OWN key and registers their own verifying key. Verification rejects it
+        // because the signer is not a current recipient of the vault.
+        let (_victim_secret, victim_pub) = generate_keypair();
+        let (attacker_secret, attacker_pub) = generate_keypair();
+        let attacker = make_identity(&attacker_secret);
+        let vault = signed_test_vault(&victim_pub, &make_recipient(&victim_pub));
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        // sign_vault refuses because the attacker isn't a recipient.
+        let mut signers = BTreeMap::new();
+        assert!(sign_vault(&vault, &g, &gr, &pins, &mut signers, &attacker).is_none());
+
+        // Even a hand-forged registry + signature is rejected: signer ∉ recipients.
+        let sk = attacker.signing_key().unwrap();
+        signers.insert(attacker_pub.clone(), signing::verifying_key_b64(&sk));
+        let msg = signing_message(&vault, &g, &gr, &pins, &signers);
+        let forged = types::VaultSignature {
+            signer: attacker_pub,
+            v: SIGNED_VIEW_VERSION,
+            sig: signing::sign(&sk, &msg),
+        };
+        assert!(!verify_vault_signature(
+            &vault, &g, &gr, &pins, &signers, &forged
+        ));
+    }
+
+    #[test]
+    fn end_to_end_forged_signature_fails_load() {
+        // The full attack from the review, now defeated: outsider tampers a
+        // ciphertext, re-MACs with a fresh key, re-encrypts meta to the victim's
+        // public key — but keeps the now-stale signature (they can't produce a
+        // valid one). load must fail with an integrity error.
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let dir = std::env::temp_dir().join("murk_test_forged_sig_load");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        // Create and sign the vault through the real save path.
+        let mut vault = signed_test_vault(&pubkey, &recipient);
+        let original = types::Murk {
+            values: HashMap::from([("API_KEY".into(), crate::testutil::secret("REAL"))]),
+            recipients: HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        // Sanity: it loads clean and reports a signer.
+        let murk = load_vault(path.to_str().unwrap()).unwrap().1;
+        assert!(matches!(
+            &murk.signature,
+            types::SignatureState::Signed { signer, .. } if *signer == pubkey
+        ));
+
+        // Attacker tampers on disk: poison the value, keep the stale signature,
+        // re-MAC + re-encrypt meta using only the (public) recipient key.
+        let mut tampered: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let stale_meta = decrypt_meta(&tampered, &identity).unwrap();
+        tampered.secrets.get_mut("API_KEY").unwrap().shared =
+            encrypt_value(b"POISON", std::slice::from_ref(&recipient)).unwrap();
+        let mac_key_hex = generate_mac_key();
+        let mac_key = decode_mac_key(&mac_key_hex).unwrap();
+        let forged_mac = compute_mac(
+            &tampered,
+            &stale_meta.groups,
+            &stale_meta.grants,
+            Some(&mac_key),
+        );
+        let forged_meta = types::Meta {
+            mac: forged_mac,
+            mac_key: Some(mac_key_hex),
+            sig: stale_meta.sig.clone(), // stale — over the pre-poison content
+            signers: stale_meta.signers.clone(),
+            ..stale_meta
+        };
+        tampered.meta =
+            encrypt_value(&serde_json::to_vec(&forged_meta).unwrap(), &[recipient]).unwrap();
+        fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+        let err = result.expect_err("forged-MAC + stale-signature vault must fail to load");
+        assert!(
+            err.to_string().contains("signature is invalid"),
+            "expected signature failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // A real unencrypted ssh-ed25519 keypair (shared with crypto.rs/signing.rs tests).
+    const SSH_ED25519_SK: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQAAAJCfEwtqnxML\nagAAAAtzc2gtZWQyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQ\nAAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz\n1OxfM/XXUB+VHtZ6isGNAAAADHN0cjRkQGNhcmJvbgE=\n-----END OPENSSH PRIVATE KEY-----";
+    const SSH_ED25519_PK: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN";
+
+    #[test]
+    fn ssh_signed_vault_verifies_without_registry() {
+        // The self-authenticating property: an ssh-ed25519 signer is NOT added to
+        // the registry, and verification succeeds against an EMPTY registry
+        // because the verifying key comes from the recipient string.
+        let identity = make_identity(SSH_ED25519_SK);
+        let recipient = make_recipient(SSH_ED25519_PK);
+        let vault = signed_test_vault(SSH_ED25519_PK, &recipient);
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        let mut signers = BTreeMap::new();
+        let sig = sign_vault(&vault, &g, &gr, &pins, &mut signers, &identity).unwrap();
+        assert_eq!(sig.signer, SSH_ED25519_PK);
+        assert!(signers.is_empty(), "ssh signer must not be registered");
+        assert!(verify_vault_signature(
+            &vault,
+            &g,
+            &gr,
+            &pins,
+            &BTreeMap::new(),
+            &sig
+        ));
+    }
+
+    #[test]
+    fn ssh_signed_vault_detects_tampering() {
+        let identity = make_identity(SSH_ED25519_SK);
+        let recipient = make_recipient(SSH_ED25519_PK);
+        let mut vault = signed_test_vault(SSH_ED25519_PK, &recipient);
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        let mut signers = BTreeMap::new();
+        let sig = sign_vault(&vault, &g, &gr, &pins, &mut signers, &identity).unwrap();
+        vault.secrets.get_mut("API_KEY").unwrap().shared =
+            encrypt_value(b"POISON", std::slice::from_ref(&recipient)).unwrap();
+        assert!(!verify_vault_signature(
+            &vault, &g, &gr, &pins, &signers, &sig
+        ));
+    }
+
+    #[test]
+    fn ssh_recipient_stored_with_comment_still_signs_and_verifies() {
+        // Regression for the comment-mismatch bug: recipient stored WITH a comment
+        // while the identity's pubkey_string() is comment-stripped. Normalized
+        // matching must let it sign and verify.
+        let identity = make_identity(SSH_ED25519_SK);
+        let recipient = make_recipient(SSH_ED25519_PK);
+        let mut vault = signed_test_vault(SSH_ED25519_PK, &recipient);
+        vault.recipients = vec![format!("{SSH_ED25519_PK} someone@host")];
+        let (g, gr, pins) = (BTreeMap::new(), BTreeMap::new(), HashMap::new());
+
+        let mut signers = BTreeMap::new();
+        let sig = sign_vault(&vault, &g, &gr, &pins, &mut signers, &identity)
+            .expect("comment-bearing recipient must still sign");
+        assert!(verify_vault_signature(
+            &vault, &g, &gr, &pins, &signers, &sig
+        ));
+    }
+
+    #[test]
+    fn ssh_end_to_end_save_and_load_reports_signed() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let recipient = make_recipient(SSH_ED25519_PK);
+
+        let dir = std::env::temp_dir().join("murk_test_ssh_e2e_sign");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = signed_test_vault(SSH_ED25519_PK, &recipient);
+        let original = types::Murk {
+            values: HashMap::from([("API_KEY".into(), crate::testutil::secret("REAL"))]),
+            recipients: HashMap::from([(SSH_ED25519_PK.to_string(), "alice".to_string())]),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("MURK_KEY", SSH_ED25519_SK) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(path.to_str().unwrap(), &mut vault, &original, &original).unwrap();
+
+        let murk = load_vault(path.to_str().unwrap()).unwrap().1;
+        unsafe { std::env::remove_var("MURK_KEY") };
+        // ssh-ed25519 signers are self-authenticating, so anchored even on first load.
+        assert_eq!(
+            murk.signature,
+            types::SignatureState::Signed {
+                signer: SSH_ED25519_PK.to_string(),
+                anchored: true,
+            }
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn save_prunes_stale_signer_registry_entries() {
+        // A signer entry for a pubkey no longer in the recipient set is dropped on
+        // the next write, and the vault still verifies (prune happens before sign).
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+
+        let dir = std::env::temp_dir().join("murk_test_prune_signers");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+
+        let mut vault = signed_test_vault(&pubkey, &recipient);
+        let current = types::Murk {
+            values: HashMap::from([("API_KEY".into(), crate::testutil::secret("REAL"))]),
+            recipients: HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            // A stale registry entry for a pubkey that is NOT a recipient.
+            signers: BTreeMap::from([(
+                "age1stalerevokedrecipient".to_string(),
+                BASE64.encode([9u8; 32]),
+            )]),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(path.to_str().unwrap(), &mut vault, &current, &current).unwrap();
+
+        let murk = load_vault(path.to_str().unwrap()).unwrap().1;
+        unsafe { std::env::remove_var("MURK_KEY") };
+        assert!(
+            !murk.signers.contains_key("age1stalerevokedrecipient"),
+            "stale non-recipient signer entry must be pruned"
+        );
+        assert!(
+            murk.signers.contains_key(&pubkey),
+            "live signer must remain"
+        );
+        assert!(matches!(
+            murk.signature,
+            types::SignatureState::Signed { signer, .. } if signer == pubkey
+        ));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn registry_vk_swap_rejected_by_pin_on_load() {
+        // The signer registry lives in the re-encryptable meta. An attacker can
+        // register their OWN verifying key under an existing recipient's pubkey
+        // and forge a signature the signature layer accepts. The TOFU pin, now
+        // enforced hard inside load_vault, must catch the changed key.
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Isolate the pin store under a temp HOME.
+        let home = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", home.path()) };
+        unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
+
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let dir = std::env::temp_dir().join("murk_test_vk_swap");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+        let ps = path.to_str().unwrap();
+
+        // Legit signed vault; first load pins pubkey -> the real verifying key.
+        let mut vault = signed_test_vault(&pubkey, &recipient);
+        let original = types::Murk {
+            values: HashMap::from([("API_KEY".into(), crate::testutil::secret("REAL"))]),
+            recipients: HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(ps, &mut vault, &original, &original).unwrap();
+        load_vault(ps).unwrap(); // establishes the pin
+
+        // Attacker registers their own verifying key under `pubkey` and re-signs
+        // the poisoned vault with their own key, then re-MACs + re-encrypts meta.
+        let att_sk = signing::signing_key_from_age_bytes(&[42u8; 32]);
+        let att_vk = signing::verifying_key_b64(&att_sk);
+        let mut tampered: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let stale = decrypt_meta(&tampered, &identity).unwrap();
+        tampered.secrets.get_mut("API_KEY").unwrap().shared =
+            encrypt_value(b"POISON", std::slice::from_ref(&recipient)).unwrap();
+        let mut signers = stale.signers.clone();
+        signers.insert(pubkey.clone(), att_vk);
+        let msg = signing_message(
+            &tampered,
+            &stale.groups,
+            &stale.grants,
+            &stale.github_pins,
+            &signers,
+        );
+        let forged_sig = types::VaultSignature {
+            signer: pubkey.clone(),
+            v: SIGNED_VIEW_VERSION,
+            sig: signing::sign(&att_sk, &msg),
+        };
+        // The signature layer alone IS fooled — it verifies against the swapped key.
+        assert!(verify_vault_signature(
+            &tampered,
+            &stale.groups,
+            &stale.grants,
+            &stale.github_pins,
+            &signers,
+            &forged_sig
+        ));
+        let mac_key_hex = generate_mac_key();
+        let mac_key = decode_mac_key(&mac_key_hex).unwrap();
+        let mac = compute_mac(&tampered, &stale.groups, &stale.grants, Some(&mac_key));
+        let forged_meta = types::Meta {
+            mac,
+            mac_key: Some(mac_key_hex),
+            sig: Some(forged_sig),
+            signers,
+            ..stale
+        };
+        tampered.meta = encrypt_value(
+            &serde_json::to_vec(&forged_meta).unwrap(),
+            std::slice::from_ref(&recipient),
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+
+        // The pin catches the changed verifying key even though the signature verifies.
+        let err = load_vault(ps).unwrap_err();
+        unsafe { std::env::remove_var("MURK_KEY") };
+        match prev_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        assert!(
+            err.to_string().contains("verifying key changed"),
+            "expected pin failure, got: {err}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn age_signature_first_use_then_anchored() {
+        // An age signature is trust-on-first-use until its key is pinned: the
+        // first load reports it unanchored, a later load (key matches the pin)
+        // reports it anchored.
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let home = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", home.path()) };
+        unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
+
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let dir = std::env::temp_dir().join("murk_test_anchor_transition");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+        let ps = path.to_str().unwrap();
+
+        let mut vault = signed_test_vault(&pubkey, &recipient);
+        let original = types::Murk {
+            values: HashMap::from([("API_KEY".into(), crate::testutil::secret("REAL"))]),
+            recipients: HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            ..Default::default()
+        };
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        unsafe { std::env::remove_var("MURK_KEY_FILE") };
+        save_vault(ps, &mut vault, &original, &original).unwrap();
+
+        let first = load_vault(ps).unwrap().1;
+        let second = load_vault(ps).unwrap().1;
+        unsafe { std::env::remove_var("MURK_KEY") };
+        match prev_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+
+        assert_eq!(
+            first.signature,
+            types::SignatureState::Signed {
+                signer: pubkey.clone(),
+                anchored: false,
+            },
+            "first load of an age key is trust-on-first-use"
+        );
+        assert_eq!(
+            second.signature,
+            types::SignatureState::Signed {
+                signer: pubkey,
+                anchored: true,
+            },
+            "second load is anchored by the pin"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

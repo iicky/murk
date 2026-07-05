@@ -273,7 +273,7 @@ Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `i
 
 ## Design
 
-- **age for encryption, BLAKE3 for integrity** — no custom cryptographic primitives, documented integrity layer
+- **age for encryption, Ed25519 signatures for integrity** — no custom cryptographic primitives; a BLAKE3 MAC binds ciphertexts and an Ed25519 signature (derived from your age key, or your ssh-ed25519 key directly) authenticates the writer, so tampering by anyone with repo write access is detectable. Git commit signing is the anchor. See [THREAT_MODEL.md](THREAT_MODEL.md)
 - **Git is the audit trail** — murk doesn't replicate what git does
 - **Header is public, values are private** — key names are visible, values are not
 - **Explicit over magic** — never silently overwrites or destroys data

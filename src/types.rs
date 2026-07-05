@@ -134,12 +134,43 @@ pub struct Policy {
 // -- Meta (encrypted, stored in vault.meta) --
 // Contains metadata only visible to recipients.
 
+/// An Ed25519 signature over the vault's canonical content.
+///
+/// The shared-key MAC binds ciphertexts together but authenticates no *author*:
+/// its key lives in the meta blob, which anyone can re-encrypt using the public
+/// recipient keys. A signature closes that — an attacker without a recipient's
+/// signing key cannot forge one. Stored in the meta alongside the MAC. See
+/// [`crate::signing`] and `THREAT_MODEL.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultSignature {
+    /// The recipient pubkey (`age1...`) whose signing key produced `sig`. Must be
+    /// a current recipient, with a verifying key in `Meta::signers`, at verify time.
+    pub signer: String,
+    /// Signed-view version — bumped if the canonical signing message changes, so
+    /// an old binary rejects a newer signed view rather than misverifying it.
+    pub v: u32,
+    /// Base64-encoded 64-byte Ed25519 signature.
+    pub sig: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Meta {
     /// Maps pubkey → display name. The only place names are stored.
     pub recipients: HashMap<String, String>,
     /// Integrity MAC over secrets + schema.
     pub mac: String,
+    /// Registered Ed25519 verifying keys: recipient pubkey → base64 verifying key.
+    /// A signer's key must be listed here for its signature to verify. Populated
+    /// when a signing-capable identity saves. Empty for vaults only ever written
+    /// by SSH/hardware identities. Integrity of this map is anchored by the local
+    /// TOFU pin and signed git history (see [`crate::signing`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub signers: BTreeMap<String, String>,
+    /// Ed25519 signature over the vault's canonical content. Absent when the last
+    /// writer had no signing-capable identity; a *present* signature must verify
+    /// or `load` fails as tampering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<VaultSignature>,
     /// BLAKE3 keyed MAC key (hex-encoded, 32 bytes). Generated at init, stored encrypted.
     #[serde(default, skip_serializing_if = "Option::is_none", alias = "hmac_key")]
     pub mac_key: Option<String>,
@@ -158,6 +189,28 @@ pub struct Meta {
     /// (`blake3v5:`) so TTL/scope/issuer are tamper-evident.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub grants: BTreeMap<String, GrantEntry>,
+}
+
+/// Outcome of verifying the vault's Ed25519 signature at load time.
+///
+/// An *invalid* signature never reaches here — it fails the load as tampering.
+/// So the working state distinguishes "signed" from "unsigned" (integrity then
+/// rests on git). The binary warns on `Unsigned`, and on a `Signed` that is not
+/// yet `anchored`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SignatureState {
+    /// A valid signature produced by `signer` (a current recipient).
+    ///
+    /// `anchored` is whether the signer's verifying key is trusted independently
+    /// of the (attacker-mutable) meta registry: always true for ssh-ed25519
+    /// signers (the key is in the recipient string), and true for age signers
+    /// whose key matched a prior local pin. When false — an age signer's key seen
+    /// for the first time on this machine — the signature is trust-on-first-use,
+    /// not yet authenticated authorship; git commit signing is the anchor.
+    Signed { signer: String, anchored: bool },
+    /// No signature present — the last writer had no signing-capable identity.
+    #[default]
+    Unsigned,
 }
 
 // -- Murk (decrypted in-memory state) --
@@ -185,4 +238,11 @@ pub struct Murk {
     pub legacy_mac: bool,
     /// Pinned GitHub key fingerprints (carried from meta).
     pub github_pins: HashMap<String, Vec<String>>,
+    /// Registered Ed25519 verifying keys (carried from meta): recipient pubkey →
+    /// base64 verifying key. `save_vault` carries these forward so every signer's
+    /// key persists, then adds/refreshes the current signer's entry.
+    pub signers: BTreeMap<String, String>,
+    /// Whether the loaded vault carried a valid signature. `Unsigned` means
+    /// integrity rests on git; the binary surfaces a warning.
+    pub signature: SignatureState,
 }

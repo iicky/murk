@@ -762,6 +762,21 @@ fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
             "warn".yellow().bold()
         );
     }
+    // Nudge only when the operator can actually fix it: a vault with secrets that
+    // isn't signed, loaded by a signing-capable key. SSH/hardware users can't
+    // sign, so staying unsigned is expected for them (integrity anchor is git).
+    if matches!(result.1.signature, types::SignatureState::Unsigned)
+        && !result.0.secrets.is_empty()
+        && result.2.is_signing_capable()
+    {
+        eprintln!(
+            "{} vault is unsigned — run any write command to sign it (integrity relies on git until then)",
+            "warn".yellow().bold()
+        );
+    }
+    // The signer-registry pin (a changed verifying key for an already-seen signer)
+    // is enforced as a hard failure inside `murk_cli::load_vault`, so it applies
+    // to every caller. Nothing to do here.
     result
 }
 
@@ -2739,7 +2754,7 @@ fn cmd_recover() {
     let identity =
         murk_cli::crypto::parse_identity(secret_key.expose_secret()).unwrap_or_else(|e| die(&e, 1));
     match identity {
-        MurkIdentity::Ssh(_) => die(
+        MurkIdentity::Ssh { .. } => die(
             &"recovery phrases are for age keys only. SSH keys are managed by your SSH agent — back up ~/.ssh instead",
             1,
         ),
@@ -3330,6 +3345,24 @@ fn report_findings(findings: &[Finding], header: &str) {
     std::process::exit(1);
 }
 
+/// Human label for a signer pubkey: its recipient display name, or a truncated
+/// key. Tolerates ssh-ed25519 comment mismatches — the name map may be keyed by
+/// `ssh-ed25519 <blob> comment` while the signer is the comment-stripped form.
+fn signer_display_name(murk: &types::Murk, signer: &str) -> String {
+    if let Some(name) = murk.recipients.get(signer) {
+        return name.clone();
+    }
+    if signer.starts_with("ssh-ed25519 ")
+        && let Some((_, name)) = murk
+            .recipients
+            .iter()
+            .find(|(pk, _)| murk_cli::signing::ssh_ed25519_key_eq(pk, signer))
+    {
+        return name.clone();
+    }
+    murk_cli::truncate_pubkey(signer)
+}
+
 fn cmd_verify(vault_path: &str) {
     // Load the vault first — MAC/integrity failure short-circuits the rest
     // of the checks with the hard error from the loader.
@@ -3343,6 +3376,81 @@ fn cmd_verify(vault_path: &str) {
             message: "vault uses legacy unkeyed MAC".into(),
             fix: Some("run any write command (e.g. `murk describe`) to upgrade to BLAKE3".into()),
         });
+    }
+
+    // Signature status — the real content-integrity anchor. A valid signature
+    // proves a recipient authored the current vault; the MAC alone can't (a
+    // repo-writer can forge it). An invalid signature would already have failed
+    // the load above, so here it is only Signed or Unsigned.
+    match &murk.signature {
+        types::SignatureState::Signed {
+            signer,
+            anchored: true,
+        } => {
+            eprintln!(
+                "{} signature  signed by {}",
+                "ok".green().bold(),
+                signer_display_name(&murk, signer).dimmed()
+            );
+        }
+        // Age signer whose key isn't pinned yet (fresh clone): the signature is
+        // trust-on-first-use, not authenticated authorship. Don't present it as a
+        // clean "signed by" — warn and point at the real anchor. Not a hard
+        // finding: for the vault's own author this is the normal first load, and
+        // the key is pinned now, so later tampering is caught.
+        types::SignatureState::Signed {
+            signer,
+            anchored: false,
+        } => {
+            eprintln!(
+                "{} signature  signed by {} — {}",
+                "warn".yellow().bold(),
+                signer_display_name(&murk, signer).dimmed(),
+                "trust-on-first-use (key not yet anchored on this machine); anchor authorship with signed git commits, or use an ssh-ed25519 key".dimmed()
+            );
+        }
+        types::SignatureState::Unsigned if !vault.secrets.is_empty() => {
+            findings.push(Finding {
+                category: "signature",
+                message: "vault is unsigned — content integrity relies on git".into(),
+                fix: Some(
+                    "run any write command with an age or ssh-ed25519 key to sign it; ssh-rsa and hardware/plugin keys cannot sign".into(),
+                ),
+            });
+        }
+        types::SignatureState::Unsigned => {}
+    }
+
+    // Git anchor — is the vault's latest commit signed? The vault signature
+    // covers content; a signed commit covers who landed it. Only surfaced when
+    // there is a git history to check.
+    match murk_cli::last_commit_signature(vault_path) {
+        Some(murk_cli::CommitSignature::Good | murk_cli::CommitSignature::Unverified) => {
+            eprintln!(
+                "{} commit  last .murk commit is signed",
+                "ok".green().bold()
+            );
+        }
+        Some(murk_cli::CommitSignature::Bad) => {
+            findings.push(Finding {
+                category: "commit",
+                message: "last .murk commit has a bad signature".into(),
+                fix: Some(
+                    "inspect `git log --show-signature -- .murk` — history may be tampered".into(),
+                ),
+            });
+        }
+        Some(murk_cli::CommitSignature::Unsigned) => {
+            findings.push(Finding {
+                category: "commit",
+                message: "last .murk commit is unsigned".into(),
+                fix: Some(
+                    "enable commit signing and protect the branch so vault history is attributable"
+                        .into(),
+                ),
+            });
+        }
+        None => {}
     }
 
     // The vault file itself is public-by-design, so we don't care about read
