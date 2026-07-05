@@ -8,3 +8,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # codeql-action ships init/analyze as separate "dependencies"; bumping only
+    # one leaves a version skew that breaks the CodeQL run. Group them so every
+    # codeql-action step moves together in a single PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
