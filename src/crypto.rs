@@ -56,7 +56,13 @@ impl std::fmt::Debug for MurkRecipient {
 #[derive(Clone)]
 pub enum MurkIdentity {
     Age(age::x25519::Identity),
-    Ssh(age::ssh::Identity),
+    Ssh {
+        identity: age::ssh::Identity,
+        /// The original OpenSSH private-key text. age does not expose the SSH
+        /// signing scalar, so we retain the PEM to derive an Ed25519 signing key
+        /// for vault signing (ssh-ed25519 only). Zeroized on drop.
+        pem: Zeroizing<String>,
+    },
     Plugin {
         identity: PluginIdentity,
         pubkey: String,
@@ -69,7 +75,7 @@ impl std::fmt::Debug for MurkIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MurkIdentity::Age(_) => write!(f, "Age(<redacted>)"),
-            MurkIdentity::Ssh(_) => write!(f, "Ssh(<redacted>)"),
+            MurkIdentity::Ssh { .. } => write!(f, "Ssh(<redacted>)"),
             MurkIdentity::Plugin { pubkey, identity } => {
                 write!(f, "Plugin({} → {pubkey})", identity.plugin())
             }
@@ -87,8 +93,8 @@ impl MurkIdentity {
     pub fn pubkey_string(&self) -> Result<String, CryptoError> {
         match self {
             MurkIdentity::Age(id) => Ok(id.to_public().to_string()),
-            MurkIdentity::Ssh(id) => {
-                let recipient = age::ssh::Recipient::try_from(id.clone()).map_err(|e| {
+            MurkIdentity::Ssh { identity, .. } => {
+                let recipient = age::ssh::Recipient::try_from(identity.clone()).map_err(|e| {
                     CryptoError::InvalidKey(format!("cannot derive SSH public key: {e:?}"))
                 })?;
                 Ok(recipient.to_string())
@@ -102,6 +108,55 @@ impl MurkIdentity {
         match self {
             MurkIdentity::Plugin { identity, .. } => Some(identity.plugin()),
             _ => None,
+        }
+    }
+
+    /// Whether this identity can produce vault signatures: native age keys, and
+    /// `ssh-ed25519` keys (which sign natively). `ssh-rsa` and hardware/plugin
+    /// identities cannot. Cheap check for deciding whether to nudge on an unsigned
+    /// vault; the actual key comes from [`Self::signing_key`].
+    pub fn is_signing_capable(&self) -> bool {
+        match self {
+            MurkIdentity::Age(_) => true,
+            MurkIdentity::Ssh { .. } => self
+                .pubkey_string()
+                .is_ok_and(|s| s.starts_with("ssh-ed25519 ")),
+            MurkIdentity::Plugin { .. } => false,
+        }
+    }
+
+    /// Whether this identity's verifying key must be recorded in the signer
+    /// registry (`Meta::signers`) for its signature to be verifiable.
+    ///
+    /// Only age keys: their Ed25519 verifying key is derived from the secret and
+    /// cannot be recovered from the public age recipient, so it must be published.
+    /// `ssh-ed25519` verifying keys are embedded in the recipient string itself,
+    /// so they are self-authenticating and are NOT registered.
+    pub fn registers_verifying_key(&self) -> bool {
+        matches!(self, MurkIdentity::Age(_))
+    }
+
+    /// This identity's Ed25519 signing key, if it can sign.
+    ///
+    /// - Age keys: derived from the raw x25519 key bytes via a domain-separated
+    ///   KDF (see [`crate::signing`]), so it recovers from the BIP39 phrase.
+    /// - `ssh-ed25519` keys: the SSH key *is* an Ed25519 signing key; we parse it
+    ///   from the retained OpenSSH PEM (age does not expose the scalar). The
+    ///   resulting verifying key matches the `ssh-ed25519 …` recipient string.
+    /// - `ssh-rsa` and plugin/hardware identities return `None` (unsigned).
+    pub fn signing_key(&self) -> Option<ed25519_dalek::SigningKey> {
+        match self {
+            MurkIdentity::Age(id) => {
+                use age::secrecy::ExposeSecret;
+                // age keys display uppercase; bech32 decoding requires lowercase.
+                let secret = id.to_string();
+                let lower = Zeroizing::new(secret.expose_secret().to_lowercase());
+                let (_, bytes) = bech32::decode(&lower).ok()?;
+                let bytes = Zeroizing::new(bytes);
+                Some(crate::signing::signing_key_from_age_bytes(&bytes))
+            }
+            MurkIdentity::Ssh { pem, .. } => crate::signing::ed25519_signing_key_from_openssh(pem),
+            MurkIdentity::Plugin { .. } => None,
         }
     }
 }
@@ -146,7 +201,14 @@ pub fn parse_identity(input: &str) -> Result<MurkIdentity, CryptoError> {
     let reader = std::io::BufReader::new(input.as_bytes());
     if let Ok(id) = age::ssh::Identity::from_buffer(reader, None) {
         match id {
-            age::ssh::Identity::Unencrypted(_) => return Ok(MurkIdentity::Ssh(id)),
+            age::ssh::Identity::Unencrypted(_) => {
+                // Retain the PEM: age won't expose the SSH signing scalar, so we
+                // re-parse it (ssh-ed25519 only) when signing the vault.
+                return Ok(MurkIdentity::Ssh {
+                    identity: id,
+                    pem: Zeroizing::new(input.to_string()),
+                });
+            }
             age::ssh::Identity::Encrypted(_) => {
                 return Err(CryptoError::InvalidKey(
                     "encrypted SSH keys are not yet supported — use an unencrypted key or an age key"
@@ -304,7 +366,7 @@ pub fn decrypt(
 
     let id_ref: &dyn age::Identity = match identity {
         MurkIdentity::Age(id) => id,
-        MurkIdentity::Ssh(id) => id,
+        MurkIdentity::Ssh { identity, .. } => identity,
         MurkIdentity::Plugin { .. } => plugin_holder.as_ref().expect("constructed above"),
     };
 
@@ -513,7 +575,7 @@ mod tests {
         let sk = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQAAAJCfEwtqnxML\nagAAAAtzc2gtZWQyNTUxOQAAACB7Ci6nqZYaVvrjm8+XbzII89TsXzP111AflR7WeorBjQ\nAAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz\n1OxfM/XXUB+VHtZ6isGNAAAADHN0cjRkQGNhcmJvbgE=\n-----END OPENSSH PRIVATE KEY-----";
         let id = parse_identity(sk);
         assert!(id.is_ok());
-        assert!(matches!(id.unwrap(), MurkIdentity::Ssh(_)));
+        assert!(matches!(id.unwrap(), MurkIdentity::Ssh { .. }));
     }
 
     #[test]

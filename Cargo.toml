@@ -44,6 +44,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 blake3 = "1"
+ed25519-dalek = "2"
+# OpenSSH private-key parsing for ssh-ed25519 vault signing. RSA/encryption
+# features are deliberately off: we only need ed25519, and keeping RSA out avoids
+# widening the Marvin-attack surface (RUSTSEC-2023-0071, already tracked in deny.toml).
+ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc"] }
 constant_time_eq = "0.4"
 tempfile = "3.27.0"
 clap_complete = "4.6.5"

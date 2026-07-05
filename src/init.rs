@@ -144,6 +144,8 @@ pub fn create_vault(
     let mac_key_hex = crate::generate_mac_key();
     let mac_key = crate::decode_mac_key(&mac_key_hex).unwrap();
     let mac = crate::compute_mac(&vault, &BTreeMap::new(), &BTreeMap::new(), Some(&mac_key));
+    // The initial vault is unsigned: `create_vault` holds only the public key,
+    // and an empty vault has nothing to protect. The first secret write signs it.
     let meta = types::Meta {
         recipients: recipient_names,
         mac,
@@ -151,6 +153,8 @@ pub fn create_vault(
         github_pins: HashMap::new(),
         groups: BTreeMap::new(),
         grants: BTreeMap::new(),
+        signers: BTreeMap::new(),
+        sig: None,
     };
     let meta_json =
         serde_json::to_vec(&meta).map_err(|e| MurkError::Secret(format!("meta serialize: {e}")))?;

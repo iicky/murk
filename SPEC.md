@@ -173,6 +173,14 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
   },
   "mac": "blake3v5:abc123...",
   "hmac_key": "0a1b2c3d...",
+  "signers": {
+    "age1abc...": "base64-ed25519-verifying-key"
+  },
+  "sig": {
+    "signer": "age1abc...",
+    "v": 1,
+    "sig": "base64-ed25519-signature"
+  },
   "groups": {
     "prod": ["age1abc...", "age1xyz..."]
   },
@@ -193,6 +201,8 @@ The `meta` field is a single age blob encrypted to all recipients. It contains:
 `mac` is a keyed integrity hash over the vault's encrypted content (see Integrity below).
 
 `hmac_key` is a hex-encoded 32-byte random key used for BLAKE3 keyed hashing. Generated fresh on each save.
+
+`signers` maps a recipient pubkey to its base64 Ed25519 verifying key, recorded when that recipient signs. `sig` is the current Ed25519 signature: `signer` (the recipient pubkey that produced it), `v` (signed-view version), and `sig` (base64). Both are omitted when the last writer had no signing-capable identity. See Signatures below.
 
 `groups` maps a group name to its member pubkeys (a subset of `recipients`). Stored here, not in the plaintext header, so org structure — who is in which group — does not leak. Members are covered by the MAC. The field is omitted entirely when the vault has no named groups, keeping group-free vaults byte-identical to pre-groups murk.
 
@@ -218,7 +228,25 @@ The resulting digest is prefixed with `blake3v7:` (v9) when any key has a `revok
 
 On load, murk verifies the MAC. Legacy prefixes `sha256:` (v1, no scoped coverage), `sha256v2:` (v2, unkeyed), `blake3:` (v3, no schema coverage), `blake3v2:` (v4, no lifecycle-metadata coverage), `blake3v3:` (v5, no group coverage), `blake3v4:` (v6, no grant coverage), `blake3v5:` (v7, no policy coverage), and `blake3v6:` (v8, no revoked-at coverage) are accepted for backward compatibility. On save, murk writes the lowest version that covers the vault's contents (`blake3v7:` if any `revoked_at` exists, else `blake3v6:` for a policy, `blake3v5:` for grants, `blake3v4:` for groups, otherwise `blake3v3:`), always with a fresh key. Gating each version bump on the first group/grant/policy/marker keeps simpler vaults byte-identical to older murk. A vault carrying groups, grants, a policy, or a revoked-at marker is rejected under an older prefix that doesn't cover them, so an attacker can't strip coverage (e.g. clear a pending-rotation flag) by downgrading the MAC. (A vault written by a newer murk cannot be MAC-verified by an older binary that predates the prefix it uses.)
 
-Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This prevents an attacker from modifying secrets and recomputing a valid MAC.
+Because both the MAC and its key live inside the encrypted meta blob, only authorized recipients can compute or verify the hash. This makes the MAC a keyed integrity check for recipients and a tamper/corruption detector — but it is **not** a defense against a deliberate attacker with write access to the repo. age encryption needs only the recipients' *public* keys (which are in the plaintext header), so a repo-writer can mint a fresh `hmac_key`, recompute a valid MAC over tampered content, and re-encrypt the meta blob. Authorship integrity is provided by the signature below, not the MAC.
+
+### Signatures
+
+murk signs the vault with an Ed25519 key so tampering by a repo-writer is detectable — the property the MAC cannot provide, since anyone can recompute it.
+
+**Signing key.** Two signing-capable key types:
+- **age** — derived from the writer's raw age key bytes via `blake3::derive_key("murk.vault.signing.ed25519.v1", age_key_bytes)` → Ed25519 `SigningKey`. The domain-separated KDF keeps the signing key independent of the encryption key while deriving from the same seed, so the BIP39 phrase recovers both. Its verifying key is published in the `signers` registry (below).
+- **ssh-ed25519** — the SSH key is itself an Ed25519 signing key, parsed from the OpenSSH private key (age does not expose the scalar, so murk re-parses the retained PEM with the `ssh-key` crate). Its verifying key is the one embedded in the `ssh-ed25519 …` recipient string, so it is **not** added to `signers`.
+
+`ssh-rsa` and plugin/hardware identities cannot sign; their saves are written unsigned.
+
+**Signed message.** A domain-tagged (`murk.vault.sig.v1\n`) canonical JSON serialization of a signed view (version 1) covering: `version`, sorted `recipients`, `schema`, `secrets` (all tiers), `policy`, `groups`, `grants`, `github_pins`, and the `signers` registry itself — so a rogue verifying key cannot be registered without invalidating the signature. It excludes `sig` (which it produces) and the MAC/`hmac_key` (a shared secret the signature supersedes for authenticity). Determinism comes from sorted maps and a sorted recipient list.
+
+**Verify.** On load, if `sig` is present murk requires: the signed-view version is understood, the `signer` is a current recipient, and the signature matches the recomputed message. The verifying key comes from the `ssh-ed25519 …` recipient string for SSH signers (self-authenticating; recipient match tolerates a trailing comment), or the `signers` registry for age signers. A present-but-invalid signature fails the load as tampering. An absent signature loads with a warning (`SignatureState::Unsigned`); integrity then rests on git. `sign_vault` only signs as a current recipient, so it never writes a self-invalidating signature.
+
+**Merge driver.** The merge driver runs without deciding to vouch for content, so it leaves the merged vault unsigned (`sig: null`), carrying the `signers` registry forward. A keyholder re-signs on the next write after reviewing `murk diff`.
+
+**Signer-registry pinning (TOFU).** Because the age `signers` registry lives in the re-encryptable meta, a repo-writer could register their own verifying key under an existing recipient's pubkey and forge that recipient's signature. To close this, `load_vault` pins each pubkey→verifying-key mapping locally in `~/.config/murk/signer-pins/<vault-hash>.json` on first sight and enforces it: a *changed* verifying key for an already-pinned pubkey is never legitimate (the mapping is a fixed derivation), so the load fails with an integrity error. The check runs in the library load path, so it covers the CLI and the language bindings alike. New pubkeys are trust-on-first-use, and murk marks them as such: `load_vault` reports an age signature as `Signed { anchored: false }` until its key matches a prior pin, and `murk verify` surfaces the unanchored state rather than claiming verified authorship (git commit signing is the anchor for a first load). `MURK_NO_SIGNER_PIN=1` disables the check. The pin is local and does not travel with the repo. ssh-ed25519 signers are never in the registry (their verifying key rides in the recipient string), so they are self-authenticating — `anchored: true` even on a first clone — and need no pin.
 
 ---
 

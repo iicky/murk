@@ -78,6 +78,47 @@ pub fn setup_merge_driver() -> Result<Vec<MergeDriverSetupStep>, String> {
     Ok(steps)
 }
 
+/// Signature status of the most recent commit that modified `path`.
+///
+/// The vault signature authenticates *content*; a signed commit authenticates
+/// *who landed it* — together they anchor integrity in git (see `THREAT_MODEL`).
+/// `murk verify` surfaces this so a team can confirm the vault's history is
+/// signed, not just its bytes.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CommitSignature {
+    /// A good, verified signature.
+    Good,
+    /// A signature is present but git could not validate it (unknown/expired key).
+    Unverified,
+    /// A bad signature — the commit was altered or the signature doesn't match.
+    Bad,
+    /// The commit carries no signature.
+    Unsigned,
+}
+
+/// Return the signature status of the last commit touching `path`, or `None`
+/// when git is unavailable, the repo has no such commit, or the path is
+/// untracked — i.e. there is no git anchor to check.
+pub fn last_commit_signature(path: &str) -> Option<CommitSignature> {
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%G?", "--", path])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    match String::from_utf8(output.stdout).ok()?.trim() {
+        "G" => Some(CommitSignature::Good),
+        // U (good, unknown validity), X (expired), Y (expired key), E (cannot
+        // check) all mean "a signature exists but we can't fully vouch for it".
+        "U" | "X" | "Y" | "E" => Some(CommitSignature::Unverified),
+        "B" | "R" => Some(CommitSignature::Bad),
+        "N" => Some(CommitSignature::Unsigned),
+        // Empty: no commit for this path (untracked / no history) — no anchor.
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

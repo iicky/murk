@@ -658,6 +658,8 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         github_pins: HashMap::new(),
         groups: BTreeMap::new(),
         grants: BTreeMap::new(),
+        signers: BTreeMap::new(),
+        sig: None,
     };
 
     let ours_meta = decrypt_meta(ours, &identity).unwrap_or_else(default_meta);
@@ -700,6 +702,18 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         github_pins.insert(user, pins);
     }
 
+    // Merge the signer registry (union, ours wins), retained to current
+    // recipients. The merged vault is deliberately left UNSIGNED: the driver runs
+    // non-interactively and must not vouch for content a human hasn't reviewed —
+    // auto-signing here would re-bless one-sided value injection just as
+    // auto-MACing did. `sig: None` makes the next load warn "unsigned"; any
+    // keyholder write (after reviewing `murk diff`) re-signs it.
+    let mut signers = theirs_meta.signers;
+    for (pk, vk) in ours_meta.signers {
+        signers.insert(pk, vk);
+    }
+    signers.retain(|pk, _| merged.recipients.contains(pk));
+
     let meta = crate::types::Meta {
         recipients: names,
         mac,
@@ -707,6 +721,8 @@ pub fn regenerate_meta(merged: &mut Vault, ours: &Vault, theirs: &Vault) -> Opti
         github_pins,
         groups,
         grants,
+        signers,
+        sig: None,
     };
 
     let recipients = parse_recipients(&merged.recipients).ok()?;

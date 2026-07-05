@@ -1,0 +1,256 @@
+//! Trust-on-first-use pinning of a vault's signer registry.
+//!
+//! The signer registry (`Meta::signers`, pubkey → Ed25519 verifying key) lives
+//! in the encrypted meta blob, which anyone can re-encrypt using the public
+//! recipient keys. So on its own it's attacker-mutable: a repo-writer could
+//! register their *own* verifying key under an existing recipient's pubkey and
+//! sign with their own key, forging that recipient's signature.
+//!
+//! This pin closes that. For a native age key the mapping pubkey → verifying key
+//! is a fixed derivation (see [`crate::signing`]), so a given pubkey must always
+//! carry the *same* verifying key. We record the mapping locally on first sight
+//! and flag any later change for an existing pubkey — which is never legitimate
+//! and indicates the registry was tampered with. New pubkeys are trust-on-first-
+//! use (like GitHub key pinning): recorded, not rejected.
+//!
+//! The pin is local state under `~/.config/murk/signer-pins/`; it does not travel
+//! with the repo. It is best-effort — a missing home dir or unreadable pin never
+//! blocks a load, it just skips the check.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SignerPin {
+    /// pubkey → base64 Ed25519 verifying key, as first seen.
+    signers: BTreeMap<String, String>,
+}
+
+/// Result of reconciling a vault's current signer registry against the local pin.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PinVerdict {
+    /// No conflict. `first_use` lists signer pubkeys seen for the first time on
+    /// this machine (newly pinned) — their key is trust-on-first-use, not yet
+    /// anchored. A pubkey absent from `first_use` matched an existing pin, so its
+    /// key is anchored by a prior trusted load.
+    Ok { first_use: BTreeSet<String> },
+    /// An existing pubkey's verifying key changed since it was pinned. Never
+    /// legitimate: the registry was altered to forge this recipient's signature.
+    Conflict { signer: String },
+}
+
+/// Path to the pin file for a vault: `~/.config/murk/signer-pins/<vault-hash>.json`.
+/// The hash matches the scheme used for key auto-discovery (lexical abs path).
+fn pin_path(vault_path: &str) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+
+    let p = std::path::Path::new(vault_path);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(p)
+    };
+    let hash = Sha256::digest(abs.to_string_lossy().as_bytes());
+    let short: String = hash.iter().take(8).fold(String::new(), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    Some(
+        std::path::Path::new(&home)
+            .join(".config")
+            .join("murk")
+            .join("signer-pins")
+            .join(format!("{short}.json")),
+    )
+}
+
+/// Reconcile the vault's current signer registry against the local pin.
+///
+/// Returns `Conflict` when an already-pinned pubkey now maps to a different
+/// verifying key. Otherwise records any new pubkeys and returns `Ok` with the
+/// set of first-seen (trust-on-first-use) signers. When pinning is unavailable
+/// (opted out, or no home dir) every signer is reported as first-use, since
+/// nothing is anchored.
+pub fn reconcile(vault_path: &str, signers: &BTreeMap<String, String>) -> PinVerdict {
+    // No anchor available → nothing is anchored; every signer is first-use.
+    let all_unanchored = || PinVerdict::Ok {
+        first_use: signers.keys().cloned().collect(),
+    };
+    if std::env::var_os("MURK_NO_SIGNER_PIN").is_some() {
+        return all_unanchored();
+    }
+    let Some(path) = pin_path(vault_path) else {
+        return all_unanchored();
+    };
+
+    let mut pin: SignerPin = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+
+    // Any existing pubkey whose verifying key changed is tampering.
+    for (pubkey, vk) in signers {
+        if let Some(pinned) = pin.signers.get(pubkey)
+            && pinned != vk
+        {
+            return PinVerdict::Conflict {
+                signer: pubkey.clone(),
+            };
+        }
+    }
+
+    // No conflict — extend the pin with any newly seen signers (TOFU), and report
+    // them as first-use so callers don't over-trust an unanchored key.
+    let mut first_use = BTreeSet::new();
+    for (pubkey, vk) in signers {
+        if !pin.signers.contains_key(pubkey) {
+            pin.signers.insert(pubkey.clone(), vk.clone());
+            first_use.insert(pubkey.clone());
+        }
+    }
+    if !first_use.is_empty() {
+        write_pin(&path, &pin);
+    }
+
+    PinVerdict::Ok { first_use }
+}
+
+fn write_pin(path: &std::path::Path, pin: &SignerPin) {
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // ~/.config/murk should stay 0700 like the key dirs.
+        if let Some(murk_dir) = parent.parent() {
+            let _ = std::fs::set_permissions(murk_dir, std::fs::Permissions::from_mode(0o700));
+        }
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    }
+    if let Ok(json) = serde_json::to_string_pretty(pin) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sandbox HOME so the pin lands in a temp dir, and serialize with other
+    /// tests that mutate HOME.
+    fn with_home<T>(f: impl FnOnce(&str) -> T) -> T {
+        use crate::testutil::ENV_LOCK;
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", dir.path()) };
+        unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
+        let out = f(dir.path().to_str().unwrap());
+        match prev {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        out
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// The set of first-use signers from an `Ok` verdict (panics on `Conflict`).
+    fn first_use_of(v: PinVerdict) -> BTreeSet<String> {
+        match v {
+            PinVerdict::Ok { first_use } => first_use,
+            PinVerdict::Conflict { signer } => panic!("unexpected conflict: {signer}"),
+        }
+    }
+
+    #[test]
+    fn first_use_then_anchored() {
+        with_home(|_| {
+            let s = map(&[("age1alice", "vkALICE")]);
+            // First sight: reported as first-use (not yet anchored).
+            assert_eq!(
+                first_use_of(reconcile("/proj/.murk", &s)),
+                BTreeSet::from(["age1alice".to_string()])
+            );
+            // Second sight: matched the pin → anchored, so no longer first-use.
+            assert!(first_use_of(reconcile("/proj/.murk", &s)).is_empty());
+        });
+    }
+
+    #[test]
+    fn only_the_new_signer_is_first_use() {
+        with_home(|_| {
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            // Bob joins: alice is now anchored, only bob is first-use.
+            assert_eq!(
+                first_use_of(reconcile(
+                    "/proj/.murk",
+                    &map(&[("age1alice", "vkALICE"), ("age1bob", "vkBOB")])
+                )),
+                BTreeSet::from(["age1bob".to_string()])
+            );
+        });
+    }
+
+    #[test]
+    fn changed_verifying_key_for_existing_pubkey_conflicts() {
+        with_home(|_| {
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            // Attacker registers a different verifying key under alice's pubkey.
+            assert_eq!(
+                reconcile("/proj/.murk", &map(&[("age1alice", "vkATTACKER")])),
+                PinVerdict::Conflict {
+                    signer: "age1alice".into()
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn pins_are_per_vault_path() {
+        with_home(|_| {
+            reconcile("/a/.murk", &map(&[("age1alice", "vkALICE")]));
+            // A different vault with the same pubkey but a different key: no
+            // cross-contamination — separate pin file, so no conflict.
+            assert_eq!(
+                first_use_of(reconcile("/b/.murk", &map(&[("age1alice", "vkOTHER")]))),
+                BTreeSet::from(["age1alice".to_string()])
+            );
+        });
+    }
+
+    #[test]
+    fn opt_out_disables_the_check_and_anchoring() {
+        with_home(|_| {
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            unsafe { std::env::set_var("MURK_NO_SIGNER_PIN", "1") };
+            // Opted out: even a changed key passes, and nothing is anchored
+            // (every signer reported first-use).
+            assert_eq!(
+                first_use_of(reconcile(
+                    "/proj/.murk",
+                    &map(&[("age1alice", "vkATTACKER")])
+                )),
+                BTreeSet::from(["age1alice".to_string()])
+            );
+            unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
+        });
+    }
+}
