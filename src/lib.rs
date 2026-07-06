@@ -269,67 +269,130 @@ fn check_signature(
 /// Decrypt the meta blob and verify the vault's integrity MAC, returning the
 /// recipient/group/grant state. Errors if the vault has secrets but a missing or
 /// invalid MAC — a tampered or inconsistent vault should fail loudly here rather
-/// than surface a misleading decryption error later.
+/// than surface a misleading decryption error later. An identity that cannot
+/// decrypt an intact meta blob is simply not a recipient (revoked or never
+/// authorized) and gets a "not a recipient" error, not a tamper warning.
 fn resolve_meta_state(
     vault: &types::Vault,
     identity: &crypto::MurkIdentity,
 ) -> Result<MetaState, MurkError> {
-    match decrypt_meta(vault, identity) {
-        Some(meta) if !meta.mac.is_empty() => {
-            let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
-            if !verify_mac(
-                vault,
-                &meta.groups,
-                &meta.grants,
-                &meta.mac,
-                mac_key.as_ref(),
-            ) {
-                let expected = compute_mac(vault, &meta.groups, &meta.grants, mac_key.as_ref());
-                return Err(MurkError::Integrity(format!(
-                    "vault may have been tampered with (expected {expected}, got {})",
-                    meta.mac
-                )));
-            }
-            let legacy_mac = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
-            let signature = check_signature(vault, &meta)?;
-            Ok(MetaState {
-                recipients: meta.recipients,
-                groups: meta.groups,
-                grants: meta.grants,
-                legacy_mac,
-                github_pins: meta.github_pins,
-                signers: meta.signers,
-                signature,
-            })
-        }
-        Some(meta) if vault.secrets.is_empty() => {
-            let signature = check_signature(vault, &meta)?;
-            Ok(MetaState {
-                recipients: meta.recipients,
-                groups: meta.groups,
-                grants: meta.grants,
+    if vault.meta.is_empty() {
+        if vault.secrets.is_empty() {
+            return Ok(MetaState {
+                recipients: HashMap::new(),
+                groups: BTreeMap::new(),
+                grants: BTreeMap::new(),
                 legacy_mac: false,
-                github_pins: meta.github_pins,
-                signers: meta.signers,
-                signature,
-            })
+                github_pins: HashMap::new(),
+                signers: BTreeMap::new(),
+                signature: types::SignatureState::Unsigned,
+            });
         }
-        Some(_) => Err(MurkError::Integrity(
-            "vault has secrets but MAC is empty — vault may have been tampered with".into(),
-        )),
-        None if vault.secrets.is_empty() && vault.meta.is_empty() => Ok(MetaState {
-            recipients: HashMap::new(),
-            groups: BTreeMap::new(),
-            grants: BTreeMap::new(),
-            legacy_mac: false,
-            github_pins: HashMap::new(),
-            signers: BTreeMap::new(),
-            signature: types::SignatureState::Unsigned,
-        }),
-        None => Err(MurkError::Integrity(
+        return Err(MurkError::Integrity(
             "vault has secrets but no meta — vault may have been tampered with".into(),
-        )),
+        ));
     }
+
+    // The meta blob is present, so failing to decrypt it usually means this
+    // identity is not in the recipient set — revoked or never authorized. That
+    // is an access problem, not tampering. But the public header lists who
+    // SHOULD be able to decrypt: if our key is listed there and still can't
+    // open the meta, the header and ciphertext disagree — that reads as
+    // tampering, and saying "not a recipient" would hide it. Garbled base64 or
+    // JSON likewise means the blob itself was damaged.
+    //
+    // Accepted residual: an attacker who replaces the meta AND removes a key
+    // from the header produces a vault indistinguishable from a legitimate
+    // revocation — no client-side check can tell those apart, for any choice
+    // of message here. Git history is the audit trail for that case (see
+    // THREAT_MODEL.md).
+    let ciphertext = BASE64.decode(&vault.meta).map_err(|_| {
+        MurkError::Integrity("vault meta is corrupt — vault may have been tampered with".into())
+    })?;
+    let plaintext = match crypto::decrypt(&ciphertext, identity) {
+        Ok(plaintext) => plaintext,
+        // A plugin failure (missing age-plugin binary, declined touch) is an
+        // environment problem — report it as-is, not as an access verdict.
+        Err(e) if matches!(identity, crypto::MurkIdentity::Plugin { .. }) => {
+            return Err(e.into());
+        }
+        Err(_) => {
+            if identity
+                .pubkey_string()
+                .is_ok_and(|pk| is_listed_recipient(vault, &pk))
+            {
+                return Err(MurkError::Integrity(
+                    "your key is listed as a recipient but cannot decrypt the vault meta — vault may have been tampered with".into(),
+                ));
+            }
+            return Err(MurkError::Crypto(crypto::CryptoError::Decrypt(
+                "you are not a recipient of this vault. Run `murk circle` to check, or ask a recipient to authorize you".into(),
+            )));
+        }
+    };
+    let meta: types::Meta = serde_json::from_slice(&plaintext).map_err(|_| {
+        MurkError::Integrity("vault meta is corrupt — vault may have been tampered with".into())
+    })?;
+
+    if meta.mac.is_empty() {
+        if !vault.secrets.is_empty() {
+            return Err(MurkError::Integrity(
+                "vault has secrets but MAC is empty — vault may have been tampered with".into(),
+            ));
+        }
+        let signature = check_signature(vault, &meta)?;
+        return Ok(MetaState {
+            recipients: meta.recipients,
+            groups: meta.groups,
+            grants: meta.grants,
+            legacy_mac: false,
+            github_pins: meta.github_pins,
+            signers: meta.signers,
+            signature,
+        });
+    }
+
+    let mac_key = meta.mac_key.as_deref().and_then(decode_mac_key);
+    if !verify_mac(
+        vault,
+        &meta.groups,
+        &meta.grants,
+        &meta.mac,
+        mac_key.as_ref(),
+    ) {
+        let expected = compute_mac(vault, &meta.groups, &meta.grants, mac_key.as_ref());
+        return Err(MurkError::Integrity(format!(
+            "vault may have been tampered with (expected {expected}, got {})",
+            meta.mac
+        )));
+    }
+    let legacy_mac = meta.mac.starts_with("sha256:") || meta.mac.starts_with("sha256v2:");
+    let signature = check_signature(vault, &meta)?;
+    Ok(MetaState {
+        recipients: meta.recipients,
+        groups: meta.groups,
+        grants: meta.grants,
+        legacy_mac,
+        github_pins: meta.github_pins,
+        signers: meta.signers,
+        signature,
+    })
+}
+
+/// Whether `pubkey` names one of the vault's public header recipients. SSH
+/// entries may be stored with a trailing comment while `pubkey_string()` drops
+/// it, so ssh keys compare by key type and blob only.
+fn is_listed_recipient(vault: &types::Vault, pubkey: &str) -> bool {
+    fn ssh_head(s: &str) -> Option<(&str, &str)> {
+        let mut it = s.split_whitespace();
+        match (it.next(), it.next()) {
+            (Some(kind), Some(blob)) if kind.starts_with("ssh-") => Some((kind, blob)),
+            _ => None,
+        }
+    }
+    vault.recipients.iter().any(|r| {
+        r == pubkey || matches!((ssh_head(r), ssh_head(pubkey)), (Some(a), Some(b)) if a == b)
+    })
 }
 
 /// Decrypt a vault using the given identity. Verifies integrity, decrypts all
@@ -2789,13 +2852,16 @@ mod tests {
         let Err(err) = result else {
             panic!("expected load_vault to fail for non-recipient");
         };
-        // Non-recipient can't decrypt meta, so integrity check fails first.
+        // A non-recipient key gets a clean "not a recipient" error, not a
+        // tamper warning — the meta blob is intact, it just isn't ours to read.
         let msg = err.to_string();
         assert!(
-            msg.contains("decryption failed")
-                || msg.contains("no meta")
-                || msg.contains("tampered"),
-            "expected decryption or integrity failure, got: {err}"
+            msg.contains("not a recipient"),
+            "expected not-a-recipient error, got: {err}"
+        );
+        assert!(
+            !msg.contains("tampered"),
+            "unauthorized key must not look like tampering, got: {err}"
         );
 
         fs::remove_dir_all(&dir).unwrap();
@@ -2911,9 +2977,41 @@ mod tests {
 
         // Load should fail: secrets present but no meta.
         let result = load_vault(path.to_str().unwrap());
-        unsafe { std::env::remove_var("MURK_KEY") };
 
         let err = result.expect_err("expected MAC validation to fail");
+        assert!(
+            err.to_string().contains("integrity check failed"),
+            "expected integrity check failure, got: {err}"
+        );
+
+        // Tamper differently: garble the meta blob so it no longer decodes.
+        // A recipient hitting damaged meta should still see an integrity
+        // error, not "not a recipient".
+        let mut garbled: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        garbled.meta = "not-base64!!".into();
+        fs::write(&path, serde_json::to_string_pretty(&garbled).unwrap()).unwrap();
+
+        let result = load_vault(path.to_str().unwrap());
+
+        let err = result.expect_err("expected corrupt meta to fail");
+        assert!(
+            err.to_string().contains("integrity check failed"),
+            "expected integrity check failure, got: {err}"
+        );
+
+        // Tamper again: valid base64 that fails authenticated decryption (a
+        // byte-flipped meta blob). Our key is listed in the public header, so
+        // this must read as tampering, not "not a recipient".
+        let mut flipped: types::Vault =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        flipped.meta = BASE64.encode(b"flipped ciphertext bytes");
+        fs::write(&path, serde_json::to_string_pretty(&flipped).unwrap()).unwrap();
+
+        let result = load_vault(path.to_str().unwrap());
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        let err = result.expect_err("expected flipped meta to fail");
         assert!(
             err.to_string().contains("integrity check failed"),
             "expected integrity check failure, got: {err}"
