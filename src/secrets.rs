@@ -256,7 +256,11 @@ pub fn describe_key(
 pub const EXPIRY_WARN_DAYS: i64 = 14;
 
 /// A rotation-hygiene problem found by [`rotation_health`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializes with a `reason` tag (e.g. `{"reason": "overdue", "key": ...}`)
+/// so `rotate --list --json` output is stable for scripts and agents.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
 pub enum RotationIssue {
     /// `rotation_interval_days` has elapsed since the value was last changed.
     Overdue {

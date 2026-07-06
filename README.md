@@ -207,6 +207,7 @@ murk restore
 | `murk generate KEY [--hex] [--length N]` | Generate a random secret and store it |
 | `murk rotate KEY [--generate]` | Rotate a secret with a new value |
 | `murk rotate --all` | Rotate all secrets (prompts for each) |
+| `murk rotate --list [--json]` | List keys needing rotation (overdue, expiring, post-revoke) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
 | `murk edit [KEY] [--scoped]` | Edit secrets in `$EDITOR` |
