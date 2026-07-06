@@ -124,6 +124,12 @@ enum Command {
         /// Output generated values as hex instead of base64
         #[arg(long)]
         hex: bool,
+        /// List keys needing rotation instead of rotating (exits 1 if any)
+        #[arg(long, conflicts_with_all = ["key", "all", "generate", "hex"])]
+        list: bool,
+        /// Output the listing as JSON (with --list; always exits 0)
+        #[arg(long, requires = "list", conflicts_with_all = ["key", "all", "generate", "hex"])]
+        json: bool,
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
@@ -1338,6 +1344,30 @@ fn cmd_rotate(
             rotated.to_string().bold()
         );
     }
+}
+
+/// List keys needing rotation — the same signals doctor reports, but scoped to
+/// rotation and machine-readable. Reads only the plaintext schema, so it works
+/// without a key. JSON mode always exits 0 (empty array when clean); human mode
+/// exits 1 when anything needs rotating, so it can gate scripts.
+fn cmd_rotate_list(json: bool, vault_path: &str) {
+    let path = Path::new(vault_path);
+    let vault = try_or_die(vault::read(path));
+
+    let issues = murk_cli::rotation_health(&vault, chrono::Utc::now());
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&issues).unwrap());
+        return;
+    }
+
+    if issues.is_empty() {
+        eprintln!("{} no keys need rotation", "ok".green().bold());
+        return;
+    }
+
+    let findings: Vec<Finding> = issues.iter().map(rotation_finding).collect();
+    report_findings(&findings, "rotation");
 }
 
 fn cmd_rm(key: &str, vault_path: &str) {
@@ -3824,15 +3854,17 @@ fn run() {
             generate,
             length,
             hex,
+            list,
+            json,
             vault,
-        } => cmd_rotate(
-            key.as_deref(),
-            all,
-            generate,
-            length,
-            hex,
-            &murk_cli::resolve_vault_path(&vault),
-        ),
+        } => {
+            let vault_path = murk_cli::resolve_vault_path(&vault);
+            if list {
+                cmd_rotate_list(json, &vault_path);
+            } else {
+                cmd_rotate(key.as_deref(), all, generate, length, hex, &vault_path);
+            }
+        }
         Command::Rm { key, vault } => cmd_rm(&key, &murk_cli::resolve_vault_path(&vault)),
         Command::Get { key, vault } => cmd_get(&key, &murk_cli::resolve_vault_path(&vault)),
         Command::Ls { tag, json, vault } => {
