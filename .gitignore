@@ -1,5 +1,6 @@
 .beads/
 .claude/
+banks/
 .env
 *.murk.lock
 /target

@@ -63,7 +63,7 @@ Or download a pre-built binary:
 curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
 ```
 
-Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`.
+Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`. See [VERIFYING.md](VERIFYING.md) for verifying the npm, PyPI, and crates.io releases too.
 
 ## Quick start
 
