@@ -780,10 +780,34 @@ fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
             "warn".yellow().bold()
         );
     }
+    maybe_nudge_agent_path(vault);
     // The signer-registry pin (a changed verifying key for an already-seen signer)
     // is enforced as a hard failure inside `murk_cli::load_vault`, so it applies
     // to every caller. Nothing to do here.
     result
+}
+
+/// One-time hint when CI is decrypting with the operator's personal stored key —
+/// the agent anti-pattern. CI context alone never changes behavior (see
+/// `hardening::ci_context`); this only points at the scoped path. Stays quiet
+/// with an explicit key/grant, in agent context, or under strict.
+fn maybe_nudge_agent_path(vault: &str) {
+    use std::sync::Once;
+    static NUDGE: Once = Once::new();
+    if !murk_cli::hardening::ci_context()
+        || murk_cli::hardening::agent_context()
+        || murk_cli::hardening::strict_mode()
+    {
+        return;
+    }
+    if let Ok((_, murk_cli::KeySource::Auto(_))) = murk_cli::resolve_key_with_source(vault) {
+        NUDGE.call_once(|| {
+            eprintln!(
+                "{} CI is using your personal stored key — prefer a scoped `murk agent grant` + `MURK_AGENT=1`, or `murk agent exec` (see docs/ai-agents.md)",
+                "hint".dimmed()
+            );
+        });
+    }
 }
 
 /// Load the vault while holding an exclusive lock for the entire read-modify-write cycle.
@@ -1865,6 +1889,15 @@ fn cmd_exec(
                 if let Ok(val) = std::env::var(var) {
                     cmd.env(var, val);
                 }
+            }
+            // Mark the child as an agent context, and set MURK_STRICT too so an
+            // older `murk` on PATH (which only knows MURK_STRICT) still refuses to
+            // fall back to the operator's stored key via the preserved HOME. A
+            // safe default, not a sandbox: a child can unset these or read the key
+            // file directly — real isolation is the OS's job.
+            if agent_mode {
+                cmd.env("MURK_AGENT", "1");
+                cmd.env("MURK_STRICT", "1");
             }
         } else {
             cmd.env_remove("MURK_KEY");
@@ -3164,7 +3197,7 @@ fn print_grant_handoff(only: &[String], key_path: &str) {
     eprintln!(
         "  {}",
         format!(
-            "run the agent with: MURK_KEY_FILE={key_path} MURK_STRICT=1 murk agent exec --only {} -- <cmd>",
+            "run the agent with: MURK_KEY_FILE={key_path} MURK_AGENT=1 murk agent exec --only {} -- <cmd>",
             only.join(" ")
         )
         .dimmed()

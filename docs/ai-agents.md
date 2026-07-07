@@ -16,7 +16,7 @@ murk gives agents access to secrets without exposing them in plaintext.
    murk exec -- npm run migrate
    ```
 
-   When the agent itself is invoking the command, use `murk agent exec`. It requires explicit `--only` keys, clears the inherited environment, and strips `MURK_KEY` — so the run can only see the secrets you named:
+   When the agent itself is invoking the command, use `murk agent exec`. It requires explicit `--only` keys, clears the inherited environment, strips `MURK_KEY`, and marks the child as an agent context (`MURK_AGENT=1`) — so the run can only see the secrets you named and a nested `murk` won't fall back to your stored key:
    ```bash
    murk agent exec --only DATABASE_URL -- npm test
    murk agent exec --only DATABASE_URL --only PG_PASSWORD -- ./migrate.sh
@@ -33,6 +33,12 @@ murk gives agents access to secrets without exposing them in plaintext.
 
    Reach for `murk info` when you want a fuller picture (recipients, your key source, private overrides). Reach for `murk skeleton` when you want a distributable vault file shaped like the real one but with `recipients` / `secrets` / `meta` blanked.
 
+## Agent context
+
+Set `MURK_AGENT=1` to tell murk it's running for an agent. In an agent context, **strict mode is forced**: murk won't fall back to your stored key in `~/.config/murk/keys` (the agent must present its own `MURK_KEY`/`MURK_KEY_FILE` — e.g. a grant key — or fail closed), won't write plaintext secrets to a file, and requires a RAM-backed tmpdir for `murk edit`.
+
+`murk agent exec` sets `MURK_AGENT=1` and `MURK_STRICT=1` for the child, so a nested `murk` stays strict and won't fall back to your stored key on the normal path. This is a safe default, **not a sandbox**: a child controls its own environment, so it can unset those vars or read `~/.config/murk/keys` directly — for real containment, run agents under a separate user or in a container (see below). If you want a non-strict shell yourself, just don't set `MURK_AGENT`. In CI, murk stays out of the way but prints a one-line nudge toward the scoped path when it sees a pipeline decrypting with your personal key.
+
 ## Short-lived agent grants
 
 `murk agent exec` is the safest pattern: the agent's command gets secret *values* in its environment and never sees a key. Reach for a **grant** when the agent has to run `murk` itself over a session — for example a long-running agent that calls `murk get` as it works.
@@ -44,10 +50,10 @@ murk agent grant --name codex --only STRIPE_SECRET_KEY --ttl 2h
 murk agent grant --name codex --only DATABASE_URL --only PG_PASSWORD --ttl 30m
 ```
 
-It writes the agent key to `~/.config/murk/agent-keys/<vault-hash>-<name>` (or `--out PATH`, or `--out -` to stream it to stdout) and prints how to use it. Run the agent with that key and `MURK_STRICT=1` so it can't fall back to your stored key:
+It writes the agent key to `~/.config/murk/agent-keys/<vault-hash>-<name>` (or `--out PATH`, or `--out -` to stream it to stdout) and prints how to use it. Run the agent with that key and `MURK_AGENT=1` (agent context — strict is forced) so it won't fall back to your stored key:
 
 ```bash
-MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_STRICT=1 \
+MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_AGENT=1 \
   murk agent exec --only STRIPE_SECRET_KEY -- python scripts/refund.py
 ```
 

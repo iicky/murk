@@ -133,11 +133,12 @@ pub fn resolve_key_with_source(vault_path: &str) -> Result<(SecretString, KeySou
             KeySource::EnvFile(p.to_path_buf()),
         ));
     }
-    // Auto-discovery of the operator's stored key. Disabled under MURK_STRICT so
-    // an agent context never silently falls back to the operator's personal key
-    // in ~/.config/murk/keys — it must present an explicit MURK_KEY/MURK_KEY_FILE
-    // (its grant key) or fail closed. `murk agent exec` sets MURK_STRICT for the
-    // agent so this holds without the agent having to opt in.
+    // Auto-discovery of the operator's stored key. Disabled in strict mode (an
+    // explicit MURK_STRICT, or an agent context via MURK_AGENT) so an agent never
+    // silently falls back to the operator's personal key in ~/.config/murk/keys —
+    // it must present an explicit MURK_KEY/MURK_KEY_FILE (its grant key) or fail
+    // closed. `murk agent exec` sets MURK_AGENT=1 and MURK_STRICT=1 for the child, so this holds
+    // without the agent having to opt in.
     if !crate::hardening::strict_mode()
         && let Some(path) = key_file_path(vault_path).ok().filter(|p| p.exists())
     {
@@ -865,6 +866,103 @@ mod tests {
             "resolve_key_with_source must not fall back to .env"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolve_key_agent_context_disables_auto_fallback() {
+        // Regression test for murk-qu2.1: agent context (MURK_AGENT=1) must
+        // not silently fall back to the operator's stored key in
+        // ~/.config/murk/keys, even when a valid key sits at the
+        // auto-discovery path. This is a security fix, not a convenience
+        // knob: MURK_STRICT=0 must NOT be able to override agent context
+        // back off, or a child process could regain the operator's key.
+        //
+        // Lock order: ENV_LOCK before CWD_LOCK, matching every other test
+        // that grabs both.
+        let _env_lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev_home = env::var_os("HOME");
+        let prev_key = env::var(ENV_MURK_KEY).ok();
+        let prev_keyfile = env::var(ENV_MURK_KEY_FILE).ok();
+        let prev_agent = env::var("MURK_AGENT").ok();
+        let prev_strict = env::var("MURK_STRICT").ok();
+
+        let home = std::env::temp_dir().join("murk_test_agent_fallback_home");
+        let vault_dir = std::env::temp_dir().join("murk_test_agent_fallback_vault");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&vault_dir);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&vault_dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        unsafe {
+            env::remove_var(ENV_MURK_KEY);
+            env::remove_var(ENV_MURK_KEY_FILE);
+            env::remove_var("MURK_AGENT");
+            env::remove_var("MURK_STRICT");
+            env::set_var("HOME", &home);
+        }
+        std::env::set_current_dir(&vault_dir).unwrap();
+
+        let vault_path = "auto-fallback-test.murk";
+        let key = "AGE-SECRET-KEY-1AUTOFALLBACK";
+        let auto_path = key_file_path(vault_path).unwrap();
+        write_key_to_file(&auto_path, key).unwrap();
+
+        // No agent context, no explicit strict setting: auto fallback works.
+        let plain = resolve_key_with_source(vault_path);
+
+        // Agent context with no explicit MURK_STRICT: fail closed, no fallback.
+        unsafe { env::set_var("MURK_AGENT", "1") };
+        let agent = resolve_key_with_source(vault_path);
+
+        // MURK_STRICT=0 must NOT override agent context: still fails closed.
+        unsafe { env::set_var("MURK_STRICT", "0") };
+        let agent_with_explicit_off = resolve_key_with_source(vault_path);
+
+        std::env::set_current_dir(&original_dir).unwrap();
+        unsafe {
+            match prev_home {
+                Some(v) => env::set_var("HOME", v),
+                None => env::remove_var("HOME"),
+            }
+            match prev_key {
+                Some(v) => env::set_var(ENV_MURK_KEY, v),
+                None => env::remove_var(ENV_MURK_KEY),
+            }
+            match prev_keyfile {
+                Some(v) => env::set_var(ENV_MURK_KEY_FILE, v),
+                None => env::remove_var(ENV_MURK_KEY_FILE),
+            }
+            match prev_agent {
+                Some(v) => env::set_var("MURK_AGENT", v),
+                None => env::remove_var("MURK_AGENT"),
+            }
+            match prev_strict {
+                Some(v) => env::set_var("MURK_STRICT", v),
+                None => env::remove_var("MURK_STRICT"),
+            }
+        }
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&vault_dir).ok();
+
+        let (_, source) = plain.expect("auto fallback should succeed without agent/strict context");
+        assert_eq!(source, KeySource::Auto(auto_path.clone()));
+
+        assert!(
+            agent.is_err(),
+            "MURK_AGENT=1 must disable the stored-key auto fallback"
+        );
+
+        assert!(
+            agent_with_explicit_off.is_err(),
+            "MURK_STRICT=0 must not re-enable auto fallback while MURK_AGENT is set"
+        );
     }
 
     #[test]

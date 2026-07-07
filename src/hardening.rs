@@ -26,23 +26,53 @@ pub fn disable_core_dumps() {
     }
 }
 
-/// Whether `MURK_STRICT` is enabled. Strict mode trades convenience for a
-/// hard "never let a secret touch the disk" guarantee — see [`is_ram_backed`].
-///
-/// On for `1`, `true`, or `yes` (case-insensitive). Off when unset, empty, or
-/// any other value (including `0`). This is the user/session-level strict
-/// toggle; vault-declared policy will later flip the same behaviors.
+/// The effective strict setting: strict is ON when either the operator set a
+/// truthy `MURK_STRICT` or this is an [`agent_context`] (`MURK_AGENT`). There is
+/// deliberately no way to turn strict OFF from inside an agent context — an
+/// operator who wants convenience simply doesn't opt into agent context. Strict
+/// mode trades convenience for a safer default: don't write a secret to disk (see
+/// [`is_ram_backed`]) and don't fall back to the operator's stored key (see
+/// `env::resolve_key_with_source`). This is the toggle the strict gates read.
 pub fn strict_mode() -> bool {
-    strict_from(&std::env::var("MURK_STRICT").unwrap_or_default())
+    effective_strict_from(
+        &std::env::var("MURK_STRICT").unwrap_or_default(),
+        &std::env::var("MURK_AGENT").unwrap_or_default(),
+    )
 }
 
-/// Parse a `MURK_STRICT` value. Split out from [`strict_mode`] so the truthiness
-/// rules are testable without mutating process-global env state.
+/// Whether murk is running on behalf of an AI agent, via the explicit
+/// `MURK_AGENT` opt-in. Agent context forces strict mode (see [`strict_mode`]) so
+/// the honest path never falls back to the operator's stored key. `murk agent
+/// exec` sets it (alongside `MURK_STRICT`) for the child. This is a safe default,
+/// not a sandbox: a child that controls its own environment or can read
+/// `~/.config/murk/keys` directly is outside murk's boundary — real containment
+/// is OS-level isolation (see the note in `docs/ai-agents.md`).
+pub fn agent_context() -> bool {
+    strict_from(&std::env::var("MURK_AGENT").unwrap_or_default())
+}
+
+/// Whether murk appears to be running in CI (the conventional `CI` variable set
+/// truthy). Advisory only: CI context drives a nudge toward the scoped agent
+/// path but — unlike [`agent_context`] — does not by itself flip strict mode, so
+/// existing pipelines are never silently changed.
+pub fn ci_context() -> bool {
+    strict_from(&std::env::var("CI").unwrap_or_default())
+}
+
+/// Truthy values: `1`, `true`, `yes` (case-insensitive, trimmed). Split out so
+/// the rules are testable without mutating process-global env state.
 fn strict_from(val: &str) -> bool {
     matches!(
         val.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes"
     )
+}
+
+/// Pure effective-strict decision from raw env values, split out for testing.
+/// Strict is on when `MURK_STRICT` is truthy OR `MURK_AGENT` (agent context) is
+/// truthy; agent context cannot be overridden off.
+fn effective_strict_from(strict: &str, agent: &str) -> bool {
+    strict_from(strict) || strict_from(agent)
 }
 
 /// Whether `path` lives on a RAM-backed filesystem (tmpfs/ramfs), meaning data
@@ -152,6 +182,35 @@ mod tests {
         }
         for off in ["", "0", "false", "no", "off", "enabled", "2"] {
             assert!(!strict_from(off), "{off:?} should not enable strict mode");
+        }
+    }
+
+    #[test]
+    fn effective_strict_from_decision_table() {
+        // (MURK_STRICT, MURK_AGENT, expected effective strict)
+        let cases = [
+            ("1", "", true),
+            ("yes", "", true),
+            ("", "1", true),
+            ("true", "true", true),
+            // Security-critical rows: agent context is NOT overridable —
+            // a truthy MURK_AGENT forces strict even when MURK_STRICT is
+            // explicitly falsy.
+            ("0", "1", true),
+            ("false", "1", true),
+            ("bogus", "1", true),
+            ("", "", false),
+            ("0", "", false),
+            ("", "0", false),
+            ("bogus", "", false),
+            ("2", "enabled", false),
+        ];
+        for (strict, agent, expected) in cases {
+            assert_eq!(
+                effective_strict_from(strict, agent),
+                expected,
+                "strict={strict:?} agent={agent:?}"
+            );
         }
     }
 

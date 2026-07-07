@@ -2832,6 +2832,38 @@ fn agent_exec_clears_inherited_environment() {
 }
 
 #[test]
+fn agent_exec_sets_murk_agent_for_child() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+            "--",
+            "env",
+        ])
+        .assert()
+        .success();
+
+    // murk-qu2.1: agent exec marks the child as an agent context so a nested
+    // `murk` invocation defaults to strict and cannot auto-discover the
+    // operator's stored key via the preserved HOME.
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("MURK_AGENT=1"));
+}
+
+#[test]
 fn agent_exec_announces_keys_on_stderr() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
