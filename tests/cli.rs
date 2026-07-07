@@ -2832,6 +2832,38 @@ fn agent_exec_clears_inherited_environment() {
 }
 
 #[test]
+fn agent_exec_sets_murk_agent_for_child() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("postgres://prod\n")
+        .assert()
+        .success();
+
+    let output = murk(&dir, &key)
+        .args([
+            "agent",
+            "exec",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+            "--",
+            "env",
+        ])
+        .assert()
+        .success();
+
+    // murk-qu2.1: agent exec marks the child as an agent context so a nested
+    // `murk` invocation defaults to strict and cannot auto-discover the
+    // operator's stored key via the preserved HOME.
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("MURK_AGENT=1"));
+}
+
+#[test]
 fn agent_exec_announces_keys_on_stderr() {
     let dir = TempDir::new().unwrap();
     let (key, _) = init_vault(&dir);
@@ -4245,4 +4277,383 @@ fn policy_clear_restores_unrestricted_agent_mode() {
         ])
         .assert()
         .success();
+}
+
+// ── agent init (one-shot onboarding) ──
+
+#[test]
+fn agent_init_grants_scoped_access_and_writes_key_file() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "STRIPE_KEY", "--vault", "test.murk"])
+        .write_stdin("sk_live_secret\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args(["add", "DB_URL", "--vault", "test.murk"])
+        .write_stdin("pg://prod\n")
+        .assert()
+        .success();
+
+    let agent_key_path = dir.path().join("a1.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "init",
+            "--name",
+            "a1",
+            "--only",
+            "STRIPE_KEY",
+            "--out",
+        ])
+        .arg(&agent_key_path)
+        .args(["--vault", "test.murk"])
+        .assert()
+        .success();
+
+    let agent_key = read_agent_key(&agent_key_path);
+    assert!(agent_key.starts_with("AGE-SECRET-KEY-"));
+
+    // The grant is recorded.
+    murk(&dir, &key)
+        .args(["agent", "ls", "--json", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a1\""));
+
+    // The written key reads the granted key...
+    murk_bin(dir.path())
+        .env("MURK_KEY_FILE", agent_key_path.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .current_dir(dir.path())
+        .args(["get", "STRIPE_KEY", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sk_live_secret"));
+
+    // ...but not an out-of-scope key.
+    murk_bin(dir.path())
+        .env("MURK_KEY_FILE", agent_key_path.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .current_dir(dir.path())
+        .args(["get", "DB_URL", "--vault", "test.murk"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn agent_init_sets_policy_and_streams_key_to_stdout() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--tag", "agents", "--vault", "test.murk"])
+        .write_stdin("safe_val\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "init",
+            "--name",
+            "a2",
+            "--only",
+            "API_KEY",
+            "--allow-tag",
+            "agents",
+            "--out",
+            "-",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("AGE-SECRET-KEY-"))
+        .stderr(predicate::str::contains("key streamed to stdout"));
+
+    // The allow-list is now set.
+    murk_bin(dir.path())
+        .args(["policy", "show", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("agents"));
+
+    // The grant is recorded.
+    murk(&dir, &key)
+        .args(["agent", "ls", "--json", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a2\""));
+}
+
+#[test]
+fn agent_init_fails_closed_and_grants_nothing_for_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--tag", "agents", "--vault", "test.murk"])
+        .write_stdin("safe_val\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args(["add", "PROD_DB", "--vault", "test.murk"])
+        .write_stdin("prod_val\n")
+        .assert()
+        .success();
+    murk(&dir, &key)
+        .args([
+            "policy",
+            "set",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "init",
+            "--name",
+            "a3",
+            "--only",
+            "PROD_DB",
+            "--out",
+            "-",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(
+            predicate::str::contains("policy forbids").and(predicate::str::contains("PROD_DB")),
+        );
+
+    // No grant was recorded.
+    murk(&dir, &key)
+        .args(["agent", "ls", "--json", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a3\"").not());
+}
+
+#[test]
+fn agent_init_policy_set_is_atomic_when_grant_fails() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "UNTAGGED", "--vault", "test.murk"])
+        .write_stdin("untagged_val\n")
+        .assert()
+        .success();
+
+    // No policy exists yet.
+    murk_bin(dir.path())
+        .args(["policy", "show", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no agent policy"));
+
+    // Setting the allow-list to `agents` and granting the untagged key in the
+    // same transaction must fail closed — the just-set allow-list forbids it.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "init",
+            "--name",
+            "a4",
+            "--only",
+            "UNTAGGED",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy forbids"));
+
+    // Nothing was persisted: no policy, no grant.
+    murk_bin(dir.path())
+        .args(["policy", "show", "--vault", "test.murk"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("no agent policy"));
+
+    murk(&dir, &key)
+        .args(["agent", "ls", "--json", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"a4\"").not());
+}
+
+// ── operator self-scope ──
+
+/// Set up a vault with an `ALLOWED` secret (tagged `agents`) and a
+/// `FORBIDDEN` secret (untagged), then set a policy allowing only the
+/// `agents` tag. Returns the operator's `MURK_KEY`.
+fn setup_self_scope_vault(dir: &TempDir) -> String {
+    let (key, _) = init_vault(dir);
+
+    murk(dir, &key)
+        .args(["add", "ALLOWED", "--vault", "test.murk"])
+        .write_stdin("allowed_val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args(["add", "FORBIDDEN", "--vault", "test.murk"])
+        .write_stdin("forbidden_val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "describe",
+            "ALLOWED",
+            "an agent-safe secret",
+            "--tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "policy",
+            "set",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    key
+}
+
+#[test]
+fn self_scope_off_operator_reads_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    // No MURK_SELF_SCOPE: the operator remains unrestricted by the policy.
+    murk(&dir, &key)
+        .args(["get", "FORBIDDEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("forbidden_val"));
+}
+
+#[test]
+fn self_scope_get_blocks_forbidden_allows_allowed() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["get", "FORBIDDEN", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
+
+    murk(&dir, &key)
+        .args(["get", "ALLOWED", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowed_val"));
+}
+
+#[test]
+fn self_scope_export_withholds_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("export ALLOWED=")
+                .and(predicate::str::contains("FORBIDDEN").not()),
+        )
+        .stderr(predicate::str::contains("withholding"));
+}
+
+#[test]
+fn self_scope_exec_only_enforces_policy() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "FORBIDDEN",
+            "--vault",
+            "test.murk",
+            "--",
+            "true",
+        ])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "ALLOWED",
+            "--vault",
+            "test.murk",
+            "--",
+            "true",
+        ])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn self_scope_bulk_edit_refused() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["edit", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .env("EDITOR", "true")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bulk edit"));
+}
+
+#[cfg(unix)]
+#[test]
+fn self_scope_single_key_edit_blocks_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["edit", "FORBIDDEN", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .env("EDITOR", "true")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
 }

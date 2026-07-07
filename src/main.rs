@@ -457,6 +457,29 @@ enum AgentCommand {
         vault: String,
     },
 
+    /// One-shot onboarding: optionally set the agent allow-list, mint a scoped
+    /// grant, and print how to run the agent safely
+    Init {
+        /// Grant name (used to revoke it later)
+        #[arg(long)]
+        name: String,
+        /// Keys the agent can read (required — fails closed)
+        #[arg(long, required = true)]
+        only: Vec<String>,
+        /// Set the agent allow-list to these tags before granting (repeatable)
+        #[arg(long = "allow-tag")]
+        allow_tag: Vec<String>,
+        /// Time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)
+        #[arg(long, default_value = "2h")]
+        ttl: String,
+        /// Where to write the agent key: a path, or `-` for stdout
+        #[arg(long)]
+        out: Option<String>,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
     /// List active agent grants and their TTLs
     Ls {
         /// Output as JSON
@@ -780,10 +803,34 @@ fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
             "warn".yellow().bold()
         );
     }
+    maybe_nudge_agent_path(vault);
     // The signer-registry pin (a changed verifying key for an already-seen signer)
     // is enforced as a hard failure inside `murk_cli::load_vault`, so it applies
     // to every caller. Nothing to do here.
     result
+}
+
+/// One-time hint when CI is decrypting with the operator's personal stored key —
+/// the agent anti-pattern. CI context alone never changes behavior (see
+/// `hardening::ci_context`); this only points at the scoped path. Stays quiet
+/// with an explicit key/grant, in agent context, or under strict.
+fn maybe_nudge_agent_path(vault: &str) {
+    use std::sync::Once;
+    static NUDGE: Once = Once::new();
+    if !murk_cli::hardening::ci_context()
+        || murk_cli::hardening::agent_context()
+        || murk_cli::hardening::strict_mode()
+    {
+        return;
+    }
+    if let Ok((_, murk_cli::KeySource::Auto(_))) = murk_cli::resolve_key_with_source(vault) {
+        NUDGE.call_once(|| {
+            eprintln!(
+                "{} CI is using your personal stored key — prefer a scoped `murk agent grant` + `MURK_AGENT=1`, or `murk agent exec` (see docs/ai-agents.md)",
+                "hint".dimmed()
+            );
+        });
+    }
 }
 
 /// Load the vault while holding an exclusive lock for the entire read-modify-write cycle.
@@ -1400,8 +1447,11 @@ fn strict_guard_plaintext_stdout(hint: &str) {
 
 fn cmd_get(key: &str, vault_path: &str) {
     strict_guard_plaintext_stdout("capture in a variable instead, e.g. TOKEN=$(murk get KEY)");
-    let (_vault, murk, identity) = load_vault(vault_path);
+    let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    if murk_cli::hardening::self_scope() {
+        try_or_die(murk_cli::check_agent_keys(&vault, &[key.to_string()]));
+    }
 
     if let Some(value) = murk_cli::get_secret(&murk, key, &pubkey) {
         println!("{value}");
@@ -1508,7 +1558,8 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     if json {
-        let raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        let mut raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        apply_self_scope(&mut raw, &vault);
         // serde_json copies into its own owned String, so zeroization ends here.
         let map: serde_json::Map<String, serde_json::Value> = raw
             .iter()
@@ -1516,7 +1567,8 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
             .collect();
         println!("{}", serde_json::to_string_pretty(&map).unwrap());
     } else {
-        let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
+        let mut exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
+        apply_self_scope(&mut exports, &vault);
         for (k, escaped) in &exports {
             if !is_valid_key_name(k) {
                 eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
@@ -1527,6 +1579,33 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     }
 }
 
+/// Under self-scope, drop keys the vault's agent policy forbids from an export
+/// map, warning (not silently) about what was withheld. A no-op without a policy
+/// or outside self-scope.
+fn apply_self_scope(
+    map: &mut std::collections::BTreeMap<String, zeroize::Zeroizing<String>>,
+    vault: &types::Vault,
+) {
+    if !(murk_cli::hardening::self_scope() && vault.policy.is_some()) {
+        return;
+    }
+    let withheld: Vec<String> = map
+        .keys()
+        .filter(|k| !murk_cli::is_agent_key_allowed(vault, k))
+        .cloned()
+        .collect();
+    if withheld.is_empty() {
+        return;
+    }
+    map.retain(|k, _| murk_cli::is_agent_key_allowed(vault, k));
+    eprintln!(
+        "{} self-scope: withholding {} key(s) not allowed by policy: {}",
+        "⚠".yellow(),
+        withheld.len(),
+        withheld.join(", ")
+    );
+}
+
 fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &str) {
     let tier = resolve_secret_tier(group, scoped);
 
@@ -1534,6 +1613,17 @@ fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &s
     let original = murk.clone();
     let mut current = murk;
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    if murk_cli::hardening::self_scope() && vault.policy.is_some() {
+        match key {
+            Some(k) => try_or_die(murk_cli::check_agent_keys(&vault, &[k.to_string()])),
+            None => die(
+                &format_args!(
+                    "bulk edit is unavailable under self-scope — edit a specific allowed key"
+                ),
+                1,
+            ),
+        }
+    }
 
     if let SecretTier::Group(name) = &tier {
         match current.groups.get(name) {
@@ -1827,9 +1917,9 @@ fn cmd_exec(
         }
     }
 
-    // In agent mode, the vault's policy decides which keys may be injected.
+    // In agent mode or under self-scope, the vault's policy decides which keys may be injected.
     // Fails closed before any secret reaches the child environment.
-    if agent_mode {
+    if agent_mode || murk_cli::hardening::self_scope() {
         let keys: Vec<String> = secrets.keys().cloned().collect();
         try_or_die(murk_cli::check_agent_keys(&vault, &keys));
     }
@@ -1865,6 +1955,15 @@ fn cmd_exec(
                 if let Ok(val) = std::env::var(var) {
                     cmd.env(var, val);
                 }
+            }
+            // Mark the child as an agent context, and set MURK_STRICT too so an
+            // older `murk` on PATH (which only knows MURK_STRICT) still refuses to
+            // fall back to the operator's stored key via the preserved HOME. A
+            // safe default, not a sandbox: a child can unset these or read the key
+            // file directly — real isolation is the OS's job.
+            if agent_mode {
+                cmd.env("MURK_AGENT", "1");
+                cmd.env("MURK_STRICT", "1");
             }
         } else {
             cmd.env_remove("MURK_KEY");
@@ -3076,7 +3175,20 @@ fn cmd_agent_exec(command: &[String], only: &[String], vault_path: &str) {
     );
 }
 
-fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, vault_path: &str) {
+/// Mint a scoped agent grant in one locked transaction and hand off the
+/// ephemeral key. When `allow_tags` is `Some`, the vault's agent allow-list is
+/// set first (so scope validation reflects it) — used by `agent init`; `None`
+/// leaves the policy unchanged. A single `save_vault` covers both the optional
+/// policy change and the grant. Returns the written key path, or `None` when the
+/// key was streamed to stdout.
+fn mint_grant(
+    name: &str,
+    only: &[String],
+    ttl: &str,
+    out: Option<&str>,
+    allow_tags: Option<&[String]>,
+    vault_path: &str,
+) -> Option<String> {
     use age::secrecy::ExposeSecret;
 
     try_or_die(murk_cli::validate_grant_name(name));
@@ -3086,6 +3198,20 @@ fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, va
     let issuer = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
     let original = murk.clone();
     let mut current = murk;
+
+    // Set the allow-list before validating scope so a single save covers both the
+    // policy and the grant — no policy-without-grant partial state. (The key-file
+    // handoff below is a separate step, as in `agent grant`.)
+    if let Some(tags) = allow_tags {
+        vault.policy = Some(murk_cli::types::Policy {
+            agent_allow_tags: tags.to_vec(),
+        });
+        eprintln!(
+            "{} agent allow-list set to {}",
+            "◆".magenta(),
+            tags.join(", ").bold()
+        );
+    }
 
     // The vault's policy decides which keys may be granted to an agent.
     try_or_die(murk_cli::check_agent_keys(&vault, only));
@@ -3134,23 +3260,34 @@ fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, va
                 "{} key streamed to stdout — capture it now; it is not stored",
                 "⚠".yellow()
             );
+            None
         }
         Some(path) => {
             try_or_die(murk_cli::write_key_to_file(Path::new(path), secret));
-            print_grant_handoff(only, path);
+            Some(path.to_string())
         }
         None => {
             let path = try_or_die(murk_cli::agent_key_file_path(vault_path, name));
             try_or_die(murk_cli::write_key_to_file(&path, secret));
-            print_grant_handoff(only, &path.display().to_string());
+            Some(path.display().to_string())
         }
     }
+}
 
+/// The advisory printed after any grant handoff.
+fn print_ttl_advisory() {
     eprintln!();
     eprintln!(
         "  {}",
         "the TTL is advisory — run `murk agent revoke` and rotate to truly close access".dimmed()
     );
+}
+
+fn cmd_agent_grant(name: &str, only: &[String], ttl: &str, out: Option<&str>, vault_path: &str) {
+    if let Some(path) = mint_grant(name, only, ttl, out, None, vault_path) {
+        print_grant_handoff(only, &path);
+    }
+    print_ttl_advisory();
 }
 
 /// Print how to run an agent with a grant key file, and the containment caveat.
@@ -3164,7 +3301,7 @@ fn print_grant_handoff(only: &[String], key_path: &str) {
     eprintln!(
         "  {}",
         format!(
-            "run the agent with: MURK_KEY_FILE={key_path} MURK_STRICT=1 murk agent exec --only {} -- <cmd>",
+            "run the agent with: MURK_KEY_FILE={key_path} MURK_AGENT=1 murk agent exec --only {} -- <cmd>",
             only.join(" ")
         )
         .dimmed()
@@ -3173,6 +3310,45 @@ fn print_grant_handoff(only: &[String], key_path: &str) {
         "  {}",
         "for real isolation, run the agent in a sandbox that can't read ~/.config/murk/keys"
             .dimmed()
+    );
+}
+
+fn cmd_agent_init(
+    name: &str,
+    only: &[String],
+    allow_tags: &[String],
+    ttl: &str,
+    out: Option<&str>,
+    vault_path: &str,
+) {
+    let allow = if allow_tags.is_empty() {
+        None
+    } else {
+        Some(allow_tags)
+    };
+    if let Some(path) = mint_grant(name, only, ttl, out, allow, vault_path) {
+        print_grant_handoff(only, &path);
+        print_isolation_snippet();
+    }
+    print_ttl_advisory();
+}
+
+/// A concrete isolation recipe. murk's env guardrails are a safe default, but the
+/// real boundary is the OS — show how to run the agent where it can't read the
+/// operator's key directory.
+fn print_isolation_snippet() {
+    eprintln!();
+    eprintln!(
+        "  {}",
+        "isolation (murk is a guardrail, not a sandbox): run the command above under an".dimmed()
+    );
+    eprintln!(
+        "  {}",
+        "  identity that CANNOT read ~/.config/murk — a separate user or a container —".dimmed()
+    );
+    eprintln!(
+        "  {}",
+        "  with only the grant key file above made readable to it.".dimmed()
     );
 }
 
@@ -4021,6 +4197,21 @@ fn run() {
             } => cmd_agent_grant(
                 &name,
                 &only,
+                &ttl,
+                out.as_deref(),
+                &murk_cli::resolve_vault_path(&vault),
+            ),
+            AgentCommand::Init {
+                name,
+                only,
+                allow_tag,
+                ttl,
+                out,
+                vault,
+            } => cmd_agent_init(
+                &name,
+                &only,
+                &allow_tag,
                 &ttl,
                 out.as_deref(),
                 &murk_cli::resolve_vault_path(&vault),
