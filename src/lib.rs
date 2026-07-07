@@ -71,7 +71,7 @@ pub use groups::{
 pub use info::{InfoEntry, VaultInfo, format_info_lines, lifecycle_segment, vault_info};
 pub use init::{DiscoveredKey, InitStatus, check_init_status, create_vault, discover_existing_key};
 pub use merge::{MergeDriverOutput, run_merge_driver};
-pub use policy::{check_agent_keys, enforce_agent_policy, is_agent_identity};
+pub use policy::{check_agent_keys, enforce_agent_policy, is_agent_identity, is_agent_key_allowed};
 pub use recipients::{
     RecipientEntry, RevokeResult, authorize_recipient, format_recipient_lines, key_type_label,
     list_recipients, revoke_recipient, truncate_pubkey,

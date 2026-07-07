@@ -59,6 +59,15 @@ pub fn ci_context() -> bool {
     strict_from(&std::env::var("CI").unwrap_or_default())
 }
 
+/// Whether the operator opted into self-scoping: honoring the vault's agent
+/// allow-tag policy for their OWN key, as if they were an agent. On via an
+/// explicit `MURK_SELF_SCOPE`, or implicitly in an [`agent_context`] (declaring
+/// `MURK_AGENT` binds you to the policy even with your own key). A no-op on a
+/// vault with no policy set.
+pub fn self_scope() -> bool {
+    strict_from(&std::env::var("MURK_SELF_SCOPE").unwrap_or_default()) || agent_context()
+}
+
 /// Truthy values: `1`, `true`, `yes` (case-insensitive, trimmed). Split out so
 /// the rules are testable without mutating process-global env state.
 fn strict_from(val: &str) -> bool {

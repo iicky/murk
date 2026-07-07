@@ -1424,8 +1424,11 @@ fn strict_guard_plaintext_stdout(hint: &str) {
 
 fn cmd_get(key: &str, vault_path: &str) {
     strict_guard_plaintext_stdout("capture in a variable instead, e.g. TOKEN=$(murk get KEY)");
-    let (_vault, murk, identity) = load_vault(vault_path);
+    let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    if murk_cli::hardening::self_scope() {
+        try_or_die(murk_cli::check_agent_keys(&vault, &[key.to_string()]));
+    }
 
     if let Some(value) = murk_cli::get_secret(&murk, key, &pubkey) {
         println!("{value}");
@@ -1532,7 +1535,8 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     if json {
-        let raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        let mut raw = murk_cli::resolve_secrets(&vault, &murk, &pubkey, tags);
+        apply_self_scope(&mut raw, &vault);
         // serde_json copies into its own owned String, so zeroization ends here.
         let map: serde_json::Map<String, serde_json::Value> = raw
             .iter()
@@ -1540,7 +1544,8 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
             .collect();
         println!("{}", serde_json::to_string_pretty(&map).unwrap());
     } else {
-        let exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
+        let mut exports = murk_cli::export_secrets(&vault, &murk, &pubkey, tags);
+        apply_self_scope(&mut exports, &vault);
         for (k, escaped) in &exports {
             if !is_valid_key_name(k) {
                 eprintln!("{} skipping unsafe key name: {}", "⚠".yellow(), k.bold());
@@ -1551,6 +1556,33 @@ fn cmd_export(tags: &[String], json: bool, vault_path: &str) {
     }
 }
 
+/// Under self-scope, drop keys the vault's agent policy forbids from an export
+/// map, warning (not silently) about what was withheld. A no-op without a policy
+/// or outside self-scope.
+fn apply_self_scope(
+    map: &mut std::collections::BTreeMap<String, zeroize::Zeroizing<String>>,
+    vault: &types::Vault,
+) {
+    if !(murk_cli::hardening::self_scope() && vault.policy.is_some()) {
+        return;
+    }
+    let withheld: Vec<String> = map
+        .keys()
+        .filter(|k| !murk_cli::is_agent_key_allowed(vault, k))
+        .cloned()
+        .collect();
+    if withheld.is_empty() {
+        return;
+    }
+    map.retain(|k, _| murk_cli::is_agent_key_allowed(vault, k));
+    eprintln!(
+        "{} self-scope: withholding {} key(s) not allowed by policy: {}",
+        "⚠".yellow(),
+        withheld.len(),
+        withheld.join(", ")
+    );
+}
+
 fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &str) {
     let tier = resolve_secret_tier(group, scoped);
 
@@ -1558,6 +1590,17 @@ fn cmd_edit(key: Option<&str>, scoped: bool, group: Option<&str>, vault_path: &s
     let original = murk.clone();
     let mut current = murk;
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+    if murk_cli::hardening::self_scope() && vault.policy.is_some() {
+        match key {
+            Some(k) => try_or_die(murk_cli::check_agent_keys(&vault, &[k.to_string()])),
+            None => die(
+                &format_args!(
+                    "bulk edit is unavailable under self-scope — edit a specific allowed key"
+                ),
+                1,
+            ),
+        }
+    }
 
     if let SecretTier::Group(name) = &tier {
         match current.groups.get(name) {
@@ -1851,9 +1894,9 @@ fn cmd_exec(
         }
     }
 
-    // In agent mode, the vault's policy decides which keys may be injected.
+    // In agent mode or under self-scope, the vault's policy decides which keys may be injected.
     // Fails closed before any secret reaches the child environment.
-    if agent_mode {
+    if agent_mode || murk_cli::hardening::self_scope() {
         let keys: Vec<String> = secrets.keys().cloned().collect();
         try_or_die(murk_cli::check_agent_keys(&vault, &keys));
     }

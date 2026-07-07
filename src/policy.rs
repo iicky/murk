@@ -2,7 +2,8 @@
 //! header. Policy is NOT access control — every recipient can read every shared
 //! secret by design. Its value is constraining what the murk binary will expose
 //! to *agents* (CI, AI coding agents), enforced at the agent entry points
-//! (`agent exec`, `agent grant`). It lives in the plaintext header and is
+//! (`agent exec`, `agent grant`) and on operator reads under self-scope
+//! (`MURK_SELF_SCOPE`/`MURK_AGENT`). It lives in the plaintext header and is
 //! MAC-covered (see [`crate::compute_mac`]) so it can't be silently weakened.
 //!
 //! The only policy today is a tag allow-list: in agent mode a secret may be
@@ -55,14 +56,15 @@ pub fn is_agent_identity(murk: &Murk, pubkey: &str) -> bool {
     murk.grants.values().any(|g| g.pubkey == pubkey)
 }
 
-/// Apply [`check_agent_keys`], but only when the caller is a granted agent.
+/// Apply [`check_agent_keys`] when the caller is a granted agent, or when the
+/// operator has opted into self-scope ([`crate::hardening::self_scope`]).
 ///
 /// The library bindings (Python/Node) load a vault and read secrets directly,
 /// without the CLI's `agent exec` policy gate. This is that gate for them: when
-/// the loaded identity is an agent grant, the same policy the CLI enforces at
-/// `agent exec` applies here too — so a policy vault is strict from every entry
-/// point. For an operator identity it is a no-op, matching the CLI, where plain
-/// `get`/`export` are never policy-gated.
+/// the loaded identity is an agent grant — or the caller is self-scoping — the
+/// same policy the CLI enforces at `agent exec` applies here too, so a policy
+/// vault is enforced from every entry point. For a plain operator identity with
+/// no self-scope it is a no-op, matching the CLI's ungated `get`/`export`.
 ///
 /// The real boundary is cryptographic: an agent's ephemeral key is not a
 /// recipient of out-of-scope secrets, so it cannot decrypt them regardless. This
@@ -75,7 +77,7 @@ pub fn enforce_agent_policy(
     pubkey: &str,
     keys: &[String],
 ) -> Result<(), MurkError> {
-    if is_agent_identity(murk, pubkey) {
+    if is_agent_identity(murk, pubkey) || crate::hardening::self_scope() {
         check_agent_keys(vault, keys)?;
     }
     Ok(())
@@ -89,6 +91,17 @@ fn key_allowed(vault: &Vault, policy: &Policy, key: &str) -> bool {
             .iter()
             .any(|t| policy.agent_allow_tags.contains(t))
     })
+}
+
+/// Whether `key` may be read under the agent allow-tag policy: always true when
+/// the vault has no policy, otherwise true only if the key carries an allowed
+/// tag. The public, per-key form of [`check_agent_keys`], used by self-scope
+/// filtering (e.g. `murk export`).
+pub fn is_agent_key_allowed(vault: &Vault, key: &str) -> bool {
+    match &vault.policy {
+        None => true,
+        Some(policy) => key_allowed(vault, policy, key),
+    }
 }
 
 #[cfg(test)]
@@ -218,5 +231,28 @@ mod tests {
         let v = vault_with(&[("PROD_DB", &["production"])], None);
         let agent = agent_murk("age1agent");
         assert!(enforce_agent_policy(&v, &agent, "age1agent", &["PROD_DB".into()]).is_ok());
+    }
+
+    #[test]
+    fn is_agent_key_allowed_no_policy_allows_any_key() {
+        let v = vault_with(&[("PROD_DB", &["production"])], None);
+        assert!(is_agent_key_allowed(&v, "PROD_DB"));
+        // Even a key with no schema entry at all is allowed absent a policy.
+        assert!(is_agent_key_allowed(&v, "UNKNOWN"));
+    }
+
+    #[test]
+    fn is_agent_key_allowed_checks_tags_under_policy() {
+        let v = vault_with(
+            &[
+                ("TEST_KEY", &["agents"]),
+                ("UNTAGGED", &[]),
+                ("OTHER_KEY", &["other"]),
+            ],
+            Some(policy(&["agents"])),
+        );
+        assert!(is_agent_key_allowed(&v, "TEST_KEY"));
+        assert!(!is_agent_key_allowed(&v, "UNTAGGED"));
+        assert!(!is_agent_key_allowed(&v, "OTHER_KEY"));
     }
 }

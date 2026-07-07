@@ -4278,3 +4278,163 @@ fn policy_clear_restores_unrestricted_agent_mode() {
         .assert()
         .success();
 }
+
+// ── operator self-scope ──
+
+/// Set up a vault with an `ALLOWED` secret (tagged `agents`) and a
+/// `FORBIDDEN` secret (untagged), then set a policy allowing only the
+/// `agents` tag. Returns the operator's `MURK_KEY`.
+fn setup_self_scope_vault(dir: &TempDir) -> String {
+    let (key, _) = init_vault(dir);
+
+    murk(dir, &key)
+        .args(["add", "ALLOWED", "--vault", "test.murk"])
+        .write_stdin("allowed_val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args(["add", "FORBIDDEN", "--vault", "test.murk"])
+        .write_stdin("forbidden_val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "describe",
+            "ALLOWED",
+            "an agent-safe secret",
+            "--tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "policy",
+            "set",
+            "--allow-tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    key
+}
+
+#[test]
+fn self_scope_off_operator_reads_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    // No MURK_SELF_SCOPE: the operator remains unrestricted by the policy.
+    murk(&dir, &key)
+        .args(["get", "FORBIDDEN", "--vault", "test.murk"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("forbidden_val"));
+}
+
+#[test]
+fn self_scope_get_blocks_forbidden_allows_allowed() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["get", "FORBIDDEN", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
+
+    murk(&dir, &key)
+        .args(["get", "ALLOWED", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowed_val"));
+}
+
+#[test]
+fn self_scope_export_withholds_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["export", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("export ALLOWED=")
+                .and(predicate::str::contains("FORBIDDEN").not()),
+        )
+        .stderr(predicate::str::contains("withholding"));
+}
+
+#[test]
+fn self_scope_exec_only_enforces_policy() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "FORBIDDEN",
+            "--vault",
+            "test.murk",
+            "--",
+            "true",
+        ])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "ALLOWED",
+            "--vault",
+            "test.murk",
+            "--",
+            "true",
+        ])
+        .env("MURK_SELF_SCOPE", "1")
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn self_scope_bulk_edit_refused() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["edit", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .env("EDITOR", "true")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bulk edit"));
+}
+
+#[cfg(unix)]
+#[test]
+fn self_scope_single_key_edit_blocks_forbidden_key() {
+    let dir = TempDir::new().unwrap();
+    let key = setup_self_scope_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["edit", "FORBIDDEN", "--vault", "test.murk"])
+        .env("MURK_SELF_SCOPE", "1")
+        .env("EDITOR", "true")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("policy"));
+}
