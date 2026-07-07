@@ -45,6 +45,17 @@ Set `MURK_AGENT=1` to tell murk it's running for an agent. In an agent context, 
 
 `murk agent exec` is the safest pattern: the agent's command gets secret *values* in its environment and never sees a key. Reach for a **grant** when the agent has to run `murk` itself over a session — for example a long-running agent that calls `murk get` as it works.
 
+### One-shot setup: `murk agent init`
+
+`murk agent init` does the whole safe-path setup in one command: it (optionally) sets the allow-list, mints a scoped grant, and — when it writes a key file — prints the exact run command plus an isolation recipe.
+
+```bash
+murk agent init --name codex --only STRIPE_SECRET_KEY --ttl 2h
+murk agent init --name codex --only DATABASE_URL --allow-tag agents --ttl 30m
+```
+
+`--allow-tag` sets the vault's agent allow-list before granting — a single vault write covers both, and a forbidden scope fails closed before anything is saved. The manual building blocks are below.
+
 `murk agent grant` mints a fresh ephemeral age identity and gives it read access to exactly the keys you name — never your `MURK_KEY`:
 
 ```bash
