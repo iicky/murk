@@ -3153,8 +3153,9 @@ fn cmd_mcp(vault_path: &str) {
     }
 
     // Resolve the key and load the vault. Agent context forces strict mode, so
-    // this will not silently fall back to the operator's stored key.
-    let (_vault, murk, identity) = load_vault(vault_path);
+    // this will not silently fall back to the operator's stored key. The
+    // decrypted state is handed to the server so the tools read in-process.
+    let (vault, murk, identity) = load_vault(vault_path);
     let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
 
     // The resolved identity must be one of the vault's grants. Anything else —
@@ -3167,7 +3168,11 @@ fn cmd_mcp(vault_path: &str) {
         );
     }
 
-    try_or_die(mcp::serve());
+    try_or_die(mcp::serve(mcp::McpState {
+        vault,
+        murk,
+        pubkey,
+    }));
 }
 
 fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
