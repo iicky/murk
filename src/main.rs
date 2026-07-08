@@ -1938,6 +1938,21 @@ fn cmd_exec(
         try_or_die(murk_cli::check_agent_keys(&vault, &keys));
     }
 
+    // `Command::env` panics on a NUL in a value (or an `=`/NUL/empty key), so
+    // validate before injecting — a NUL-bearing secret should fail with a clear
+    // error, not crash. Vault key names are already `[A-Za-z0-9_]`; the key check
+    // is defense in depth. (Mirrors the `murk mcp` `murk_exec` guard.)
+    for (key, value) in &secrets {
+        if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+            die(
+                &format_args!(
+                    "{key}: cannot be injected as an environment variable (invalid key or NUL byte in value)"
+                ),
+                1,
+            );
+        }
+    }
+
     let program = &command[0];
     let args = &command[1..];
 

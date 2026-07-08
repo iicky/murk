@@ -912,6 +912,36 @@ fn exec_without_vault_fails() {
         .failure();
 }
 
+#[test]
+fn exec_rejects_nul_byte_in_secret_value() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "NUL_KEY", "--vault", "test.murk"])
+        .write_stdin("before\0after\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "NUL_KEY",
+            "--vault",
+            "test.murk",
+            "--",
+            "echo",
+            "hi",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("cannot be injected as an environment variable")
+                .and(predicate::str::contains("panicked").not()),
+        );
+}
+
 // ── recover ──
 
 #[test]
