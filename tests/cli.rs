@@ -4940,3 +4940,42 @@ fn mcp_plan_tag_filter_narrows_within_scope() {
             predicate::str::contains("DB_URL").and(predicate::str::contains("CACHE_URL").not()),
         );
 }
+
+#[test]
+fn mcp_unknown_tool_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("bogus", "{}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool not found"));
+}
+
+#[test]
+fn mcp_get_missing_key_arg_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("murk_get", "{}"))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("missing field"))
+                .and(predicate::str::contains("db-val").not())
+                .and(predicate::str::contains("cache-val").not())
+                .and(predicate::str::contains("shared-val").not())
+                .and(predicate::str::contains("forbidden-val").not()),
+        );
+}
