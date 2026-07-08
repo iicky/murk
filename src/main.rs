@@ -13,6 +13,8 @@ use age::secrecy::ExposeSecret;
 use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 
+mod mcp;
+
 /// Print an error message and exit with the given code.
 fn die(msg: &dyn std::fmt::Display, code: i32) -> ! {
     eprintln!("{} {msg}", "✕".red());
@@ -382,6 +384,18 @@ enum Command {
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
+    },
+
+    /// Run an MCP (Model Context Protocol) stdio server for AI agents
+    Mcp {
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+        /// Enable the murk_exec tool (run commands with scoped secrets injected).
+        /// Off by default: it runs arbitrary commands as this user — the injected
+        /// secrets are grant-scoped, but the command itself is not sandboxed.
+        #[arg(long = "allow-exec")]
+        allow_exec: bool,
     },
 
     /// Generate or install shell completions
@@ -1924,6 +1938,21 @@ fn cmd_exec(
         try_or_die(murk_cli::check_agent_keys(&vault, &keys));
     }
 
+    // `Command::env` panics on a NUL in a value (or an `=`/NUL/empty key), so
+    // validate before injecting — a NUL-bearing secret should fail with a clear
+    // error, not crash. Vault key names are already `[A-Za-z0-9_]`; the key check
+    // is defense in depth. (Mirrors the `murk mcp` `murk_exec` guard.)
+    for (key, value) in &secrets {
+        if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+            die(
+                &format_args!(
+                    "{key}: cannot be injected as an environment variable (invalid key or NUL byte in value)"
+                ),
+                1,
+            );
+        }
+    }
+
     let program = &command[0];
     let args = &command[1..];
 
@@ -3125,6 +3154,50 @@ fn cmd_scan(paths: &[String], vault_path: &str) {
     }
 }
 
+/// Run the MCP (Model Context Protocol) stdio server (murk-qu2.5).
+///
+/// Fails closed unless this is a scoped *agent* identity — a grant key plus
+/// `MURK_AGENT=1`. Running the server with the operator's stored key (or any
+/// non-grant recipient) would hand a connected agent the operator's full read
+/// scope over MCP, defeating the point, so both the agent-context opt-in and a
+/// grant identity are required. stdout is the JSON-RPC channel; every diagnostic
+/// here goes to stderr.
+fn cmd_mcp(vault_path: &str, allow_exec: bool) {
+    // Cheap gate first: the caller must have opted into agent context. No key or
+    // vault load is needed to reject the obvious misuse.
+    if !murk_cli::hardening::agent_context() {
+        die(
+            &"murk mcp must run in agent context: set MURK_AGENT=1 and use a scoped grant key (run `murk agent init` to mint one)",
+            1,
+        );
+    }
+
+    // Resolve the key and load the vault. Agent context forces strict mode, so
+    // this will not silently fall back to the operator's stored key. The
+    // decrypted state is handed to the server so the tools read in-process.
+    let (vault, murk, identity) = load_vault(vault_path);
+    let pubkey = identity.pubkey_string().unwrap_or_else(|e| die(&e, 1));
+
+    // The resolved identity must be one of the vault's grants. Anything else —
+    // the operator's own key, a plain recipient — is refused: the whole point is
+    // to bound the agent to a grant's scope.
+    if !murk_cli::is_agent_identity(&murk, &pubkey) {
+        die(
+            &"murk mcp refuses to run without a scoped grant: this identity is not a `murk agent grant` key (fail-closed). Mint one with `murk agent init`.",
+            1,
+        );
+    }
+
+    try_or_die(mcp::serve(
+        mcp::McpState {
+            vault,
+            murk,
+            pubkey,
+        },
+        allow_exec,
+    ));
+}
+
 fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
     let vault = murk_cli::vault::read(Path::new(vault_path)).unwrap_or_else(|e| die(&e, 1));
 
@@ -4227,6 +4300,9 @@ fn run() {
         },
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));
+        }
+        Command::Mcp { vault, allow_exec } => {
+            cmd_mcp(&murk_cli::resolve_vault_path(&vault), allow_exec)
         }
         Command::Completion { action } => match action {
             CompletionAction::Generate { shell } => cmd_completion_generate(shell),

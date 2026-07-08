@@ -238,6 +238,7 @@ murk restore
 | `murk agent grant --name NAME --only KEY --ttl DUR` | Mint a short-lived key that reads only the named secrets |
 | `murk agent ls` | List active agent grants and their TTLs |
 | `murk agent revoke NAME [--rotate]` | Revoke a grant and rotate the keys it could read |
+| `murk mcp [--allow-exec]` | Run a stdio MCP server exposing scoped secrets to AI agents (needs a grant + `MURK_AGENT`) |
 | `murk policy show\|set\|clear` | Manage the agent allow-list (tags agents may receive) |
 
 **Recipients & groups**

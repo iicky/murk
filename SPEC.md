@@ -383,6 +383,20 @@ Removes the grant and its ephemeral recipient (clearing the agent's private ciph
 
 ---
 
+### `murk mcp [--allow-exec] [--vault NAME]`
+
+Runs an in-process MCP (Model Context Protocol) stdio server so AI-agent harnesses can read murk secrets on the capability-not-credential model. Calls the murk-cli library directly — no subprocess, no Node. Fails closed unless the loaded identity is a scoped agent grant with `MURK_AGENT=1`: run with the operator's stored key, a plain recipient, or no grant and it refuses to start. stdout is the JSON-RPC channel (never written to otherwise); all logs go to stderr.
+
+Tools, all bounded to the grant:
+
+- `murk_plan` — the schema (key names, descriptions, examples, tags) of the secrets this grant may read, as JSON, with an optional `tags` filter. No values, and no keys outside the grant's scope or the agent policy.
+- `murk_get { key }` — one secret value, if the grant may read it; a forbidden or out-of-scope key returns an error result, never the value.
+- `murk_exec { only, command }` — opt-in via `--allow-exec` (off by default). Runs a command with the named secrets injected into its environment (no shell), returning captured stdout/stderr and the exit code; every key must be in scope and policy-allowed, and output and runtime are bounded. `only` scopes the injected secrets, not the command — it is not a sandbox.
+
+See `docs/ai-agents.md` for setup (`murk agent init`) and a verify snippet.
+
+---
+
 ### `murk import [FILE] [--group NAME] [--vault NAME]`
 
 Imports secrets from a `.env` file. Parses `KEY=VALUE` lines (supports `export` prefix, single/double quotes). Skips `MURK_*` keys with a warning. Invalid key names are skipped with a warning. `--group` assigns all imported secrets to a tier (`everyone` default, `me`, or a named group), as for `murk add`.

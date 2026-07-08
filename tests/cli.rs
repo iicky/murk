@@ -912,6 +912,36 @@ fn exec_without_vault_fails() {
         .failure();
 }
 
+#[test]
+fn exec_rejects_nul_byte_in_secret_value() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "NUL_KEY", "--vault", "test.murk"])
+        .write_stdin("before\0after\n")
+        .assert()
+        .success();
+
+    murk(&dir, &key)
+        .args([
+            "exec",
+            "--only",
+            "NUL_KEY",
+            "--vault",
+            "test.murk",
+            "--",
+            "echo",
+            "hi",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("cannot be injected as an environment variable")
+                .and(predicate::str::contains("panicked").not()),
+        );
+}
+
 // ── recover ──
 
 #[test]
@@ -4656,4 +4686,392 @@ fn self_scope_single_key_edit_blocks_forbidden_key() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("policy"));
+}
+
+// ── mcp ──
+
+#[test]
+fn mcp_without_agent_context_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["mcp", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("agent context"));
+}
+
+#[test]
+fn mcp_with_operator_key_in_agent_context_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["mcp", "--vault", "test.murk"])
+        .env("MURK_AGENT", "1")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("grant"));
+}
+
+#[test]
+fn mcp_serves_initialize_and_tools_list_over_stdio() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("secret-value\n")
+        .assert()
+        .success();
+
+    let grant = dir.path().join("grant.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "grant",
+            "--name",
+            "probe",
+            "--only",
+            "API_KEY",
+            "--out",
+            grant.to_str().unwrap(),
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+        "\n",
+    );
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(handshake)
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("murk-mcp")
+                .and(predicate::str::contains("\"id\":2"))
+                .and(predicate::str::contains("murk_plan"))
+                .and(predicate::str::contains("murk_get"))
+                .and(predicate::str::contains("murk_exec").not()),
+        );
+}
+
+/// Set up a vault with `DB_URL`/`CACHE_URL` tagged `agents` plus a distinct
+/// second tag each (so the tag filter is still exercisable within the
+/// granted set), an `agents`-tagged `SHARED_KEY` that is policy-allowed but
+/// NOT granted, and an untagged `SECRET_KEY` that is policy-forbidden. Mints
+/// a one-shot grant (`agent init`) scoped to DB_URL + CACHE_URL under an
+/// agents-tag policy. Returns the grant key file path.
+fn setup_mcp_grant(dir: &TempDir) -> std::path::PathBuf {
+    let (key, _) = init_vault(dir);
+
+    murk(dir, &key)
+        .args([
+            "add",
+            "DB_URL",
+            "--tag",
+            "agents",
+            "--tag",
+            "db",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("db-val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "add",
+            "CACHE_URL",
+            "--tag",
+            "agents",
+            "--tag",
+            "cache",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("cache-val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args([
+            "add",
+            "SHARED_KEY",
+            "--tag",
+            "agents",
+            "--vault",
+            "test.murk",
+        ])
+        .write_stdin("shared-val\n")
+        .assert()
+        .success();
+    murk(dir, &key)
+        .args(["add", "SECRET_KEY", "--vault", "test.murk"])
+        .write_stdin("forbidden-val\n")
+        .assert()
+        .success();
+
+    let grant = dir.path().join("grant.key");
+    murk(dir, &key)
+        .args([
+            "agent",
+            "init",
+            "--name",
+            "probe",
+            "--only",
+            "DB_URL",
+            "--only",
+            "CACHE_URL",
+            "--allow-tag",
+            "agents",
+            "--out",
+            grant.to_str().unwrap(),
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    grant
+}
+
+/// Build the MCP handshake preamble followed by a single `tools/call`
+/// request for `tool` with a raw JSON `arguments` object, newline-terminated.
+/// `write_stdin` closes stdin after this, so the server answers and shuts
+/// down cleanly (exit 0) without hanging.
+fn mcp_handshake_and_call(tool: &str, arguments: &str) -> String {
+    const HANDSHAKE: &str = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+    );
+    format!(
+        "{HANDSHAKE}{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"{tool}\",\"arguments\":{arguments}}}}}\n"
+    )
+}
+
+#[test]
+fn mcp_plan_returns_value_free_schema() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("murk_plan", "{}"))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("DB_URL")
+                .and(predicate::str::contains("CACHE_URL"))
+                .and(predicate::str::contains("SHARED_KEY").not())
+                .and(predicate::str::contains("SECRET_KEY").not())
+                .and(predicate::str::contains("db-val").not())
+                .and(predicate::str::contains("cache-val").not())
+                .and(predicate::str::contains("shared-val").not())
+                .and(predicate::str::contains("forbidden-val").not()),
+        );
+}
+
+#[test]
+fn mcp_get_returns_in_scope_value() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("murk_get", r#"{"key":"DB_URL"}"#))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("db-val").and(predicate::str::contains("\"isError\":false")),
+        );
+}
+
+#[test]
+fn mcp_get_out_of_scope_key_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_get",
+            r#"{"key":"SHARED_KEY"}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("shared-val").not()),
+        );
+}
+
+#[test]
+fn mcp_get_policy_forbidden_key_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_get",
+            r#"{"key":"SECRET_KEY"}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("policy forbids"))
+                .and(predicate::str::contains("forbidden-val").not()),
+        );
+}
+
+#[test]
+fn mcp_plan_tag_filter_narrows_within_scope() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("murk_plan", r#"{"tags":["db"]}"#))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("DB_URL").and(predicate::str::contains("CACHE_URL").not()),
+        );
+}
+
+#[test]
+fn mcp_unknown_tool_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("bogus", "{}"))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool not found"));
+}
+
+#[test]
+fn mcp_get_missing_key_arg_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call("murk_get", "{}"))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("missing field"))
+                .and(predicate::str::contains("db-val").not())
+                .and(predicate::str::contains("cache-val").not())
+                .and(predicate::str::contains("shared-val").not())
+                .and(predicate::str::contains("forbidden-val").not()),
+        );
+}
+
+#[test]
+fn mcp_exec_rejected_without_allow_exec() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_exec",
+            r#"{"only":["DB_URL"],"command":["echo","x"]}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool not found"));
+}
+
+#[test]
+fn mcp_exec_out_of_scope_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk", "--allow-exec"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_exec",
+            r#"{"only":["SHARED_KEY"],"command":["echo","x"]}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("outside this grant's scope"))
+                .and(predicate::str::contains("shared-val").not()),
+        );
+}
+
+#[test]
+fn mcp_exec_runs_command_with_injected_secret() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    #[cfg(unix)]
+    let exec_args = r#"{"only":["DB_URL"],"command":["printenv","DB_URL"]}"#;
+    #[cfg(windows)]
+    let exec_args = r#"{"only":["DB_URL"],"command":["cmd","/C","echo %DB_URL%"]}"#;
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk", "--allow-exec"])
+        .write_stdin(mcp_handshake_and_call("murk_exec", exec_args))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("db-val").and(predicate::str::contains("\"isError\":false")),
+        );
 }
