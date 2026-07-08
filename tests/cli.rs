@@ -4657,3 +4657,84 @@ fn self_scope_single_key_edit_blocks_forbidden_key() {
         .failure()
         .stderr(predicate::str::contains("policy"));
 }
+
+// ── mcp ──
+
+#[test]
+fn mcp_without_agent_context_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["mcp", "--vault", "test.murk"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("agent context"));
+}
+
+#[test]
+fn mcp_with_operator_key_in_agent_context_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["mcp", "--vault", "test.murk"])
+        .env("MURK_AGENT", "1")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("grant"));
+}
+
+#[test]
+fn mcp_serves_initialize_and_tools_list_over_stdio() {
+    let dir = TempDir::new().unwrap();
+    let (key, _) = init_vault(&dir);
+
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("secret-value\n")
+        .assert()
+        .success();
+
+    let grant = dir.path().join("grant.key");
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "grant",
+            "--name",
+            "probe",
+            "--only",
+            "API_KEY",
+            "--out",
+            grant.to_str().unwrap(),
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let handshake = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+        "\n",
+    );
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(handshake)
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("murk-mcp")
+                .and(predicate::str::contains("\"id\":2"))
+                .and(predicate::str::contains("\"tools\":[]")),
+        );
+}

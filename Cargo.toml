@@ -56,6 +56,15 @@ fs2 = "0.4.3"
 pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 walkdir = "2.5.0"
 zeroize = "1"
+# `murk mcp` — an in-process MCP (Model Context Protocol) stdio server for AI
+# agents (murk-qu2.5). rmcp is the official Rust MCP SDK; tokio + tracing are
+# scoped to that subcommand only (the rest of murk stays sync). Default features
+# (incl. base64) are off — we only need the server, tool macros, and stdio
+# transport. The async stack is dormant during normal commands.
+rmcp = { version = "2.1.0", default-features = false, features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
