@@ -64,7 +64,7 @@ zeroize = "1"
 # dep so the `JsonSchema` derive on tool request structs resolves (rmcp's own
 # examples do the same). The async stack is dormant during normal commands.
 rmcp = { version = "2.1.0", default-features = false, features = ["server", "macros", "transport-io", "schemars"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 schemars = "1"

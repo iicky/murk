@@ -109,10 +109,11 @@ It runs **only** as a scoped agent: it fails closed unless it is launched with a
 MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_AGENT=1 murk mcp
 ```
 
-The server speaks JSON-RPC over stdout and logs only to stderr, so point your MCP client at that command with `MURK_KEY_FILE` and `MURK_AGENT=1` in its environment. It exposes two tools, both bounded to the grant:
+The server speaks JSON-RPC over stdout and logs only to stderr, so point your MCP client at that command with `MURK_KEY_FILE` and `MURK_AGENT=1` in its environment. It exposes two always-on read tools bounded to the grant, plus an opt-in exec tool:
 
 - **`murk_plan`** — the schema (key names, descriptions, examples, tags) of the secrets *this grant may read*, as JSON. No values, and no keys outside the grant's scope or the vault's agent policy — a narrowly-scoped agent can't even enumerate what else the vault holds. Takes an optional `tags` filter.
 - **`murk_get { key }`** — one secret value, if the grant may read it. A key outside the grant's scope or forbidden by the agent policy returns an error result and never the value: fail-closed, like every other agent path.
+- **`murk_exec { only, command }`** — *opt-in*, enabled with `murk mcp --allow-exec`. Runs a command with the named secrets injected into its environment (no shell), returning captured stdout, stderr, and the exit code. Every key in `only` must be in the grant's scope and policy-allowed, or it fails closed before running anything; output and runtime are bounded. The caveat: `only` scopes the injected *secrets*, not the command — it runs as your user with your filesystem and network access, so it is **not a sandbox**. Enable it only where the server already runs under OS-level isolation.
 
 You can verify it end to end without a client by driving the handshake over a pipe:
 
@@ -124,7 +125,7 @@ printf '%s\n' \
   | MURK_KEY_FILE=<grant> MURK_AGENT=1 murk mcp
 ```
 
-The transport is a local stdio pipe, not a network listener, and the grant bounds the blast radius — the same capability-not-credential model as `murk agent exec`. Harness-specific wiring (e.g. an `.omp/mcp.json` entry) lives in that harness's setup docs.
+The transport is a local stdio pipe, not a network listener. The grant bounds which secret *values* reach the agent — the capability-not-credential model — but `murk_exec` (when enabled) runs real commands as your user, so treat it like `murk agent exec`: a safe default, not a sandbox, with OS-level isolation the real boundary (see *Short-lived agent grants* above). Harness-specific wiring (e.g. an `.omp/mcp.json` entry) lives in that harness's setup docs.
 
 ## Auditing agent activity
 

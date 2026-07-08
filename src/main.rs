@@ -391,6 +391,11 @@ enum Command {
         /// Vault filename
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
+        /// Enable the murk_exec tool (run commands with scoped secrets injected).
+        /// Off by default: it runs arbitrary commands as this user — the injected
+        /// secrets are grant-scoped, but the command itself is not sandboxed.
+        #[arg(long = "allow-exec")]
+        allow_exec: bool,
     },
 
     /// Generate or install shell completions
@@ -3142,7 +3147,7 @@ fn cmd_scan(paths: &[String], vault_path: &str) {
 /// scope over MCP, defeating the point, so both the agent-context opt-in and a
 /// grant identity are required. stdout is the JSON-RPC channel; every diagnostic
 /// here goes to stderr.
-fn cmd_mcp(vault_path: &str) {
+fn cmd_mcp(vault_path: &str, allow_exec: bool) {
     // Cheap gate first: the caller must have opted into agent context. No key or
     // vault load is needed to reject the obvious misuse.
     if !murk_cli::hardening::agent_context() {
@@ -3168,11 +3173,14 @@ fn cmd_mcp(vault_path: &str) {
         );
     }
 
-    try_or_die(mcp::serve(mcp::McpState {
-        vault,
-        murk,
-        pubkey,
-    }));
+    try_or_die(mcp::serve(
+        mcp::McpState {
+            vault,
+            murk,
+            pubkey,
+        },
+        allow_exec,
+    ));
 }
 
 fn cmd_skeleton(output: Option<&str>, vault_path: &str) {
@@ -4278,7 +4286,9 @@ fn run() {
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));
         }
-        Command::Mcp { vault } => cmd_mcp(&murk_cli::resolve_vault_path(&vault)),
+        Command::Mcp { vault, allow_exec } => {
+            cmd_mcp(&murk_cli::resolve_vault_path(&vault), allow_exec)
+        }
         Command::Completion { action } => match action {
             CompletionAction::Generate { shell } => cmd_completion_generate(shell),
             CompletionAction::Install { shell } => cmd_completion_install(shell),

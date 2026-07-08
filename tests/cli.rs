@@ -4736,7 +4736,8 @@ fn mcp_serves_initialize_and_tools_list_over_stdio() {
             predicate::str::contains("murk-mcp")
                 .and(predicate::str::contains("\"id\":2"))
                 .and(predicate::str::contains("murk_plan"))
-                .and(predicate::str::contains("murk_get")),
+                .and(predicate::str::contains("murk_get"))
+                .and(predicate::str::contains("murk_exec").not()),
         );
 }
 
@@ -4977,5 +4978,70 @@ fn mcp_get_missing_key_arg_is_rejected() {
                 .and(predicate::str::contains("cache-val").not())
                 .and(predicate::str::contains("shared-val").not())
                 .and(predicate::str::contains("forbidden-val").not()),
+        );
+}
+
+#[test]
+fn mcp_exec_rejected_without_allow_exec() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_exec",
+            r#"{"only":["DB_URL"],"command":["echo","x"]}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("tool not found"));
+}
+
+#[test]
+fn mcp_exec_out_of_scope_fails_closed() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk", "--allow-exec"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_exec",
+            r#"{"only":["SHARED_KEY"],"command":["echo","x"]}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains("outside this grant's scope"))
+                .and(predicate::str::contains("shared-val").not()),
+        );
+}
+
+#[test]
+fn mcp_exec_runs_command_with_injected_secret() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    #[cfg(unix)]
+    let exec_args = r#"{"only":["DB_URL"],"command":["printenv","DB_URL"]}"#;
+    #[cfg(windows)]
+    let exec_args = r#"{"only":["DB_URL"],"command":["cmd","/C","echo %DB_URL%"]}"#;
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk", "--allow-exec"])
+        .write_stdin(mcp_handshake_and_call("murk_exec", exec_args))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("db-val").and(predicate::str::contains("\"isError\":false")),
         );
 }

@@ -10,10 +10,14 @@
 //! diagnostic goes to stderr via `tracing`. tokio is confined to this module —
 //! the rest of murk stays synchronous.
 //!
-//! Tools (v1): `murk_plan` (value-free schema) and `murk_get` (scoped read that
-//! fails closed on forbidden or out-of-scope keys).
+//! Tools: `murk_plan` (value-free, grant-scoped schema) and `murk_get` (scoped
+//! read) are always on and fail closed. `murk_exec` (run a command with scoped
+//! secrets injected) is opt-in via `murk mcp --allow-exec` — off by default,
+//! since command execution is a wider blast radius than a scoped read.
 
+use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use murk_cli::types::{Murk, Vault};
 use rmcp::{
@@ -25,6 +29,8 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
+use tokio::io::AsyncReadExt;
+use tokio::process::Command as TokioCommand;
 
 /// The decrypted, grant-scoped vault state the tools read from. Loaded once by
 /// [`crate::cmd_mcp`] after the identity guard passes, then shared read-only for
@@ -64,13 +70,29 @@ struct GetRequest {
     key: String,
 }
 
+/// `murk_exec` arguments.
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ExecRequest {
+    /// Secret keys to inject into the command's environment. Each must be within
+    /// this grant's scope and allowed by the agent policy, or the call fails
+    /// closed. Must name at least one key.
+    only: Vec<String>,
+    /// The command to run: `command[0]` is the program, the rest are arguments
+    /// (e.g. `["npm", "test"]`). Runs with no shell — there is no shell
+    /// interpolation — and a cleaned environment plus the injected secrets.
+    command: Vec<String>,
+}
+
 #[tool_router]
 impl MurkMcp {
-    fn new(state: Arc<McpState>) -> Self {
-        Self {
-            state,
-            tool_router: Self::tool_router(),
+    fn new(state: Arc<McpState>, allow_exec: bool) -> Self {
+        let mut tool_router = Self::tool_router();
+        // murk_exec is opt-in: unless the operator launched with --allow-exec,
+        // drop it entirely so it never appears in tools/list or accepts a call.
+        if !allow_exec {
+            tool_router.remove_route("murk_exec");
         }
+        Self { state, tool_router }
     }
 
     /// The secret *schema* for keys this grant may read — key names, descriptions,
@@ -136,6 +158,59 @@ impl MurkMcp {
             ))])),
         }
     }
+
+    /// Run a command with the named secrets injected into its environment and
+    /// return the captured output. Opt-in via `murk mcp --allow-exec`. Fails
+    /// closed: every requested key must be in this grant's scope and allowed by
+    /// the agent policy. No shell, a cleaned environment, and bounded output +
+    /// runtime.
+    #[tool(
+        description = "Run a command with scoped secrets injected into its environment (no shell), returning captured stdout/stderr and the exit code as JSON. Requires `only` (keys to inject) and `command` (argv). Fails closed on any key outside this grant's scope or the agent policy."
+    )]
+    async fn murk_exec(
+        &self,
+        Parameters(ExecRequest { only, command }): Parameters<ExecRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let st = &self.state;
+        if command.is_empty() {
+            return Ok(tool_err("command must not be empty"));
+        }
+        if only.is_empty() {
+            return Ok(tool_err(
+                "only must name at least one key — murk_exec never runs with an unscoped environment",
+            ));
+        }
+        // Policy gate for every requested key (retroactive allow-tag enforcement).
+        if let Err(e) = murk_cli::enforce_agent_policy(&st.vault, &st.murk, &st.pubkey, &only) {
+            return Ok(tool_err(&e.to_string()));
+        }
+        // Resolve each key under the grant; fail closed on anything out of scope.
+        let mut secrets: Vec<(String, String)> = Vec::with_capacity(only.len());
+        for key in &only {
+            let Some(value) = murk_cli::get_secret(&st.murk, key, &st.pubkey) else {
+                return Ok(tool_err(&format!(
+                    "{key}: not found or outside this grant's scope"
+                )));
+            };
+            // A NUL in the key or value, or an `=` in the key, makes std's
+            // `Command::env` panic. Secret values are arbitrary bytes, so validate
+            // before injecting and fail the call rather than crash the server.
+            // (Vault key names are already `[A-Za-z0-9_]`; the key check is
+            // defense in depth.)
+            if key.is_empty() || key.contains(['=', '\0']) {
+                return Ok(tool_err(&format!(
+                    "{key}: not a valid environment variable name"
+                )));
+            }
+            if value.contains('\0') {
+                return Ok(tool_err(&format!(
+                    "{key}: value contains a NUL byte and cannot be injected as an environment variable"
+                )));
+            }
+            secrets.push((key.clone(), value.to_string()));
+        }
+        run_command(&command, &secrets).await
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -157,11 +232,11 @@ impl ServerHandler for MurkMcp {
 /// tokio is confined here via `#[tokio::main]`; the caller stays synchronous.
 /// All logging is routed to stderr — stdout carries the JSON-RPC stream.
 #[tokio::main]
-pub async fn serve(state: McpState) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn serve(state: McpState, allow_exec: bool) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
     tracing::info!("murk mcp: serving over stdio");
 
-    let service = MurkMcp::new(Arc::new(state))
+    let service = MurkMcp::new(Arc::new(state), allow_exec)
         .serve(stdio())
         .await
         .inspect_err(|e| tracing::error!("murk mcp: failed to start: {e:?}"))?;
@@ -180,4 +255,148 @@ fn init_tracing() {
         .with_writer(std::io::stderr)
         .with_target(false)
         .try_init();
+}
+
+/// Timeout for a `murk_exec` command; a slow or hung child is killed at this bound.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(120);
+/// Per-stream output cap (stdout and stderr each). Bounds memory — a child that
+/// writes past this is killed rather than buffered without limit.
+const OUTPUT_CAP: usize = 1 << 20; // 1 MiB
+
+/// A tool-level error result (`isError=true`) carrying a caller-visible message.
+fn tool_err(msg: &str) -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(msg.to_string())])
+}
+
+/// Read up to `cap` bytes from `r` (plus one, to detect overflow). Returns the
+/// bytes truncated to `cap` and whether the stream exceeded it.
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    r: R,
+    cap: usize,
+) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut buf = Vec::new();
+    r.take(cap as u64 + 1).read_to_end(&mut buf).await?;
+    let over = buf.len() > cap;
+    buf.truncate(cap);
+    Ok((buf, over))
+}
+
+/// Spawn `command` with a cleaned environment plus `secrets`, capturing stdout/
+/// stderr under [`OUTPUT_CAP`] and [`EXEC_TIMEOUT`]. stdin is null and both output
+/// streams are piped, so the child never touches the server's JSON-RPC channel. A
+/// stream past the cap, or a run past the timeout, kills the child.
+async fn run_command(
+    command: &[String],
+    secrets: &[(String, String)],
+) -> Result<CallToolResult, McpError> {
+    let mut cmd = TokioCommand::new(&command[0]);
+    cmd.args(&command[1..]);
+    cmd.env_clear();
+    // Preserve the minimum a subprocess needs, matching `murk exec --clean-env`.
+    #[cfg(windows)]
+    let preserve: &[&str] = &[
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "SystemDrive",
+        "ComSpec",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ];
+    #[cfg(not(windows))]
+    let preserve: &[&str] = &["PATH", "HOME", "TERM"];
+    for var in preserve {
+        if let Ok(val) = std::env::var(var) {
+            cmd.env(var, val);
+        }
+    }
+    // Mark the child as a strict agent context so a nested `murk` won't fall back
+    // to a stored key. A safe default, not a sandbox (see docs/ai-agents.md).
+    cmd.env("MURK_AGENT", "1");
+    cmd.env("MURK_STRICT", "1");
+    // The env block necessarily copies plaintext secret values into the child;
+    // that copy is outside our control and is not zeroized (documented boundary).
+    for (k, v) in secrets {
+        cmd.env(k, v);
+    }
+    // The child must never inherit the server's stdio (stdin/stdout are the
+    // JSON-RPC channel): null stdin, capture stdout/stderr.
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return Ok(tool_err(&format!("failed to run {}: {e}", command[0]))),
+    };
+
+    let so = child.stdout.take().expect("stdout piped");
+    let se = child.stderr.take().expect("stderr piped");
+    let out_fut = read_capped(so, OUTPUT_CAP);
+    let err_fut = read_capped(se, OUTPUT_CAP);
+    tokio::pin!(out_fut, err_fut);
+    let deadline = tokio::time::sleep(EXEC_TIMEOUT);
+    tokio::pin!(deadline);
+
+    let mut ob: Option<Vec<u8>> = None;
+    let mut eb: Option<Vec<u8>> = None;
+    let mut over_cap = false;
+    let mut timed_out = false;
+
+    // Drain both streams concurrently. If either exceeds the cap, kill the child
+    // immediately (its other pipe then closes, so the paired read finishes fast)
+    // rather than sitting blocked on a full pipe until the timeout.
+    while ob.is_none() || eb.is_none() {
+        tokio::select! {
+            r = &mut out_fut, if ob.is_none() => {
+                let (b, o) = match r {
+                    Ok(v) => v,
+                    Err(e) => return Ok(tool_err(&format!("reading stdout: {e}"))),
+                };
+                if o { over_cap = true; let _ = child.start_kill(); }
+                ob = Some(b);
+            }
+            r = &mut err_fut, if eb.is_none() => {
+                let (b, o) = match r {
+                    Ok(v) => v,
+                    Err(e) => return Ok(tool_err(&format!("reading stderr: {e}"))),
+                };
+                if o { over_cap = true; let _ = child.start_kill(); }
+                eb = Some(b);
+            }
+            _ = &mut deadline => { timed_out = true; let _ = child.start_kill(); break; }
+        }
+    }
+
+    let status = child.wait().await.ok();
+
+    if timed_out {
+        return Ok(tool_err(&format!(
+            "command timed out after {}s and was killed",
+            EXEC_TIMEOUT.as_secs()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&ob.unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&eb.unwrap_or_default()).into_owned();
+    let payload = serde_json::json!({
+        "exit_code": status.and_then(|s| s.code()),
+        "stdout": stdout,
+        "stderr": stderr,
+        "truncated": over_cap,
+    });
+    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+
+    if status.is_some_and(|s| s.success()) && !over_cap {
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    } else {
+        Ok(CallToolResult::error(vec![ContentBlock::text(text)]))
+    }
 }
