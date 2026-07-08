@@ -80,3 +80,8 @@ python = ["pyo3"]
 assert_cmd = "2"
 assert_fs = "1"
 predicates = "3"
+# Client-side rmcp, test-only: an integration test drives `murk mcp` as a child
+# process over the official SDK's MCP client. Cargo unions these with the
+# server-side features above for test builds; a normal/release build ignores
+# dev-dependencies, so the shipped binary keeps only the server features.
+rmcp = { version = "2.1.0", default-features = false, features = ["client", "transport-child-process"] }
