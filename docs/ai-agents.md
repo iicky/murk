@@ -98,6 +98,34 @@ Now `agent exec` and `agent grant` only work for keys tagged `agents`; asking fo
 
 A granted agent is held to the policy no matter how it reads — `murk get`, `murk agent exec`, or the Python/Node bindings (`murk-secrets`). `get()` and `export()` from the bindings refuse a forbidden key just like the CLI, so the allow-list is enforced from every entry point. Tightening the policy applies retroactively: drop a tag and the agent loses access on its next read, even though its old grant key still exists.
 
+## Serving secrets over MCP (`murk mcp`)
+
+Agent harnesses that speak the [Model Context Protocol](https://modelcontextprotocol.io) — Claude Code, Cursor, omp, and others — can reach murk secrets directly through `murk mcp`, a stdio MCP server built into the binary. It calls murk in-process (no subprocess, no Node runtime) and is bound by the same grant and policy machinery as everything above.
+
+It runs **only** as a scoped agent: it fails closed unless it is launched with a grant key **and** `MURK_AGENT=1`. Started with your stored key, a plain recipient, or no grant, it refuses to start — so an MCP client can never be handed your full read scope.
+
+```bash
+# Mint a scoped grant first (see above), then run the server with it:
+MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_AGENT=1 murk mcp
+```
+
+The server speaks JSON-RPC over stdout and logs only to stderr, so point your MCP client at that command with `MURK_KEY_FILE` and `MURK_AGENT=1` in its environment. It exposes two tools, both bounded to the grant:
+
+- **`murk_plan`** — the schema (key names, descriptions, examples, tags) of the secrets *this grant may read*, as JSON. No values, and no keys outside the grant's scope or the vault's agent policy — a narrowly-scoped agent can't even enumerate what else the vault holds. Takes an optional `tags` filter.
+- **`murk_get { key }`** — one secret value, if the grant may read it. A key outside the grant's scope or forbidden by the agent policy returns an error result and never the value: fail-closed, like every other agent path.
+
+You can verify it end to end without a client by driving the handshake over a pipe:
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | MURK_KEY_FILE=<grant> MURK_AGENT=1 murk mcp
+```
+
+The transport is a local stdio pipe, not a network listener, and the grant bounds the blast radius — the same capability-not-credential model as `murk agent exec`. Harness-specific wiring (e.g. an `.omp/mcp.json` entry) lives in that harness's setup docs.
+
 ## Auditing agent activity
 
 There's no separate agent log to consult — **git is the record.** Every admin change to a grant or policy is a commit, so:
