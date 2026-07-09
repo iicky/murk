@@ -5075,3 +5075,26 @@ fn mcp_exec_runs_command_with_injected_secret() {
             predicate::str::contains("db-val").and(predicate::str::contains("\"isError\":false")),
         );
 }
+
+#[cfg(unix)]
+#[test]
+fn mcp_exec_output_is_capped() {
+    let dir = TempDir::new().unwrap();
+    let grant = setup_mcp_grant(&dir);
+
+    murk_bin(dir.path())
+        .current_dir(dir.path())
+        .env("MURK_KEY_FILE", grant.to_str().unwrap())
+        .env("MURK_AGENT", "1")
+        .args(["mcp", "--vault", "test.murk", "--allow-exec"])
+        .write_stdin(mcp_handshake_and_call(
+            "murk_exec",
+            r#"{"only":["DB_URL"],"command":["sh","-c","yes"]}"#,
+        ))
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"isError\":true")
+                .and(predicate::str::contains(r#"\"truncated\": true"#)),
+        );
+}
