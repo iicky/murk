@@ -1,21 +1,24 @@
 # Roadmap
 
-murk is pre-1.0. This roadmap covers planned directions, not commitments. Priorities shift based on real usage.
+murk is pre-1.0. This covers direction, not commitments — priorities shift with real usage. The 0.x line is a public beta: safe to use with good judgment, not yet independently audited. See [THREAT_MODEL.md](THREAT_MODEL.md) for what murk protects and what it doesn't.
 
-## Near-term (2026)
+## Toward 1.0
 
-- Hardening pass: race-safe file opens, permission enforcement, adversarial tests
-- Fuzz testing via OSS-Fuzz
-- SLSA Level 3 provenance
+1.0 is a trust milestone, not a feature milestone. The feature set — encrypted single-file vault, per-recipient encryption, scoped agent access over MCP, team management, and BIP39 recovery — is in place. What 1.0 adds is validation and stability guarantees. It ships when all of these hold:
 
-## Someday
+- **Vault-format stability** — 1.x reads every 0.x vault; any format change ships with a documented, tested migration.
+- **External security review** — an independent review of the age recipient management and grant-scope enforcement, with findings published and addressed.
+- **Continuous fuzzing** — OSS-Fuzz onboarding, beyond the current nightly in-repo fuzz run.
+- **SLSA Build L3 provenance** — up from the current attested (L2) releases.
+- **Soak** — several months of 0.9.x in real use with no vault-format change and no critical security fix.
+- **Migration & policy docs** — an upgrade guide, an MSRV policy, and a deprecation policy.
+
+## Later
 
 - Secret versioning (`murk history`, `murk rollback`)
 - Per-key timestamps and access logging
 - First-class environment separation (dev/staging/prod)
-- Scoped agent keys for AI coding agents and CI
 - Nix flake, Debian packages
-- External security review
 
 ## Non-goals
 
