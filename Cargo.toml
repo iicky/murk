@@ -2,9 +2,12 @@
 members = [".", "node"]
 exclude = ["fuzz"]
 
+[workspace.package]
+version = "0.9.0"
+
 [package]
 name = "murk-cli"
-version = "0.9.0"
+version.workspace = true
 edition = "2024"
 rust-version = "1.89"
 description = "Encrypted secrets manager for developers — one file, age encryption, git-friendly"
