@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# One-command version bump across every place murk's version lives, so the
+# manual multi-file edit that let node/package-lock.json drift can't recur.
+#
+# Usage: scripts/bump-version.sh <x.y.z>
+set -euo pipefail
+
+ver="${1:?usage: scripts/bump-version.sh <x.y.z>}"
+cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+# Rust: single source of truth is [workspace.package] version; every crate
+# inherits it via `version.workspace = true`. Replace only the version line
+# inside that section (the `-i.bak` form works on both BSD and GNU sed).
+sed -i.bak -e '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"/version = "'"$ver"'"/' Cargo.toml
+rm -f Cargo.toml.bak
+
+# Node bindings: `npm version` updates package.json AND package-lock.json in
+# lockstep — the step whose absence caused the drift. It only rewrites the
+# version fields, not the dependency tree.
+( cd node && npm version "$ver" --no-git-tag-version --allow-same-version >/dev/null )
+
+# Sync Cargo.lock to the new workspace version (and sanity-check the build).
+cargo check --quiet
+
+# Verify everything agrees before handing back.
+node scripts/check-versions.cjs
+echo "bumped murk to $ver"
