@@ -271,7 +271,7 @@ murk restore
 |---------|-------------|
 | `murk completion generate\|install SHELL` | Generate or install shell completions |
 
-Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `info`, `exec`, and `agent plan` filter by `--tag`; `ls`, `export`, `info`, `diff`, and `agent plan` support `--json`. See `murk <command> --help` for the full flag list.
+Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `info`, `exec`, and `agent plan` filter by `--tag`; `ls`, `export`, `info`, `diff`, and `agent plan` support `--json`. See `murk <command> --help` for the full flag list, or [docs/cli-reference.md](docs/cli-reference.md) for the complete reference (auto-generated, kept in sync with the binary).
 
 ## Design
 

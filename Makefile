@@ -2,10 +2,13 @@ SHELL := /bin/bash
 MURK := $(CURDIR)/target/release/murk
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh test-vhs
+.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh test-vhs docs
 
 build:
 	cargo build --release
+
+docs:
+	cargo run --features doc-gen --bin gen-docs
 
 test:
 	cargo nextest run
