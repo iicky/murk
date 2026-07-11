@@ -18,6 +18,7 @@
 
 // Domain modules — pub(crate) unless main.rs needs direct path access.
 pub(crate) mod agent;
+pub mod cli;
 pub(crate) mod codename;
 pub mod crypto;
 pub mod edit;
