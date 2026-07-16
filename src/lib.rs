@@ -492,6 +492,7 @@ pub fn decrypt_vault(
         github_pins,
         signers,
         signature,
+        signature_downgraded: false,
     })
 }
 
@@ -520,7 +521,8 @@ pub fn load_vault(
     // key). A pubkey's verifying key is a fixed derivation, so a *changed* key for
     // an already-pinned pubkey is never legitimate: fail hard. `MURK_NO_SIGNER_PIN`
     // opts out.
-    match pins::reconcile(vault_path, &murk.signers) {
+    let currently_signed = matches!(murk.signature, types::SignatureState::Signed { .. });
+    match pins::reconcile(vault_path, &murk.signers, currently_signed) {
         pins::PinVerdict::Conflict { signer } => {
             return Err(MurkError::Integrity(format!(
                 "signer {signer}'s verifying key changed since first seen — the signer registry \
@@ -529,7 +531,10 @@ pub fn load_vault(
                  ~/.config/murk/signer-pins/ or set MURK_NO_SIGNER_PIN=1"
             )));
         }
-        pins::PinVerdict::Ok { first_use } => {
+        pins::PinVerdict::Ok {
+            first_use,
+            downgraded,
+        } => {
             // An age signature is authenticated authorship only once its key is
             // anchored by a matching prior pin. On a fresh clone (first-use) the
             // registry key is trust-on-first-use, so mark it not-yet-anchored —
@@ -540,6 +545,24 @@ pub fn load_vault(
                 && !first_use.contains(signer.as_str())
             {
                 *anchored = true;
+            }
+            // A vault signed before on this machine but unsigned now was
+            // downgraded — the signature was stripped, or a merge left it
+            // unsigned. Not auto-fatal (the merge driver writes `sig: None` on
+            // purpose, so unsigned is a legit transient state), but MURK_STRICT
+            // refuses it, and every caller sees the flag on `Murk`.
+            if downgraded {
+                if crate::hardening::strict_mode() {
+                    return Err(MurkError::Integrity(format!(
+                        "vault {vault_path} was signed before and is now unsigned — the \
+                         signature was stripped, or a merge left it unsigned. Refusing under \
+                         MURK_STRICT. Review `git log -p -- {vault_path}` and re-sign after \
+                         checking `murk diff`; if you deliberately moved to a non-signing key, \
+                         clear the pin under ~/.config/murk/signer-pins/ or set \
+                         MURK_NO_SIGNER_PIN=1."
+                    )));
+                }
+                murk.signature_downgraded = true;
             }
         }
     }
@@ -2790,6 +2813,105 @@ mod tests {
         let (_, murk, _) = result.unwrap();
         assert_eq!(murk.values["KEY1"].as_str(), "val1");
 
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_vault_detects_signature_downgrade() {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        let dir = std::env::temp_dir().join("murk_test_sig_downgrade");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.murk");
+        let path_str = path.to_str().unwrap();
+
+        // Sandbox HOME so the signer pin starts fresh (never-signed) and isolated.
+        let prev_home = std::env::var_os("HOME");
+        let home = dir.join("home");
+        fs::create_dir_all(&home).unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("MURK_NO_SIGNER_PIN");
+            std::env::remove_var("MURK_AGENT");
+            std::env::set_var("MURK_KEY", &secret);
+            std::env::remove_var("MURK_KEY_FILE");
+        }
+
+        // One-secret vault, saved with an age key → lands signed.
+        let mut vault = types::Vault {
+            version: types::VAULT_VERSION.into(),
+            created: "2026-02-28T00:00:00Z".into(),
+            vault_name: ".murk".into(),
+            repo: String::new(),
+            recipients: vec![pubkey.clone()],
+            schema: BTreeMap::new(),
+            policy: None,
+            secrets: BTreeMap::new(),
+            meta: String::new(),
+        };
+        vault.secrets.insert(
+            "KEY1".into(),
+            types::SecretEntry {
+                shared: encrypt_value(b"val1", std::slice::from_ref(&recipient)).unwrap(),
+                private: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
+            },
+        );
+        let original = types::Murk {
+            values: HashMap::from([("KEY1".into(), crate::testutil::secret("val1"))]),
+            recipients: HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            ..Default::default()
+        };
+        save_vault(path_str, &mut vault, &original, &original).unwrap();
+
+        // First load: signed, and records was_signed in the (fresh) pin.
+        let (_, murk, _) = load_vault(path_str).unwrap();
+        assert!(matches!(
+            murk.signature,
+            types::SignatureState::Signed { .. }
+        ));
+        assert!(!murk.signature_downgraded);
+
+        // Strip the signature: decrypt meta, clear sig, re-encrypt. The MAC does
+        // not cover the sig, so it stays valid — a clean unsigned downgrade.
+        let mut on_disk = read_vault(path_str).unwrap();
+        let mut meta = decrypt_meta(&on_disk, &identity).unwrap();
+        meta.sig = None;
+        let meta_json = serde_json::to_vec(&meta).unwrap();
+        on_disk.meta = encrypt_value(&meta_json, std::slice::from_ref(&recipient)).unwrap();
+        vault::write(std::path::Path::new(path_str), &on_disk).unwrap();
+
+        // Second load: unsigned now, flagged as a downgrade (not a hard fail).
+        let (_, murk2, _) = load_vault(path_str).unwrap();
+        assert!(matches!(murk2.signature, types::SignatureState::Unsigned));
+        assert!(
+            murk2.signature_downgraded,
+            "a previously-signed vault loading unsigned must flag a downgrade"
+        );
+
+        // Under MURK_STRICT the same load fails closed.
+        unsafe { std::env::set_var("MURK_STRICT", "1") };
+        let strict = load_vault(path_str);
+        unsafe { std::env::remove_var("MURK_STRICT") };
+        assert!(
+            strict.is_err(),
+            "MURK_STRICT must refuse a signed->unsigned downgrade"
+        );
+
+        unsafe {
+            std::env::remove_var("MURK_KEY");
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 

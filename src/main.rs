@@ -205,15 +205,39 @@ fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
             "warn".yellow().bold()
         );
     }
-    // Nudge only when the operator can actually fix it: a vault with secrets that
-    // isn't signed, loaded by a signing-capable key. SSH/hardware users can't
-    // sign, so staying unsigned is expected for them (integrity anchor is git).
-    if matches!(result.1.signature, types::SignatureState::Unsigned)
+    // A vault signed before and now unsigned is the sharper signal — surface it
+    // distinctly (a merge is the common benign cause; a strip is not).
+    if result.1.signature_downgraded {
+        eprintln!(
+            "{} vault was signed before and is now unsigned — expected right after `git merge` (re-sign with any write command after reviewing `murk diff`); otherwise investigate before trusting it",
+            "warn".yellow().bold()
+        );
+    } else if matches!(result.1.signature, types::SignatureState::Unsigned)
         && !result.0.secrets.is_empty()
         && result.2.is_signing_capable()
     {
+        // Nudge only when the operator can actually fix it: a vault with secrets
+        // that isn't signed, loaded by a signing-capable key. SSH/hardware users
+        // can't sign, so staying unsigned is expected (integrity anchor is git).
         eprintln!(
             "{} vault is unsigned — run any write command to sign it (integrity relies on git until then)",
+            "warn".yellow().bold()
+        );
+    }
+    // Signature present but pinning is off (MURK_NO_SIGNER_PIN or no HOME, e.g.
+    // some CI): the signature can't be anchored, so a swapped signer key would go
+    // uncaught. Surface the blind spot rather than letting it pass silently.
+    if matches!(
+        result.1.signature,
+        types::SignatureState::Signed {
+            anchored: false,
+            ..
+        }
+    ) && !result.0.secrets.is_empty()
+        && !murk_cli::pins::signer_pin_available()
+    {
+        eprintln!(
+            "{} signer pinning is off (MURK_NO_SIGNER_PIN or no HOME) — the signature is trust-only and not anchored; anchor authorship with signed git commits",
             "warn".yellow().bold()
         );
     }
@@ -3115,7 +3139,9 @@ fn cmd_verify(vault_path: &str) {
                 "trust-on-first-use (key not yet anchored on this machine); anchor authorship with signed git commits, or use an ssh-ed25519 key".dimmed()
             );
         }
-        types::SignatureState::Unsigned if !vault.secrets.is_empty() => {
+        types::SignatureState::Unsigned
+            if !vault.secrets.is_empty() && !murk.signature_downgraded =>
+        {
             findings.push(Finding {
                 category: "signature",
                 message: "vault is unsigned — content integrity relies on git".into(),
@@ -3125,6 +3151,18 @@ fn cmd_verify(vault_path: &str) {
             });
         }
         types::SignatureState::Unsigned => {}
+    }
+
+    // A vault signed before and unsigned now — the sharper signal. Fail the check
+    // (report_findings exits non-zero) so `verify` asserts, not just warns.
+    if murk.signature_downgraded {
+        findings.push(Finding {
+            category: "signature",
+            message: "vault was signed before and is now unsigned — signature stripped, or a merge left it unsigned".into(),
+            fix: Some(
+                "re-sign with any write command after reviewing `murk diff`; if the downgrade is unexpected, inspect `git log -p`".into(),
+            ),
+        });
     }
 
     // Git anchor — is the vault's latest commit signed? The vault signature

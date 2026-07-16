@@ -26,6 +26,10 @@ use serde::{Deserialize, Serialize};
 struct SignerPin {
     /// pubkey → base64 Ed25519 verifying key, as first seen.
     signers: BTreeMap<String, String>,
+    /// Whether this vault has ever loaded with a valid signature on this machine.
+    /// Monotonic: once true, a later unsigned load is a downgrade.
+    #[serde(default)]
+    was_signed: bool,
 }
 
 /// Result of reconciling a vault's current signer registry against the local pin.
@@ -35,7 +39,13 @@ pub enum PinVerdict {
     /// this machine (newly pinned) — their key is trust-on-first-use, not yet
     /// anchored. A pubkey absent from `first_use` matched an existing pin, so its
     /// key is anchored by a prior trusted load.
-    Ok { first_use: BTreeSet<String> },
+    Ok {
+        first_use: BTreeSet<String>,
+        /// True when the vault was signed before on this machine but loaded
+        /// unsigned now — a stripped signature, or a merge result not yet
+        /// re-signed. Not a hard conflict; the loader warns, strict refuses.
+        downgraded: bool,
+    },
     /// An existing pubkey's verifying key changed since it was pinned. Never
     /// legitimate: the registry was altered to forge this recipient's signature.
     Conflict { signer: String },
@@ -72,17 +82,33 @@ fn pin_path(vault_path: &str) -> Option<PathBuf> {
     )
 }
 
+/// Whether signer pinning can actually anchor a signature on this machine —
+/// false when opted out (`MURK_NO_SIGNER_PIN`) or when there is no home dir to
+/// store the pin. When false, a present signature is trust-only, never anchored,
+/// so callers can surface the blind spot rather than letting it pass silently.
+pub fn signer_pin_available() -> bool {
+    std::env::var_os("MURK_NO_SIGNER_PIN").is_none()
+        && (std::env::var_os("HOME").is_some() || std::env::var_os("USERPROFILE").is_some())
+}
+
 /// Reconcile the vault's current signer registry against the local pin.
 ///
 /// Returns `Conflict` when an already-pinned pubkey now maps to a different
 /// verifying key. Otherwise records any new pubkeys and returns `Ok` with the
-/// set of first-seen (trust-on-first-use) signers. When pinning is unavailable
-/// (opted out, or no home dir) every signer is reported as first-use, since
-/// nothing is anchored.
-pub fn reconcile(vault_path: &str, signers: &BTreeMap<String, String>) -> PinVerdict {
-    // No anchor available → nothing is anchored; every signer is first-use.
+/// set of first-seen (trust-on-first-use) signers, plus `downgraded` — the vault
+/// was signed before on this machine but is unsigned now. `currently_signed` is
+/// whether this load carried a valid signature. When pinning is unavailable
+/// (opted out, or no home dir) every signer is first-use and no downgrade is
+/// reported, since nothing is anchored.
+pub fn reconcile(
+    vault_path: &str,
+    signers: &BTreeMap<String, String>,
+    currently_signed: bool,
+) -> PinVerdict {
+    // No anchor available → nothing is anchored and we can't detect a downgrade.
     let all_unanchored = || PinVerdict::Ok {
         first_use: signers.keys().cloned().collect(),
+        downgraded: false,
     };
     if std::env::var_os("MURK_NO_SIGNER_PIN").is_some() {
         return all_unanchored();
@@ -107,6 +133,10 @@ pub fn reconcile(vault_path: &str, signers: &BTreeMap<String, String>) -> PinVer
         }
     }
 
+    // A vault signed before but unsigned now has been downgraded — the signature
+    // was stripped, or it's a merge result awaiting re-signing.
+    let downgraded = pin.was_signed && !currently_signed;
+
     // No conflict — extend the pin with any newly seen signers (TOFU), and report
     // them as first-use so callers don't over-trust an unanchored key.
     let mut first_use = BTreeSet::new();
@@ -116,11 +146,20 @@ pub fn reconcile(vault_path: &str, signers: &BTreeMap<String, String>) -> PinVer
             first_use.insert(pubkey.clone());
         }
     }
-    if !first_use.is_empty() {
+
+    // Record having-been-signed once, monotonically.
+    let newly_signed = currently_signed && !pin.was_signed;
+    if newly_signed {
+        pin.was_signed = true;
+    }
+    if !first_use.is_empty() || newly_signed {
         write_pin(&path, &pin);
     }
 
-    PinVerdict::Ok { first_use }
+    PinVerdict::Ok {
+        first_use,
+        downgraded,
+    }
 }
 
 fn write_pin(path: &std::path::Path, pin: &SignerPin) {
@@ -175,7 +214,15 @@ mod tests {
     /// The set of first-use signers from an `Ok` verdict (panics on `Conflict`).
     fn first_use_of(v: PinVerdict) -> BTreeSet<String> {
         match v {
-            PinVerdict::Ok { first_use } => first_use,
+            PinVerdict::Ok { first_use, .. } => first_use,
+            PinVerdict::Conflict { signer } => panic!("unexpected conflict: {signer}"),
+        }
+    }
+
+    /// The `downgraded` flag from an `Ok` verdict (panics on `Conflict`).
+    fn downgraded_of(v: PinVerdict) -> bool {
+        match v {
+            PinVerdict::Ok { downgraded, .. } => downgraded,
             PinVerdict::Conflict { signer } => panic!("unexpected conflict: {signer}"),
         }
     }
@@ -186,23 +233,24 @@ mod tests {
             let s = map(&[("age1alice", "vkALICE")]);
             // First sight: reported as first-use (not yet anchored).
             assert_eq!(
-                first_use_of(reconcile("/proj/.murk", &s)),
+                first_use_of(reconcile("/proj/.murk", &s, true)),
                 BTreeSet::from(["age1alice".to_string()])
             );
             // Second sight: matched the pin → anchored, so no longer first-use.
-            assert!(first_use_of(reconcile("/proj/.murk", &s)).is_empty());
+            assert!(first_use_of(reconcile("/proj/.murk", &s, true)).is_empty());
         });
     }
 
     #[test]
     fn only_the_new_signer_is_first_use() {
         with_home(|_| {
-            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]), true);
             // Bob joins: alice is now anchored, only bob is first-use.
             assert_eq!(
                 first_use_of(reconcile(
                     "/proj/.murk",
-                    &map(&[("age1alice", "vkALICE"), ("age1bob", "vkBOB")])
+                    &map(&[("age1alice", "vkALICE"), ("age1bob", "vkBOB")]),
+                    true
                 )),
                 BTreeSet::from(["age1bob".to_string()])
             );
@@ -212,10 +260,10 @@ mod tests {
     #[test]
     fn changed_verifying_key_for_existing_pubkey_conflicts() {
         with_home(|_| {
-            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]), true);
             // Attacker registers a different verifying key under alice's pubkey.
             assert_eq!(
-                reconcile("/proj/.murk", &map(&[("age1alice", "vkATTACKER")])),
+                reconcile("/proj/.murk", &map(&[("age1alice", "vkATTACKER")]), true),
                 PinVerdict::Conflict {
                     signer: "age1alice".into()
                 }
@@ -226,11 +274,15 @@ mod tests {
     #[test]
     fn pins_are_per_vault_path() {
         with_home(|_| {
-            reconcile("/a/.murk", &map(&[("age1alice", "vkALICE")]));
+            reconcile("/a/.murk", &map(&[("age1alice", "vkALICE")]), true);
             // A different vault with the same pubkey but a different key: no
             // cross-contamination — separate pin file, so no conflict.
             assert_eq!(
-                first_use_of(reconcile("/b/.murk", &map(&[("age1alice", "vkOTHER")]))),
+                first_use_of(reconcile(
+                    "/b/.murk",
+                    &map(&[("age1alice", "vkOTHER")]),
+                    true
+                )),
                 BTreeSet::from(["age1alice".to_string()])
             );
         });
@@ -239,17 +291,60 @@ mod tests {
     #[test]
     fn opt_out_disables_the_check_and_anchoring() {
         with_home(|_| {
-            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]));
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]), true);
             unsafe { std::env::set_var("MURK_NO_SIGNER_PIN", "1") };
             // Opted out: even a changed key passes, and nothing is anchored
             // (every signer reported first-use).
             assert_eq!(
                 first_use_of(reconcile(
                     "/proj/.murk",
-                    &map(&[("age1alice", "vkATTACKER")])
+                    &map(&[("age1alice", "vkATTACKER")]),
+                    true
                 )),
                 BTreeSet::from(["age1alice".to_string()])
             );
+            unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
+        });
+    }
+
+    #[test]
+    fn signed_then_unsigned_is_a_downgrade() {
+        with_home(|_| {
+            let s = map(&[("age1alice", "vkALICE")]);
+            // First load carried a signature — records was_signed.
+            assert!(!downgraded_of(reconcile("/proj/.murk", &s, true)));
+            // Later load is unsigned → flagged as a downgrade.
+            assert!(downgraded_of(reconcile("/proj/.murk", &map(&[]), false)));
+        });
+    }
+
+    #[test]
+    fn never_signed_unsigned_is_not_a_downgrade() {
+        with_home(|_| {
+            // A vault only ever loaded unsigned (hardware/ssh-rsa team): no signal.
+            assert!(!downgraded_of(reconcile("/proj/.murk", &map(&[]), false)));
+            assert!(!downgraded_of(reconcile("/proj/.murk", &map(&[]), false)));
+        });
+    }
+
+    #[test]
+    fn re_signing_clears_the_downgrade() {
+        with_home(|_| {
+            let s = map(&[("age1alice", "vkALICE")]);
+            reconcile("/proj/.murk", &s, true);
+            // Unsigned right after a merge → downgrade flagged.
+            assert!(downgraded_of(reconcile("/proj/.murk", &map(&[]), false)));
+            // Re-signed → cleared.
+            assert!(!downgraded_of(reconcile("/proj/.murk", &s, true)));
+        });
+    }
+
+    #[test]
+    fn opt_out_suppresses_downgrade_detection() {
+        with_home(|_| {
+            reconcile("/proj/.murk", &map(&[("age1alice", "vkALICE")]), true);
+            unsafe { std::env::set_var("MURK_NO_SIGNER_PIN", "1") };
+            assert!(!downgraded_of(reconcile("/proj/.murk", &map(&[]), false)));
             unsafe { std::env::remove_var("MURK_NO_SIGNER_PIN") };
         });
     }

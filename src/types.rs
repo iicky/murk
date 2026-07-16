@@ -245,4 +245,9 @@ pub struct Murk {
     /// Whether the loaded vault carried a valid signature. `Unsigned` means
     /// integrity rests on git; the binary surfaces a warning.
     pub signature: SignatureState,
+    /// True when this vault loaded signed on this machine before but is now
+    /// unsigned — a stripped signature, or a merge result not yet re-signed. Set
+    /// from the signer-pin continuity check; the CLI warns distinctly, `verify`
+    /// fails, and `MURK_STRICT` refuses the load.
+    pub signature_downgraded: bool,
 }
