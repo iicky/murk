@@ -130,8 +130,8 @@ fn cmd_init(vault_name: &str) {
             }
         };
 
-        let status = match secret_key.as_deref() {
-            Some(sk) => try_or_die(murk_cli::check_init_status(&vault, sk)),
+        let status = match &secret_key {
+            Some(sk) => try_or_die(murk_cli::check_init_status(&vault, sk.expose_secret())),
             None => {
                 // No secret key — fall back to simple recipient check.
                 if vault.recipients.contains(&pubkey) {
@@ -2282,7 +2282,18 @@ fn cmd_recipients(json: bool, vault_path: &str) {
     }
 }
 
-fn cmd_restore() {
+/// Whether the just-restored identity is a recipient of the given vault JSON.
+/// `Some(true)` = recipient, `Some(false)` = not a recipient, `None` = can't
+/// tell (unparseable vault, or a key with no comparable pubkey). Drives only a
+/// best-effort sanity warning — never gates the restore.
+fn restored_key_is_recipient(secret_key: &str, vault_contents: &str) -> Option<bool> {
+    let vault = vault::parse(vault_contents).ok()?;
+    let identity = murk_cli::crypto::parse_identity(secret_key).ok()?;
+    let pubkey = identity.pubkey_string().ok()?;
+    Some(vault.recipients.contains(&pubkey))
+}
+
+fn cmd_restore(vault: &str) {
     let phrase = if io::stdin().is_terminal() {
         eprint!("Enter 24-word recovery phrase: ");
         io::stderr().flush().ok();
@@ -2302,7 +2313,23 @@ fn cmd_restore() {
         die(&"recovery phrase is required", 1);
     }
 
-    println!("{}", try_or_die(recovery::recover(&phrase)).as_str());
+    let key = try_or_die(recovery::recover(&phrase));
+
+    // A *different* valid 24-word phrase also decodes to a valid key — just not
+    // yours. If a vault is reachable here and the restored identity isn't one
+    // of its recipients, that's a strong hint the phrase was wrong. Best-effort:
+    // it never fails the restore, and the key still prints.
+    let vault_path = murk_cli::resolve_vault_path(vault);
+    if let Ok(contents) = fs::read_to_string(&vault_path)
+        && restored_key_is_recipient(key.as_str(), &contents) == Some(false)
+    {
+        eprintln!(
+            "{} restored identity is not a recipient of {vault_path}. If you're recovering an existing key, double-check the phrase (a different valid phrase yields a different but working key)",
+            "warn".yellow().bold(),
+        );
+    }
+
+    println!("{}", key.as_str());
 }
 
 fn cmd_recover() {
@@ -3446,7 +3473,7 @@ fn run() {
     match cli.command {
         Command::Init { vault } => cmd_init(&vault),
         Command::Recover => cmd_recover(),
-        Command::Restore => cmd_restore(),
+        Command::Restore { vault } => cmd_restore(&vault),
         Command::Import {
             file,
             force,
@@ -3826,5 +3853,39 @@ mod describe_flags {
         assert_eq!(parse_expires(None), Ok(None));
         // Garbage is rejected.
         assert!(parse_expires(Some("2026-13-99")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod restore_check {
+    use super::restored_key_is_recipient;
+
+    fn vault_json(recipients: &[&str]) -> String {
+        let recips = recipients
+            .iter()
+            .map(|r| format!("\"{r}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"version":"2.0","created":"2026-01-01T00:00:00Z","vault_name":".murk","recipients":[{recips}],"schema":{{}},"secrets":{{}},"meta":""}}"#
+        )
+    }
+
+    #[test]
+    fn recipient_membership_detected() {
+        let (_mnemonic, secret, pubkey) = murk_cli::recovery::generate().unwrap();
+
+        // Restored identity IS a recipient — no warning.
+        assert_eq!(
+            restored_key_is_recipient(&secret, &vault_json(&[pubkey.as_str()])),
+            Some(true)
+        );
+        // Valid-but-wrong phrase case: derived identity is absent from recipients.
+        assert_eq!(
+            restored_key_is_recipient(&secret, &vault_json(&["age1notyou"])),
+            Some(false)
+        );
+        // Unparseable vault must not raise a false alarm.
+        assert_eq!(restored_key_is_recipient(&secret, "{ not json"), None);
     }
 }

@@ -124,7 +124,13 @@ Write a .envrc for direnv integration
 
 Restore MURK_KEY from a BIP39 recovery phrase
 
-**Usage:** `murk restore`
+**Usage:** `murk restore [OPTIONS]`
+
+###### **Options:**
+
+* `--vault <VAULT>` — Vault filename, for the restored-identity recipient check
+
+  Default value: `.murk`
 
 
 

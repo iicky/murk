@@ -8,6 +8,7 @@ use std::process::Command;
 use std::env;
 
 use crate::{crypto, encrypt_value, now_utc, types};
+use age::secrecy::{ExposeSecret, SecretString};
 
 /// Strip embedded credentials from a git remote URL.
 ///
@@ -40,7 +41,7 @@ fn sanitize_remote_url(url: &str) -> String {
 /// A key discovered from the environment or .env file.
 #[derive(Debug)]
 pub struct DiscoveredKey {
-    pub secret_key: String,
+    pub secret_key: SecretString,
     pub pubkey: String,
 }
 
@@ -57,7 +58,8 @@ pub fn discover_existing_key() -> Result<Option<DiscoveredKey>, String> {
 
     match raw {
         Some(key) => {
-            let identity = crypto::parse_identity(&key).map_err(|e| e.to_string())?;
+            let identity =
+                crypto::parse_identity(key.expose_secret()).map_err(|e| e.to_string())?;
             let pubkey = identity.pubkey_string().map_err(|e| e.to_string())?;
             Ok(Some(DiscoveredKey {
                 secret_key: key,
@@ -182,7 +184,7 @@ mod tests {
         unsafe { env::remove_var("MURK_KEY") };
 
         let dk = result.unwrap().unwrap();
-        assert_eq!(dk.secret_key, secret);
+        assert_eq!(dk.secret_key.expose_secret(), secret.as_str());
         assert_eq!(dk.pubkey, pubkey);
     }
 
@@ -245,7 +247,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         let dk = result.unwrap().unwrap();
-        assert_eq!(dk.secret_key, secret);
+        assert_eq!(dk.secret_key.expose_secret(), secret.as_str());
         assert_eq!(dk.pubkey, pubkey);
     }
 
