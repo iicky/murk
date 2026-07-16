@@ -275,7 +275,7 @@ Every vault command accepts `--vault NAME` (or `MURK_VAULT`). `ls`, `export`, `i
 
 ## Design
 
-- **age for encryption, Ed25519 signatures for integrity** — no custom cryptographic primitives; a BLAKE3 MAC binds ciphertexts and an Ed25519 signature (derived from your age key, or your ssh-ed25519 key directly) authenticates the writer, so tampering by anyone with repo write access is detectable. Git commit signing is the anchor. See [THREAT_MODEL.md](THREAT_MODEL.md)
+- **age for encryption, Ed25519 signatures for integrity** — no custom cryptographic primitives; a BLAKE3 MAC binds ciphertexts and an Ed25519 signature (derived from your age key, or your ssh-ed25519 key directly) authenticates the writer, so tampering with a *signed* vault is detectable. An attacker with repo write access can still strip the signature — that loads as an unsigned warning, not a hard failure — so git commit signing is the anchor. See [THREAT_MODEL.md](THREAT_MODEL.md)
 - **Git is the audit trail** — murk doesn't replicate what git does
 - **Header is public, values are private** — key names are visible, values are not
 - **Explicit over magic** — never silently overwrites or destroys data
@@ -303,6 +303,8 @@ See [SPEC.md](SPEC.md) for the full specification.
 ## Security notes
 
 **Shell history** — `murk add` and `murk restore` prompt interactively with hidden input. Prefer these over passing secrets as arguments or via `echo`, which can leak to shell history. When piping from scripts, use commands that don't record to history (e.g. `pbpaste | murk add KEY` or reading from a file).
+
+**Command output** — `murk get KEY` prints the decrypted value to stdout; run interactively, that means it lands in your terminal and its scrollback. Strict mode blocks plaintext to a redirected file, but not to a TTY. Prefer piping into the consumer over reading secrets on screen.
 
 **Key names are plaintext** — the `.murk` header exposes key names (e.g. `STRIPE_SECRET_KEY`, `DATABASE_URL`) so that `murk info` works without a key and git diffs stay readable. Only values are encrypted. If your threat model requires hiding what services you use, this is a trade-off to be aware of.
 
