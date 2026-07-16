@@ -460,7 +460,7 @@ fn merge_scoped(
                 } else {
                     conflicts.push(MergeConflict {
                         field: format!("secrets.{secret_key}.{kind}.{pk}"),
-                        reason: "{kind} entry added on both sides".into(),
+                        reason: format!("{kind} entry added on both sides"),
                     });
                     result.insert(pk.to_string(), o.clone());
                 }
@@ -470,7 +470,7 @@ fn merge_scoped(
                 if o != b {
                     conflicts.push(MergeConflict {
                         field: format!("secrets.{secret_key}.{kind}.{pk}"),
-                        reason: "{kind} entry modified on our side but removed on theirs".into(),
+                        reason: format!("{kind} entry modified on our side but removed on theirs"),
                     });
                     result.insert(pk.to_string(), o.clone());
                 }
@@ -479,7 +479,7 @@ fn merge_scoped(
                 if t != b {
                     conflicts.push(MergeConflict {
                         field: format!("secrets.{secret_key}.{kind}.{pk}"),
-                        reason: "{kind} entry removed on our side but modified on theirs".into(),
+                        reason: format!("{kind} entry removed on our side but modified on theirs"),
                     });
                     result.insert(pk.to_string(), t.clone());
                 }
@@ -495,7 +495,7 @@ fn merge_scoped(
                     (true, true) if o != t => {
                         conflicts.push(MergeConflict {
                             field: format!("secrets.{secret_key}.{kind}.{pk}"),
-                            reason: "{kind} entry modified on both sides".into(),
+                            reason: format!("{kind} entry modified on both sides"),
                         });
                         result.insert(pk.to_string(), o.clone());
                     }
@@ -1154,6 +1154,7 @@ mod tests {
         let r = merge_vaults(&base, &ours, &theirs);
         assert_eq!(r.conflicts.len(), 1);
         assert!(r.conflicts[0].field.contains("private"));
+        assert!(r.conflicts[0].reason.contains("private entry"));
     }
 
     #[test]
