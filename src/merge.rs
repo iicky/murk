@@ -115,6 +115,14 @@ fn merge_policy(
     ours.cloned()
 }
 
+/// The first 12 *characters* of a recipient string, for a conflict label.
+/// Recipients on the `theirs` side are unvalidated, attacker-controlled data,
+/// so byte slicing (`&pk[..12]`) can panic mid-codepoint on multibyte input;
+/// take chars to stay panic-free.
+fn recipient_label(pk: &str) -> String {
+    pk.chars().take(12).collect()
+}
+
 /// Merge recipient lists as sets: union additions, honor removals.
 fn merge_recipients(
     base: &Vault,
@@ -143,7 +151,7 @@ fn merge_recipients(
             // Only ours added — conflict. Include the recipient but flag it.
             result.insert(pk);
             conflicts.push(MergeConflict {
-                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                field: format!("recipients.{}", recipient_label(pk)),
                 reason: "added on one side but not the other".into(),
             });
         }
@@ -153,7 +161,7 @@ fn merge_recipients(
             // Only theirs added — conflict.
             result.insert(pk);
             conflicts.push(MergeConflict {
-                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                field: format!("recipients.{}", recipient_label(pk)),
                 reason: "added on one side but not the other".into(),
             });
         }
@@ -167,7 +175,7 @@ fn merge_recipients(
         } else {
             // Only ours removed — conflict. Keep the recipient (safer default).
             conflicts.push(MergeConflict {
-                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                field: format!("recipients.{}", recipient_label(pk)),
                 reason: "removed on one side but not the other".into(),
             });
         }
@@ -176,7 +184,7 @@ fn merge_recipients(
         if !ours_removed.contains(pk) {
             // Only theirs removed — conflict. Keep the recipient.
             conflicts.push(MergeConflict {
-                field: format!("recipients.{}", &pk[..12.min(pk.len())]),
+                field: format!("recipients.{}", recipient_label(pk)),
                 reason: "removed on one side but not the other".into(),
             });
         }
@@ -988,6 +996,20 @@ mod tests {
         assert!(r.conflicts[0].reason.contains("added on one side"));
         // Recipient is still included (safer to keep than drop).
         assert!(r.vault.recipients.contains(&"age1charlie".to_string()));
+    }
+
+    #[test]
+    fn merge_recipient_label_handles_multibyte() {
+        // A recipient whose 12th byte lands mid-codepoint must not panic the
+        // conflict-label formatter. `theirs` recipients are unvalidated, so this
+        // is adversarial input reachable through the merge driver.
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.recipients.push("age1aaaaaaañ".into());
+
+        let r = merge_vaults(&base, &ours, &base);
+        assert_eq!(r.conflicts.len(), 1);
+        assert!(r.conflicts[0].field.starts_with("recipients."));
     }
 
     #[test]
