@@ -10,7 +10,7 @@ murk is pre-1.0 and has not been independently audited. See [SECURITY.md](SECURI
 
 **Secrets in transit via git.** Since values are encrypted before they enter git, pushing/pulling over any transport (HTTPS, SSH, unencrypted) does not expose secret values.
 
-**Cross-value integrity (tamper-evidence).** A BLAKE3 keyed MAC inside the encrypted meta blob covers all key names, encrypted values, and recipient public keys, binding the independent age ciphertexts together. It is mandatory whenever the vault contains secrets and detects accidental corruption and naive tampering.
+**Cross-value integrity (tamper-evidence).** A BLAKE3 keyed MAC inside the encrypted meta blob covers all key names, encrypted values, and recipient public keys, binding the independent age ciphertexts together. It is mandatory whenever the vault contains secrets and detects accidental corruption and naive tampering. For a vault with no signature — a team entirely on ssh-rsa or hardware/plugin keys, which cannot sign — the MAC is the only tamper-evidence murk itself provides (git remains the anchor).
 
 The MAC is **not** by itself a defense against a deliberate attacker with write access to the repo. Its key lives in the meta blob, and age encryption needs only the recipients' *public* keys — which are in the plaintext header — so anyone who can write the file can mint a fresh MAC key, recompute a valid MAC over tampered content, and re-encrypt the meta blob. age provides confidentiality, not authentication of *who* produced a ciphertext.
 
