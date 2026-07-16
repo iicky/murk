@@ -31,7 +31,11 @@ pub enum Command {
     },
 
     /// Restore MURK_KEY from a BIP39 recovery phrase
-    Restore,
+    Restore {
+        /// Vault filename, for the restored-identity recipient check
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 
     /// Re-derive recovery phrase from current MURK_KEY
     Recover,
