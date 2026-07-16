@@ -130,8 +130,8 @@ fn cmd_init(vault_name: &str) {
             }
         };
 
-        let status = match secret_key.as_deref() {
-            Some(sk) => try_or_die(murk_cli::check_init_status(&vault, sk)),
+        let status = match &secret_key {
+            Some(sk) => try_or_die(murk_cli::check_init_status(&vault, sk.expose_secret())),
             None => {
                 // No secret key — fall back to simple recipient check.
                 if vault.recipients.contains(&pubkey) {

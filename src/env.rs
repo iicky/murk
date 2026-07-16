@@ -163,15 +163,16 @@ pub fn resolve_key_for_vault(vault_path: &str) -> Result<SecretString, String> {
 /// already-present identity instead of generating a new one, which is why it must
 /// ignore the stored key it would otherwise be about to create.
 ///
-/// Returns `Ok(None)` when neither variable is set. The result is trimmed (init
-/// stores it as a plain key string); the runtime path deliberately does not trim,
+/// Returns `Ok(None)` when neither variable is set. The value comes back in a
+/// `SecretString` (zeroized on drop) and is trimmed — init later writes it back
+/// as a single-line key file; the runtime path deliberately does not trim,
 /// to keep plugin identity files intact.
 ///
 /// This is the single place, alongside [`resolve_key_with_source`], that reads
 /// the key environment variables — see `tests/invariants.rs`.
-pub fn key_from_env_only() -> Result<Option<String>, String> {
+pub fn key_from_env_only() -> Result<Option<SecretString>, String> {
     if let Some(k) = env::var(ENV_MURK_KEY).ok().filter(|k| !k.is_empty()) {
-        return Ok(Some(k));
+        return Ok(Some(SecretString::from(k)));
     }
     if let Ok(path) = env::var(ENV_MURK_KEY_FILE) {
         let p = std::path::Path::new(&path);
@@ -180,7 +181,7 @@ pub fn key_from_env_only() -> Result<Option<String>, String> {
             .map_err(|e| format!("cannot read MURK_KEY_FILE: {e}"))?
             .trim()
             .to_string();
-        return Ok(Some(key));
+        return Ok(Some(SecretString::from(key)));
     }
     Ok(None)
 }
