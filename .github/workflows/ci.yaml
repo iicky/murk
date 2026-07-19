@@ -26,7 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
       - run: cargo fmt --check
       - run: cargo clippy --all-features --all-targets -- -D warnings
-      - uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
       - uses: taiki-e/install-action@f092c064826410a38929a5791d2c0225b94432fe # cargo-audit
         with:
           tool: cargo-audit
