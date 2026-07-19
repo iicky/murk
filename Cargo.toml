@@ -40,7 +40,7 @@ path = "src/bin/gen-docs.rs"
 required-features = ["doc-gen"]
 
 [dependencies]
-age = { version = "0.11.3", features = ["ssh", "plugin", "cli-common"] }
+age = { version = "0.12.1", features = ["ssh", "plugin", "cli-common"] }
 ureq = "3"
 base64 = "0.22.1"
 bech32 = "0.12.0"
