@@ -139,3 +139,14 @@
   font-weight: 600;
   color: var(--sl-color-white);
 }
+
+/* Inline code: the default box is sharp-cornered and flat gray. Round it and
+ * give it a faint purple tint plus a hairline border, so `code` reads as a
+ * branded token without shouting. Scoped to inline code (a direct child of a
+ * non-pre element), leaving Expressive Code blocks untouched. */
+.sl-markdown-content :not(pre) > code {
+  border-radius: 5px;
+  padding: 0.15em 0.4em;
+  background: rgba(135, 96, 255, 0.1);
+  border: 1px solid rgba(135, 96, 255, 0.16);
+}
