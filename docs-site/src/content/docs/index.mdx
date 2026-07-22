@@ -61,6 +61,8 @@ doesn't.
 
 ### How murk compares
 
+<div class="compare">
+
 | | murk | SOPS | Vault | dotenvx | git-crypt |
 |---|---|---|---|---|---|
 | Encrypted values, readable keys | Yes | Yes | N/A | Yes | No (whole file) |
@@ -71,6 +73,8 @@ doesn't.
 | Single binary, no runtime | Yes | Yes | No | Yes | Yes |
 | Built-in direnv integration | Yes | No | No | Yes | No |
 | Recovery phrase | Yes (BIP39) | No | No | No | No |
+
+</div>
 
 **SOPS** is the closest alternative. Both encrypt values in-place and support
 age. murk differs in having scoped (per-user) secrets, a single-file vault

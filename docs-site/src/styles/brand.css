@@ -103,3 +103,39 @@
     max-width: 300px;
   }
 }
+
+/* --- Tables --- */
+
+/* Row hover across every content table, so a wide row is easy to track. */
+.sl-markdown-content table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* Comparison table ("How murk compares"): give murk's column (2nd) the brand
+ * accent so it reads distinctly from the alternatives. Soft purple band,
+ * accent header, bolder values. Scoped to the .compare wrapper in index.mdx. */
+.compare {
+  overflow-x: auto;
+}
+/* Floor the width so narrow screens scroll the wrapper instead of crushing
+ * six columns into an unreadable, clipped grid. */
+.compare table {
+  min-width: 44rem;
+}
+.compare table th:nth-child(2),
+.compare table td:nth-child(2) {
+  background: rgba(135, 96, 255, 0.1);
+}
+.compare table th:nth-child(2) {
+  color: var(--sl-color-accent-high);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+.compare table tr:last-child td:nth-child(2) {
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+.compare table td:nth-child(2) {
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
