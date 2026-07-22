@@ -63,7 +63,7 @@ Or download a pre-built binary:
 curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
 ```
 
-Pre-built binaries are available for Linux (x86_64, aarch64, armv7), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`. See [VERIFYING.md](VERIFYING.md) for verifying the npm, PyPI, and crates.io releases too.
+Pre-built binaries are available for Linux (x86_64, aarch64, armhf), macOS (x86_64, Apple Silicon), and Windows on the [releases page](https://github.com/iicky/murk/releases). Binary releases are [attested](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and can be verified with `gh attestation verify murk-* --owner iicky`. See [VERIFYING.md](VERIFYING.md) for verifying the npm, PyPI, and crates.io releases too.
 
 ## Quick start
 
@@ -105,14 +105,14 @@ murk has two layers of encryption inside the `.murk` file:
 
 **Shared secrets** (the murk) are encrypted to all recipients. When you run `murk add KEY`, every authorized team member can decrypt it. This is where production credentials, API keys, and other team-wide secrets live.
 
-**Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --scoped`, the value is encrypted to only your key in the vault. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
+**Scoped secrets** (motes) are encrypted to only your key. When you run `murk add KEY --group me`, the value is encrypted to only your key in the vault. During `murk export`, scoped values override shared ones — so you can use a local database URL while the rest of the team uses production.
 
 ```bash
 # Shared — everyone sees this (prompts for value, hidden input)
 murk add DATABASE_URL
 
 # Scoped — only you see this, overrides the shared value during export
-murk add DATABASE_URL --scoped
+murk add DATABASE_URL --group me
 
 # Or pipe for scripting (use a command that doesn't leak to shell history)
 pbpaste | murk add DATABASE_URL
@@ -135,7 +135,7 @@ murk circle authorize age1bob... --name bob@example.com
 murk export
 
 # Bob overrides a value for local dev
-murk add DATABASE_URL --scoped
+murk add DATABASE_URL --group me
 ```
 
 <p align="center">
@@ -203,14 +203,14 @@ murk restore
 
 | Command | Description |
 |---------|-------------|
-| `murk add KEY [--scoped]` | Add or update a secret (prompts for value) |
+| `murk add KEY [--group me]` | Add or update a secret (prompts for value) |
 | `murk generate KEY [--hex] [--length N]` | Generate a random secret and store it |
 | `murk rotate KEY [--generate]` | Rotate a secret with a new value |
 | `murk rotate --all` | Rotate all secrets (prompts for each) |
 | `murk rotate --list [--json]` | List keys needing rotation (overdue, expiring, post-revoke) |
 | `murk rm KEY` | Remove a secret |
 | `murk get KEY` | Print a single decrypted value |
-| `murk edit [KEY] [--scoped]` | Edit secrets in `$EDITOR` |
+| `murk edit [KEY] [--group me]` | Edit secrets in `$EDITOR` |
 | `murk ls` | List key names |
 | `murk export` | Print all secrets as shell exports |
 | `murk import [FILE]` | Import secrets from a .env file |
@@ -350,7 +350,7 @@ chmod 600 ~/.config/murk/yubikey.txt
 echo 'export MURK_KEY_FILE=~/.config/murk/yubikey.txt' >> .env
 
 # Authorize the YubiKey's public key on your vault
-murk authorize $(grep -i recipient ~/.config/murk/yubikey.txt | awk '{print $NF}')
+murk circle authorize $(grep -i recipient ~/.config/murk/yubikey.txt | awk '{print $NF}')
 
 # Read a secret — the YubiKey blinks; tap it to decrypt
 murk get SOME_KEY
@@ -360,7 +360,7 @@ The identity file contains a `#    Recipient: age1yubikey1...` header followed b
 
 If the plugin binary isn't on `$PATH`, murk fails with `age-plugin-yubikey unavailable` — install it and retry. `MURK_KEY` (the inline env var) rejects `AGE-PLUGIN-...` strings: a bare plugin identity doesn't carry the recipient pubkey, so use `MURK_KEY_FILE` pointing at the identity file.
 
-**No BIP39 recovery for hardware identities.** The whole point of hardware-backed keys is that the raw key bytes never leave the device, so there are no bytes to encode as a recovery phrase. Instead, enroll a second hardware device at setup and add both pubkeys as recipients (`murk authorize <backup-pubkey>`) — if you lose one, the backup still decrypts.
+**No BIP39 recovery for hardware identities.** The whole point of hardware-backed keys is that the raw key bytes never leave the device, so there are no bytes to encode as a recovery phrase. Instead, enroll a second hardware device at setup and add both pubkeys as recipients (`murk circle authorize <backup-pubkey>`) — if you lose one, the backup still decrypts.
 
 **`MURK_KEY` vs `MURK_KEY_FILE`.** Setting `MURK_KEY` to a raw `AGE-SECRET-KEY-1...` string in `.env` works, but the key is then plaintext on disk. Prefer `MURK_KEY_FILE` pointing at either a file under `~/.config/murk/keys/` (convenience) or a hardware-backed plugin identity file (strongly recommended for production).
 
