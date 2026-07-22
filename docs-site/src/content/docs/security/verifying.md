@@ -17,9 +17,9 @@ The prebuilt binaries and `SHA256SUMS` on the [releases page](https://github.com
 gh attestation verify murk-<version>-<target>.tar.gz --owner iicky
 ```
 
-This confirms the artifact was produced by this repository's release workflow — a builder you can inspect, with a signing identity an attacker cannot forge.
+This confirms the artifact was produced by this repository's release workflow: a builder you can inspect, with a signing identity an attacker cannot forge.
 
-## npm — `@iicky/murk-secrets`
+## npm (`@iicky/murk-secrets`)
 
 Published with npm provenance (`npm publish --provenance`). After installing, verify the registry signatures and provenance:
 
@@ -27,7 +27,7 @@ Published with npm provenance (`npm publish --provenance`). After installing, ve
 npm audit signatures
 ```
 
-## PyPI — `murk-secrets`
+## PyPI (`murk-secrets`)
 
 Wheels and the sdist are published through PyPI Trusted Publishing, which attaches [PEP 740](https://peps.python.org/pep-0740/) digital attestations by default. Attestations are shown on each file's entry on PyPI and are available through PyPI's Integrity API.
 
@@ -41,11 +41,11 @@ pipx run pypi-attestations verify pypi \
 
 `pip` does not verify attestations natively yet.
 
-## crates.io — `murk-cli`
+## crates.io (`murk-cli`)
 
 crates.io does not yet support artifact provenance or attestations, so there is nothing to attach at publish time. Trust here rests on two things:
 
-- the crate is published via crates.io **OIDC Trusted Publishing** — no long-lived registry token exists to steal, and
+- the crate is published via crates.io **OIDC Trusted Publishing**, so no long-lived registry token exists to steal, and
 - the crate is published only from a version-tagged CI run, and release preflight requires that tag to sit on `main` and to have been merged through a reviewed pull request before anything publishes.
 
 This is the one gap in murk's provenance story, and it is upstream: it closes when crates.io ships attestation support.

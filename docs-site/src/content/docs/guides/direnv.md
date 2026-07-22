@@ -7,8 +7,10 @@ sidebar:
 
 [direnv](https://direnv.net/) loads and unloads environment variables based
 on your current directory. murk has built-in support for it, so secrets can
-load automatically the moment you `cd` into a project — no manual `export`
+load automatically the moment you `cd` into a project: no manual `export`
 or wrapper script.
+
+![Secrets loading automatically on cd via direnv](https://raw.githubusercontent.com/iicky/murk/demo/direnv.gif)
 
 ## Setting it up
 
@@ -22,18 +24,18 @@ direnv allow
 requires this explicit opt-in per directory, as a safety measure against
 untrusted repos setting arbitrary environment variables on `cd`).
 
-From then on, every secret in the vault — shared and any scoped overrides
-you've added — is exported into your shell automatically when you're inside
+From then on, every secret in the vault (shared and any scoped overrides
+you've added) is exported into your shell automatically when you're inside
 the project directory, and unset again when you leave it.
 
 ## Where the key lives
 
 Your private key is stored in `~/.config/murk/keys/` with restricted
 permissions, outside the repository, and is auto-discovered by the CLI based
-on the vault's absolute path — so under direnv nothing about the key needs to
+on the vault's absolute path, so under direnv nothing about the key needs to
 live in the repo at all; the `.envrc` just runs `murk export`. (For shells that
 don't use direnv, `murk init` also writes a `.env` holding a `MURK_KEY_FILE`
-*reference* to that path — never the key itself — so `source .env` works too.)
+*reference* to that path, never the key itself, so `source .env` works too.)
 Either way, no secret material lands in the repo directory.
 
 ## Without direnv
@@ -45,8 +47,8 @@ single command instead of an ambient shell environment:
 murk exec ./deploy.sh    # runs with all secrets in the environment
 ```
 
-This is also the pattern to reach for in non-interactive contexts like CI —
-see [CI/CD](/guides/cicd/) — where there's no shell session for direnv to
+This is also the pattern to reach for in non-interactive contexts like CI
+(see [CI/CD](/guides/cicd/)) where there's no shell session for direnv to
 hook into.
 
 ## Related

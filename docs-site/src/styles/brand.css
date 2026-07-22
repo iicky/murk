@@ -67,12 +67,39 @@
   box-shadow: 0 0 0 1px var(--murk-accent), 0 8px 24px -8px var(--murk-accent-glow);
 }
 
-/* Diamond bullet before top-level sidebar group headings — the murk glyph. */
+/* Diamond bullet before top-level sidebar group headings — the murk glyph,
+ * drawn as a rotated square (not a font glyph) so it matches the vector mark
+ * and renders identically on every platform. */
 .sidebar-content summary .group-label span::before,
 .sidebar-content > ul > li > details > summary .large::before {
-  content: "\25C6"; /* ◆ */
-  color: var(--murk-accent);
-  margin-inline-end: 0.4em;
-  font-size: 0.7em;
-  vertical-align: middle;
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-inline-end: 0.55em;
+  vertical-align: 0.02em;
+  border-radius: 1.5px;
+  background: linear-gradient(135deg, #a98bff, #7b52ff);
+  transform: rotate(45deg);
+}
+
+/* --- Splash hero: tighten the vertical rhythm and give the mark presence. ---
+ * Starlight's default hero pads ~106px top/bottom and floats a large image,
+ * which left a dead band between the CTAs and the first card. Pull the padding
+ * in, cap the mark, and wrap it in the brand glow so the space reads as
+ * intentional atmosphere rather than emptiness. */
+.hero img {
+  filter: drop-shadow(0 10px 44px var(--murk-accent-glow));
+}
+/* The dead band was a desktop-only artifact of the two-column hero, so only
+ * tighten (and cap the mark) at the breakpoint where the hero goes horizontal;
+ * the stacked mobile hero keeps Starlight's native rhythm. */
+@media (min-width: 50rem) {
+  .hero {
+    padding-top: 3rem;
+    padding-bottom: 2.5rem;
+  }
+  .hero img {
+    max-width: 300px;
+  }
 }

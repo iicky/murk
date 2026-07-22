@@ -11,14 +11,14 @@ model, so they never drift from the binary.
 ## Shell completions
 
 The quickest path is to let murk install completions for your shell (name the
-shell — bash, zsh, fish, elvish, or powershell):
+shell: bash, zsh, fish, elvish, or powershell):
 
 ```bash
 murk completion install zsh
 ```
 
-To print a completion script to stdout instead — for a custom location or a
-system package — use `generate`:
+To print a completion script to stdout instead (for a custom location or a
+system package), use `generate`:
 
 ```bash
 murk completion generate zsh > ~/.zfunc/_murk

@@ -52,7 +52,7 @@ gh attestation verify murk-<version>-<target>.tar.gz --owner iicky
 ```
 
 This confirms the artifact was produced by this repository's release
-workflow — a builder you can inspect, with a signing identity an attacker
+workflow: a builder you can inspect, with a signing identity an attacker
 cannot forge.
 
 npm, PyPI, and crates.io releases each have their own verification path (npm

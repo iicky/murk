@@ -22,10 +22,10 @@ murk add DATABASE_URL
 
 ## Scoped secrets (motes)
 
-Scoped secrets are encrypted to only your key — they live in a reserved
+Scoped secrets are encrypted to only your key: they live in a reserved
 personal group named `me`. When you run `murk add KEY --group me`, the value
 is encrypted so that only you can decrypt
-it — no other recipient, even one with full vault access, can read it. During
+it: no other recipient, even one with full vault access, can read it. During
 `murk export`, `murk exec`, and `murk get`, a scoped value overrides the
 shared value for the same key. That lets you point `DATABASE_URL` at a local
 database while the rest of the team uses the shared production value, without
@@ -36,7 +36,7 @@ anyone's export clobbering anyone else's.
 murk add DATABASE_URL --group me
 ```
 
-You can also pipe a value in for scripting — just use a command that doesn't
+You can also pipe a value in for scripting. Just use a command that doesn't
 leak to shell history:
 
 ```bash
@@ -45,20 +45,20 @@ pbpaste | murk add DATABASE_URL
 
 ## Choosing between them
 
-- **Shared** — anything the whole team (or CI) needs the same value for:
+- **Shared**: anything the whole team (or CI) needs the same value for:
   production API keys, shared database URLs, third-party service credentials.
-- **Scoped** — anything that should differ per developer or stay private to
+- **Scoped**: anything that should differ per developer or stay private to
   you: a local database URL, a personal API token, a value you don't want
   even other recipients to read.
 
-Scoped secrets don't affect who's authorized on the vault — that's the
+Scoped secrets don't affect who's authorized on the vault: that's the
 recipient list, managed with `murk circle` (see [working in
 teams](/guides/teams/)). They're a second layer of encryption *within* the
 vault, on top of the recipient list. See [how murk's vault format
 works](/concepts/vault-format/) for the on-disk details, and the [`murk
 add`](/reference/cli/#murk-add) reference for the full flag list.
 
-Note that access control is advisory at the shared layer: any recipient with
+Access control is advisory at the shared layer: any recipient with
 `MURK_KEY` and a spot in the recipient list can decrypt every shared secret.
-Per-key metadata is not a cryptographic access boundary — use scoped secrets
+Per-key metadata is not a cryptographic access boundary. Use scoped secrets
 for anything that should genuinely stay private to one person.

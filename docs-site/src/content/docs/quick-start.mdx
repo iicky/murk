@@ -29,15 +29,15 @@ You've been invited to a project that uses murk for secrets. Here's how to get s
    ```
 
    This creates your keypair and prints 24 recovery words. **Write them
-   down.** If you lose your key, these words are the only way to recover it —
-   see [Key recovery](/guides/recovery/).
+   down.** If you lose your key, these words are the only way to recover it.
+   See [Key recovery](/guides/recovery/).
 
    Your key is stored in `~/.config/murk/keys/`, not in the repo.
 
 3. ## Get authorized
 
    Ask whoever maintains the vault to authorize you. The easiest path is
-   GitHub — no manual key exchange:
+   GitHub, with no manual key exchange:
 
    ```bash
    # (run by a current recipient, not you)
@@ -49,8 +49,10 @@ You've been invited to a project that uses murk for secrets. Here's how to get s
    so if your GitHub keys change later the next `authorize github:YOU` will
    flag the diff before accepting new keys.
 
+   ![Authorizing a teammate by GitHub username](https://raw.githubusercontent.com/iicky/murk/demo/github.gif)
+
    If GitHub isn't an option, send them your raw age pubkey instead. Run
-   `murk init` a second time in the project directory — when the vault
+   `murk init` a second time in the project directory. When the vault
    already exists and you are not yet authorized, it prints the pubkey you
    need to share:
 
@@ -98,4 +100,4 @@ You've been invited to a project that uses murk for secrets. Here's how to get s
   your key. See [Key recovery](/guides/recovery/).
 - **Revocation doesn't erase history.** If you leave the team, your access to
   old git history remains. The team should rotate secrets after revoking
-  you — see [Offboarding](/guides/offboarding/).
+  you. See [Offboarding](/guides/offboarding/).

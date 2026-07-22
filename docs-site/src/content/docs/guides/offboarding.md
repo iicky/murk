@@ -8,6 +8,8 @@ sidebar:
 When someone leaves the team, revoke their access and rotate whatever they
 could read.
 
+![Revoking a teammate and rotating the secrets they could read](https://raw.githubusercontent.com/iicky/murk/demo/offboard.gif)
+
 ## Revoke and rotate in one step
 
 ```bash
@@ -15,7 +17,7 @@ murk circle revoke carol --rotate
 ```
 
 This removes carol as a recipient, re-encrypts the shared secrets she had
-access to without her key, and — with `--rotate` — prompts you for a new
+access to without her key, and, with `--rotate`, prompts you for a new
 value for each of them in the same session. Commit and push the result:
 
 ```bash
@@ -38,13 +40,13 @@ murk import .env.rotated
 
 ## Why rotation matters
 
-Revocation re-encrypts the vault **going forward** — carol's key is dropped
+Revocation re-encrypts the vault **going forward**: carol's key is dropped
 from future shared-secret ciphertexts. It does not touch git history:
 
 :::caution
 Revocation doesn't erase git history. The revoked user can still decrypt any
 version of the vault they previously had access to, straight from old git
-commits. Rotation — giving the secret a new value — is the only way to
+commits. Rotation, giving the secret a new value, is the only way to
 actually close the exposure; revocation alone just stops *future* changes
 from being readable to them.
 :::
@@ -62,8 +64,8 @@ murk rotate --list --json
 ```
 
 This flags secrets that are overdue for rotation, approaching an expiry, or
-still outstanding after a past revoke — useful as a periodic hygiene check
-independent of any single offboarding event. See `murk doctor` for broader
+still outstanding after a past revoke (useful as a periodic hygiene check
+independent of any single offboarding event). See `murk doctor` for broader
 repo hygiene scanning, and the [CLI reference](/reference/cli/#murk-circle-revoke)
 for the full flag surface on `circle revoke` and `rotate`.
 

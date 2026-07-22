@@ -20,7 +20,7 @@ stale between builds, this page points at that single source.
 murk is pre-1.0 and follows [Semantic Versioning](https://semver.org/). While on
 the 0.x line, treat **minor** bumps (0.9 → 0.10) as the ones that may carry
 breaking changes; patch bumps are fixes and additions. The vault format is
-stable across 0.x — see the [roadmap](/roadmap/) for the stability guarantees
+stable across 0.x. See the [roadmap](/roadmap/) for the stability guarantees
 1.0 will add.
 
 ## Installing a specific version
@@ -37,5 +37,5 @@ pip install murk-secrets==X.Y.Z
 ```
 
 Pre-built binaries for each release are attached to its GitHub release. Every
-release is signed and attested — see [verifying releases](/security/verifying/)
+release is signed and attested. See [verifying releases](/security/verifying/)
 before trusting a downloaded artifact.

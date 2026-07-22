@@ -1,9 +1,9 @@
 ---
 title: murk
-description: Encrypted secrets manager for developers — one file, age encryption, git-friendly.
+description: "Encrypted secrets manager for developers: one file, age encryption, git-friendly."
 template: splash
 hero:
-  tagline: Encrypted secrets in a single git-friendly file. One key on your machine, one <code>.murk</code> file in your repo — age encryption, readable key names, no server.
+  tagline: Encrypted secrets in a single git-friendly file. One key on your machine, one <code>.murk</code> file in your repo. Age encryption, readable key names, no server.
   image:
     file: ../../assets/murk-logo.svg
   actions:
@@ -23,7 +23,7 @@ hero:
 
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
-<CardGrid stagger>
+<CardGrid>
   <Card title="Single-file vault" icon="document">
     Encrypted secrets live in one `.murk` file, safe to commit. Values are
     encrypted with [age](https://age-encryption.org/); key names stay readable
@@ -31,17 +31,21 @@ import { Card, CardGrid } from "@astrojs/starlight/components";
   </Card>
   <Card title="Per-recipient encryption" icon="approve-check">
     Every teammate gets their own key. Add and revoke recipients with
-    `murk circle` — no shared password to rotate when someone leaves.
+    `murk circle`, so there's no shared password to rotate when someone leaves.
   </Card>
   <Card title="Scoped agent access" icon="rocket">
     Grant AI agents access to specific secrets over MCP, no broad exposure.
     See [AI agents &amp; MCP](/guides/ai-agents-mcp/).
   </Card>
   <Card title="Recover from a phrase" icon="seti:lock">
-    A lost key isn't the end — 24 BIP39 recovery words regenerate it. No
+    A lost key isn't the end: 24 BIP39 recovery words regenerate it. No
     account, no reset email, no server.
   </Card>
 </CardGrid>
+
+## See it in action
+
+![murk in action: initialize a vault, add secrets, and wire up direnv](https://raw.githubusercontent.com/iicky/murk/demo/hero.gif)
 
 ## Overview
 
@@ -73,12 +77,12 @@ age. murk differs in having scoped (per-user) secrets, a single-file vault
 model, built-in team management (`murk circle`), and BIP39 key recovery. SOPS
 has broader KMS backend support and a larger ecosystem.
 
-**Vault** solves a different problem — it's centralized infrastructure for
+**Vault** solves a different problem: it's centralized infrastructure for
 secret storage, rotation, and dynamic credentials. If you need a secrets
 server, use Vault. murk is scoped to encrypted secrets in a repo.
 
 **dotenvx** encrypts `.env` files but uses a single shared key for the whole
-team. There's no per-recipient encryption — if someone leaves, everyone needs
+team. There's no per-recipient encryption: if someone leaves, everyone needs
 a new key.
 
 **git-crypt** encrypts entire files via git filters. Diffs are opaque, and
