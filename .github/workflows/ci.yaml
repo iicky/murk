@@ -36,7 +36,7 @@ jobs:
           node-version: "22"
       - name: Check version consistency across all release-bumped files
         run: node scripts/check-versions.cjs
-      - name: Check the CLI reference is in sync with the clap model
+      - name: Check the generated CLI and env references are in sync with the model
         run: cargo run --features doc-gen --bin gen-docs -- --check
 
   msrv:

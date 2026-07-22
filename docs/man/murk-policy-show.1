@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH show 1  "show " 
+.SH NAME
+show \- Show the agent access policy (works without a key)
+.SH SYNOPSIS
+\fBmurk policy show\fR [\fB\-\-json\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Show the agent access policy (works without a key)
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

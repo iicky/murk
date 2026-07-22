@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH restore 1  "restore " 
+.SH NAME
+restore \- Restore MURK_KEY from a BIP39 recovery phrase
+.SH SYNOPSIS
+\fBmurk restore\fR [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Restore MURK_KEY from a BIP39 recovery phrase
+.SH OPTIONS
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename, for the restored\-identity recipient check
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

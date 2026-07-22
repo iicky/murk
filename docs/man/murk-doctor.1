@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH doctor 1  "doctor " 
+.SH NAME
+doctor \- Check the surrounding repo for hygiene issues
+.SH SYNOPSIS
+\fBmurk doctor\fR [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Check the surrounding repo for hygiene issues
+.SH OPTIONS
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

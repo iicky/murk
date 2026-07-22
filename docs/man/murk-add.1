@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH add 1  "add " 
+.SH NAME
+add \- Add or update a secret
+.SH SYNOPSIS
+\fBmurk add\fR [\fB\-\-desc\fR] [\fB\-\-group\fR] [\fB\-\-tag\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIKEY\fR> 
+.SH DESCRIPTION
+Add or update a secret
+.SH OPTIONS
+.TP
+\fB\-\-desc\fR \fI<DESC>\fR
+Description for this key
+.TP
+\fB\-\-group\fR \fI<GROUP>\fR
+Who can read it: a group name, `everyone` (default), or `me`
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+Tag for grouping (repeatable)
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIKEY\fR>
+Secret key name

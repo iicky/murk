@@ -1,0 +1,89 @@
+---
+title: murk
+description: Encrypted secrets manager for developers — one file, age encryption, git-friendly.
+template: splash
+hero:
+  tagline: Encrypted secrets in a single git-friendly file. One key on your machine, one <code>.murk</code> file in your repo — age encryption, readable key names, no server.
+  image:
+    file: ../../assets/murk-logo.svg
+  actions:
+    - text: Quick start
+      link: /quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: Install & verify
+      link: /install/
+      icon: down-caret
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/iicky/murk
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid stagger>
+  <Card title="Single-file vault" icon="document">
+    Encrypted secrets live in one `.murk` file, safe to commit. Values are
+    encrypted with [age](https://age-encryption.org/); key names stay readable
+    so diffs stay meaningful.
+  </Card>
+  <Card title="Per-recipient encryption" icon="approve-check">
+    Every teammate gets their own key. Add and revoke recipients with
+    `murk circle` — no shared password to rotate when someone leaves.
+  </Card>
+  <Card title="Scoped agent access" icon="rocket">
+    Grant AI agents access to specific secrets over MCP, no broad exposure.
+    See [AI agents &amp; MCP](/guides/ai-agents-mcp/).
+  </Card>
+  <Card title="Recover from a phrase" icon="seti:lock">
+    A lost key isn't the end — 24 BIP39 recovery words regenerate it. No
+    account, no reset email, no server.
+  </Card>
+</CardGrid>
+
+## Overview
+
+### Why
+
+Most teams share `.env` files over Slack. That's bad. Tools like SOPS and
+Vault exist but they're complex, require cloud setup, or pull in runtimes you
+don't want.
+
+murk is simple: one key on your machine, one encrypted file in your repo. See
+the [threat model](/security/threat-model/) for what it protects and what it
+doesn't.
+
+### How murk compares
+
+| | murk | SOPS | Vault | dotenvx | git-crypt |
+|---|---|---|---|---|---|
+| Encrypted values, readable keys | Yes | Yes | N/A | Yes | No (whole file) |
+| Per-recipient encryption | Yes | Yes | ACL-based | No (shared key) | Yes (GPG) |
+| Scoped per-user overrides | Yes | No | No | No | No |
+| Requires a server | No | No | Yes | No | No |
+| Cloud KMS required | No | Optional | Typically | No | No |
+| Single binary, no runtime | Yes | Yes | No | Yes | Yes |
+| Built-in direnv integration | Yes | No | No | Yes | No |
+| Recovery phrase | Yes (BIP39) | No | No | No | No |
+
+**SOPS** is the closest alternative. Both encrypt values in-place and support
+age. murk differs in having scoped (per-user) secrets, a single-file vault
+model, built-in team management (`murk circle`), and BIP39 key recovery. SOPS
+has broader KMS backend support and a larger ecosystem.
+
+**Vault** solves a different problem — it's centralized infrastructure for
+secret storage, rotation, and dynamic credentials. If you need a secrets
+server, use Vault. murk is scoped to encrypted secrets in a repo.
+
+**dotenvx** encrypts `.env` files but uses a single shared key for the whole
+team. There's no per-recipient encryption — if someone leaves, everyone needs
+a new key.
+
+**git-crypt** encrypts entire files via git filters. Diffs are opaque, and
+revoking a team member is effectively impractical without re-encrypting git
+history.
+
+Ready to try it? Head to [install & verify](/install/) or jump straight into
+the [quick start](/quick-start/).

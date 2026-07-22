@@ -1,0 +1,78 @@
+/* murk brand skin for Starlight.
+ *
+ * Distinct from the interrupted.sh org chrome, but sharing its type: Inter for
+ * text, Meslo for code (self-hosted woff2, same faces as interrupted.sh). murk
+ * owns the purple accent (#8760FF) and the diamond glyph. Dark-only — there is
+ * no light theme and no theme toggle (see astro.config.mjs). */
+
+/* --- Brand typefaces (self-hosted, matching interrupted.sh) --- */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Meslo";
+  src: url("/fonts/meslo-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Meslo";
+  src: url("/fonts/meslo-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: dark;
+
+  /* Brand type. */
+  --sl-font: "Inter", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sl-font-mono: "Meslo", "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, Monaco, Consolas, monospace;
+
+  /* Accent: brand purple. Used for links, active nav, focus rings. */
+  --sl-color-accent-low: #241a4d;
+  --sl-color-accent: #8760ff;
+  --sl-color-accent-high: #d3c8ff;
+
+  /* Brand tokens for local use. */
+  --murk-accent: #8760ff;
+  --murk-accent-glow: #8760ff40;
+}
+
+/* Site title: nudge toward the brand and pair it with the diamond motif. */
+.site-title {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* Splash hero call-to-action buttons wear the brand purple with a soft glow. */
+.hero a[class*="action"][class*="primary"] {
+  background: var(--murk-accent);
+  border-color: var(--murk-accent);
+  box-shadow: 0 0 0 1px var(--murk-accent), 0 8px 24px -8px var(--murk-accent-glow);
+}
+
+/* Diamond bullet before top-level sidebar group headings — the murk glyph. */
+.sidebar-content summary .group-label span::before,
+.sidebar-content > ul > li > details > summary .large::before {
+  content: "\25C6"; /* ◆ */
+  color: var(--murk-accent);
+  margin-inline-end: 0.4em;
+  font-size: 0.7em;
+  vertical-align: middle;
+}
