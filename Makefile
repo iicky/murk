@@ -2,13 +2,18 @@ SHELL := /bin/bash
 MURK := $(CURDIR)/target/release/murk
 MUSL_TARGET := x86_64-unknown-linux-musl
 
-.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh test-vhs docs
+.PHONY: build test test-demos test-hero test-team test-offboard test-eve test-recovery test-github test-direnv test-mallory test-ssh test-vhs docs check-guides
 
 build:
 	cargo build --release
 
 docs:
 	cargo run --features doc-gen --bin gen-docs
+
+# Fail if a guide example names a command that isn't in the CLI or isn't
+# exercised by a demo/test flow.
+check-guides:
+	node scripts/check-guide-commands.cjs
 
 test:
 	cargo nextest run
