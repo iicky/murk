@@ -1,0 +1,19 @@
+# Cloudflare Pages response headers.
+# Deliberately no Content-Security-Policy: Starlight ships inline scripts (the
+# dark-theme head script, Pagefind search), so a CSP needs per-output testing
+# and would otherwise break search. These headers are safe without that.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), camera=(), microphone=()
+
+# Keep the *.pages.dev URLs out of search so they don't compete with
+# murk.interrupted.sh: the production alias (murk-docs.pages.dev) and every
+# per-deploy/per-PR preview (<name>.murk-docs.pages.dev). The custom domain is
+# unaffected; these rules only match pages.dev hosts.
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
