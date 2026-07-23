@@ -4,6 +4,7 @@ banks/
 .env
 *.murk.lock
 /target
+.wrangler/
 AGENTS.md
 CLAUDE.md
 .DS_Store
