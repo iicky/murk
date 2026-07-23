@@ -150,3 +150,15 @@
   background: rgba(135, 96, 255, 0.1);
   border: 1px solid rgba(135, 96, 255, 0.16);
 }
+
+/* ...but not inside headings. At heading size the chip's box, border, and
+ * padding dominate and overlap the line above when the heading wraps. Keep the
+ * mono face only: no box, a touch smaller, inheriting the heading's color. */
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) code {
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 0;
+  font-size: 0.9em;
+  color: inherit;
+}
