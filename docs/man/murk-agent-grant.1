@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH grant 1  "grant " 
+.SH NAME
+grant \- Mint a short\-lived ephemeral key that can read only the named secrets
+.SH SYNOPSIS
+\fBmurk agent grant\fR <\fB\-\-name\fR> <\fB\-\-only\fR> [\fB\-\-ttl\fR] [\fB\-\-out\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Mint a short\-lived ephemeral key that can read only the named secrets
+.SH OPTIONS
+.TP
+\fB\-\-name\fR \fI<NAME>\fR
+Grant name (used to revoke it later)
+.TP
+\fB\-\-only\fR \fI<ONLY>\fR
+Keys this grant can read (required — fails closed)
+.TP
+\fB\-\-ttl\fR \fI<TTL>\fR [default: 2h]
+Time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)
+.TP
+\fB\-\-out\fR \fI<OUT>\fR
+Where to write the agent key: a path, or `\-` for stdout
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

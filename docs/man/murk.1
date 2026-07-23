@@ -1,0 +1,101 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH murk 1  "murk " 
+.SH NAME
+murk \- Encrypted secrets manager for developers — one file, age encryption, git\-friendly
+.SH SYNOPSIS
+\fBmurk\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Encrypted secrets manager for developers — one file, age encryption, git\-friendly
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+murk\-init(1)
+Initialize a new vault and generate a keypair
+.TP
+murk\-env(1)
+Write a .envrc for direnv integration
+.TP
+murk\-restore(1)
+Restore MURK_KEY from a BIP39 recovery phrase
+.TP
+murk\-recover(1)
+Re\-derive recovery phrase from current MURK_KEY
+.TP
+murk\-add(1)
+Add or update a secret
+.TP
+murk\-generate(1)
+Generate a random secret and store it
+.TP
+murk\-rotate(1)
+Rotate secrets with new values
+.TP
+murk\-rm(1)
+Remove a secret
+.TP
+murk\-get(1)
+Get a single decrypted value
+.TP
+murk\-edit(1)
+Edit secrets in $EDITOR
+.TP
+murk\-ls(1)
+List all key names
+.TP
+murk\-export(1)
+Export all secrets as shell export statements
+.TP
+murk\-import(1)
+Import secrets from a .env file
+.TP
+murk\-describe(1)
+Add or update a key description
+.TP
+murk\-info(1)
+Show public schema and key info
+.TP
+murk\-skeleton(1)
+Export schema\-only vault with no secrets or recipients
+.TP
+murk\-exec(1)
+Run a command with secrets injected as environment variables
+.TP
+murk\-agent(1)
+Agent\-oriented commands (schema\-only output for AI agent prompts)
+.TP
+murk\-mcp(1)
+Run an MCP (Model Context Protocol) stdio server for AI agents
+.TP
+murk\-policy(1)
+Manage the agent access policy
+.TP
+murk\-circle(1)
+Manage recipients
+.TP
+murk\-group(1)
+Manage recipient groups
+.TP
+murk\-verify(1)
+Verify vault integrity without exporting secrets
+.TP
+murk\-doctor(1)
+Check the surrounding repo for hygiene issues
+.TP
+murk\-scan(1)
+Scan files for leaked secret values
+.TP
+murk\-diff(1)
+Show secret changes vs a git ref
+.TP
+murk\-setup\-merge\-driver(1)
+Configure git to use murk\*(Aqs merge driver for .murk files
+.TP
+murk\-completion(1)
+Generate or install shell completions
+.TP
+murk\-help(1)
+Print this message or the help of the given subcommand(s)

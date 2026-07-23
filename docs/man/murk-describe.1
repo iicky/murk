@@ -1,0 +1,34 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH describe 1  "describe " 
+.SH NAME
+describe \- Add or update a key description
+.SH SYNOPSIS
+\fBmurk describe\fR [\fB\-\-example\fR] [\fB\-\-tag\fR] [\fB\-\-rotate\-every\fR] [\fB\-\-expires\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIKEY\fR> <\fIDESCRIPTION\fR> 
+.SH DESCRIPTION
+Add or update a key description
+.SH OPTIONS
+.TP
+\fB\-\-example\fR \fI<EXAMPLE>\fR
+Example value
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+Tag for grouping (repeatable, replaces existing tags)
+.TP
+\fB\-\-rotate\-every\fR \fI<DAYS>\fR
+Rotation interval, e.g. `90d` or `90` (days); `never` clears it
+.TP
+\fB\-\-expires\fR \fI<DATE>\fR
+Hard expiry date, e.g. `2026\-09\-01`; `never` clears it
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIKEY\fR>
+Secret key name
+.TP
+<\fIDESCRIPTION\fR>
+Description text

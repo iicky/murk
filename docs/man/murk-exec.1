@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH exec 1  "exec " 
+.SH NAME
+exec \- Run a command with secrets injected as environment variables
+.SH SYNOPSIS
+\fBmurk exec\fR [\fB\-\-only\fR] [\fB\-\-tag\fR] [\fB\-\-clean\-env\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOMMAND\fR> 
+.SH DESCRIPTION
+Run a command with secrets injected as environment variables
+.SH OPTIONS
+.TP
+\fB\-\-only\fR \fI<ONLY>\fR
+Only inject these specific keys (repeatable)
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+Filter by tag (repeatable)
+.TP
+\fB\-\-clean\-env\fR
+Strip inherited environment (only murk secrets + PATH)
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fICOMMAND\fR>
+Command and arguments to execute

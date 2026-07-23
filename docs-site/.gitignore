@@ -1,0 +1,17 @@
+# build output
+dist/
+.astro/
+
+# dependencies
+node_modules/
+
+# generated — mirrored from docs/*-reference.md by scripts/sync-generated-docs.mjs
+src/content/docs/reference/cli.md
+src/content/docs/reference/env.md
+
+# environment
+.env
+.env.production
+
+# logs
+npm-debug.log*

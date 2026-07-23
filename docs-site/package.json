@@ -1,0 +1,20 @@
+{
+  "name": "murk-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync-docs": "node scripts/sync-generated-docs.mjs",
+    "predev": "npm run sync-docs",
+    "dev": "astro dev",
+    "prebuild": "npm run sync-docs",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.1.3",
+    "sharp": "^0.35.3"
+  }
+}

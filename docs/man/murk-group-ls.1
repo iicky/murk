@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH ls 1  "ls " 
+.SH NAME
+ls \- List groups and their members
+.SH SYNOPSIS
+\fBmurk group ls\fR [\fB\-\-json\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+List groups and their members
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

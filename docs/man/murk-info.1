@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH info 1  "info " 
+.SH NAME
+info \- Show public schema and key info
+.SH SYNOPSIS
+\fBmurk info\fR [\fB\-\-tag\fR] [\fB\-\-json\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Show public schema and key info
+.SH OPTIONS
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+Filter by tag (repeatable)
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

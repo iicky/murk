@@ -1,0 +1,37 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH rotate 1  "rotate " 
+.SH NAME
+rotate \- Rotate secrets with new values
+.SH SYNOPSIS
+\fBmurk rotate\fR [\fB\-\-all\fR] [\fB\-\-generate\fR] [\fB\-\-length\fR] [\fB\-\-hex\fR] [\fB\-\-list\fR] [\fB\-\-json\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIKEY\fR] 
+.SH DESCRIPTION
+Rotate secrets with new values
+.SH OPTIONS
+.TP
+\fB\-\-all\fR
+Rotate all secrets in the vault
+.TP
+\fB\-\-generate\fR
+Generate random values instead of prompting
+.TP
+\fB\-\-length\fR \fI<LENGTH>\fR [default: 32]
+Length in bytes for generated values (default 32)
+.TP
+\fB\-\-hex\fR
+Output generated values as hex instead of base64
+.TP
+\fB\-\-list\fR
+List keys needing rotation instead of rotating (exits 1 if any)
+.TP
+\fB\-\-json\fR
+Output the listing as JSON (with \-\-list; always exits 0)
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIKEY\fR]
+Secret key name (omit for \-\-all)

@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH revoke 1  "revoke " 
+.SH NAME
+revoke \- Remove a recipient from the vault
+.SH SYNOPSIS
+\fBmurk circle revoke\fR [\fB\-\-rotate\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRECIPIENT\fR> 
+.SH DESCRIPTION
+Remove a recipient from the vault
+.SH OPTIONS
+.TP
+\fB\-\-rotate\fR
+Rotate the secrets they had access to in the same session
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIRECIPIENT\fR>
+Recipient pubkey or display name

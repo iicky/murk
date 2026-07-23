@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH scan 1  "scan " 
+.SH NAME
+scan \- Scan files for leaked secret values
+.SH SYNOPSIS
+\fBmurk scan\fR [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPATHS\fR] 
+.SH DESCRIPTION
+Scan files for leaked secret values
+.SH OPTIONS
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIPATHS\fR]
+Files or directories to scan (defaults to current directory)

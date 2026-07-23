@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH import 1  "import " 
+.SH NAME
+import \- Import secrets from a .env file
+.SH SYNOPSIS
+\fBmurk import\fR [\fB\-\-force\fR] [\fB\-\-group\fR] [\fB\-\-vault\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIFILE\fR] 
+.SH DESCRIPTION
+Import secrets from a .env file
+.SH OPTIONS
+.TP
+\fB\-\-force\fR
+Overwrite existing secrets without prompting
+.TP
+\fB\-\-group\fR \fI<GROUP>\fR
+Assign imported secrets to this group (default: everyone)
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIFILE\fR] [default: .env]
+Path to the .env file to import

@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH mcp 1  "mcp " 
+.SH NAME
+mcp \- Run an MCP (Model Context Protocol) stdio server for AI agents
+.SH SYNOPSIS
+\fBmurk mcp\fR [\fB\-\-vault\fR] [\fB\-\-allow\-exec\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run an MCP (Model Context Protocol) stdio server for AI agents
+.SH OPTIONS
+.TP
+\fB\-\-vault\fR \fI<VAULT>\fR [default: .murk]
+Vault filename
+.TP
+\fB\-\-allow\-exec\fR
+Enable the murk_exec tool (run commands with scoped secrets injected). Off by default: it runs arbitrary commands as this user — the injected secrets are grant\-scoped, but the command itself is not sandboxed
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
