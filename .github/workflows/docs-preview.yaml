@@ -1,0 +1,87 @@
+name: Docs preview
+
+# Deploys a Cloudflare Pages PREVIEW of the docs site for pull requests that
+# touch it, then comments the preview URL on the PR. It uses the same Pages
+# project as production (murk-docs); any branch other than the project's
+# production branch is a Pages preview deployment with its own URL, so this
+# never touches murk.interrupted.sh. Production deploys live in docs.yaml.
+#
+# The build always runs, so it doubles as a smoke check on every PR (forks
+# included). The deploy and comment steps are skipped for pull requests from
+# forks (which don't receive repo secrets), and skip cleanly (a green run, not
+# a failure) until the Cloudflare secrets are configured.
+
+on:
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - "docs/cli-reference.md"
+      - "docs/env-reference.md"
+      - ".github/workflows/docs-preview.yaml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Per-PR: a new push supersedes the in-flight preview for the same PR.
+concurrency:
+  group: docs-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Build & preview
+    runs-on: ubuntu-latest
+    env:
+      # Referenced in step-level `if` so the deploy skips (rather than fails)
+      # until the Cloudflare secrets exist.
+      CF_CONFIGURED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+
+      - name: Install dependencies
+        working-directory: docs-site
+        run: npm ci
+
+      # prebuild runs sync-generated-docs.mjs before Astro builds.
+      - name: Build site
+        working-directory: docs-site
+        run: npm run build
+
+      - name: Deploy preview to Cloudflare Pages
+        id: deploy
+        if: ${{ env.CF_CONFIGURED == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: docs-site
+          command: pages deploy dist --project-name=murk-docs --branch=pr-${{ github.event.pull_request.number }} --commit-dirty=true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Comment preview URL
+        if: ${{ steps.deploy.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Docs preview for this PR:"
+            echo
+            echo "- Latest build: ${DEPLOY_URL}"
+            if [ -n "${ALIAS_URL}" ]; then
+              echo "- Stable alias: ${ALIAS_URL}"
+            fi
+            echo
+            echo "_Updates on each push to this PR._"
+          } > preview-comment.md
+          gh pr comment "$PR" --body-file preview-comment.md --edit-last --create-if-none
