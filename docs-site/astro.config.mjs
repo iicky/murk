@@ -36,6 +36,48 @@ export default defineConfig({
           content:
             'document.documentElement.dataset.theme="dark";try{localStorage.setItem("starlight-theme","dark")}catch(e){}',
         },
+        // Social share image. Starlight emits card type + og:title/description/
+        // url/site_name per page, but not an image; add one global 1200x630.
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image",
+            content: "https://murk.interrupted.sh/og.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:type", content: "image/png" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:width", content: "1200" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:height", content: "630" },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content: "murk — encrypted secrets in a single git-friendly file",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image",
+            content: "https://murk.interrupted.sh/og.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image:alt",
+            content: "murk — encrypted secrets in a single git-friendly file",
+          },
+        },
       ],
       // IA per the docs-site epic. Content lives in src/content/docs/.
       sidebar: [
