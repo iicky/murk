@@ -132,10 +132,11 @@ fn export_all(vault_path: &str) -> PyResult<HashMap<String, String>> {
     v.export()
 }
 
-/// Resolve the MURK_KEY from the environment without loading a vault.
-/// Returns true if a key is available.
+/// Whether a decryption identity (MURK_KEY / MURK_KEY_FILE) is available in the
+/// environment — i.e. whether load() can decrypt. This does not check whether a
+/// secret exists; use `key in vault` / Vault.keys for that.
 #[pyfunction]
-fn has_key() -> bool {
+fn has_identity() -> bool {
     env::resolve_key().is_ok()
 }
 
@@ -146,6 +147,6 @@ fn murk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(get, m)?)?;
     m.add_function(wrap_pyfunction!(export_all, m)?)?;
-    m.add_function(wrap_pyfunction!(has_key, m)?)?;
+    m.add_function(wrap_pyfunction!(has_identity, m)?)?;
     Ok(())
 }

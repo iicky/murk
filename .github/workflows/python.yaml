@@ -129,7 +129,7 @@ jobs:
       - name: Install wheel and import
         run: |
           python -m pip install dist/*.whl
-          python -c "import murk; print('abi3 wheel imports on', __import__('sys').version.split()[0]); assert isinstance(murk.has_key(), bool)"
+          python -c "import murk; print('abi3 wheel imports on', __import__('sys').version.split()[0]); assert isinstance(murk.has_identity(), bool)"
 
   publish:
     name: Publish to PyPI

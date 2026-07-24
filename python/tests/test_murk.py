@@ -180,14 +180,14 @@ class TestAgentPolicy:
             vault.export()
 
 
-class TestHasKey:
-    def test_has_key_true(self, vault_dir):
+class TestHasIdentity:
+    def test_has_identity_true(self, vault_dir):
         os.environ["MURK_KEY"] = vault_dir["key"]
-        assert murk.has_key() is True
+        assert murk.has_identity() is True
 
-    def test_has_key_false(self, tmp_path):
+    def test_has_identity_false(self, tmp_path):
         os.environ.pop("MURK_KEY", None)
         os.environ.pop("MURK_KEY_FILE", None)
         # Use a clean dir with no .murk or .env to avoid auto-discovery.
         os.chdir(tmp_path)
-        assert murk.has_key() is False
+        assert murk.has_identity() is False

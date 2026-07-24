@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { exportAll, get, hasKey, load } from '../index.js'
+import { exportAll, get, hasIdentity, load } from '../index.js'
 
 // Find the murk binary.
 const murkBin = join(process.cwd(), '..', 'target', 'release', 'murk')
@@ -189,8 +189,8 @@ test('exportAll one-liner works', () => {
   assert.strictEqual(Object.keys(secrets).length, 3)
 })
 
-test('hasKey returns true when key set', () => {
-  assert.strictEqual(hasKey(), true)
+test('hasIdentity returns true when key set', () => {
+  assert.strictEqual(hasIdentity(), true)
 })
 
 test('load with missing vault throws', () => {
