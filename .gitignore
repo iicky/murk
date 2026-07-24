@@ -13,3 +13,6 @@ __pycache__/
 .pytest_cache/
 node/*.node
 node/node_modules/
+# cargo-mutants report trees
+/mutants.out/
+/mutants.out.old/

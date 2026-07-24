@@ -1,0 +1,51 @@
+name: Mutants
+
+# Mutation testing proves the suite CATCHES bugs — a surviving mutant is a change
+# no test noticed, i.e. an assertion gap. It is slow (rebuild + retest per
+# mutant), so it runs on a schedule and on demand only, never on pull requests.
+# Scope, test args, and exclusions live in .cargo/mutants.toml.
+on:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked --version 25.3.1
+
+      - name: Prepare report directory
+        run: mkdir -p target/mutants
+
+      # The in-process crypto surface (scope + --lib test args from
+      # .cargo/mutants.toml).
+      - name: Mutation test — crypto core
+        run: cargo mutants --output target/mutants/crypto
+
+      # The MAC / integrity / load trust boundary in lib.rs, scoped by function
+      # name so the run stays bounded and meaningful.
+      - name: Mutation test — MAC & load core
+        run: >
+          cargo mutants --output target/mutants/mac
+          --file src/lib.rs
+          --re 'compute_mac|verify_mac|mac_bytes|schema_mac_bytes|decode_mac_key|generate_mac_key|signing_message|sign_vault|verify_vault_signature|check_signature|resolve_meta_state|decrypt_vault'
+
+      - name: Upload mutation reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-report
+          path: target/mutants/
