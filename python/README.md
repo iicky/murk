@@ -63,9 +63,9 @@ One-liner: load the vault and get a single value.
 
 One-liner: load the vault and export all secrets as a dict.
 
-### `murk.has_key() -> bool`
+### `murk.has_identity() -> bool`
 
-Check if a `MURK_KEY` is available in the environment.
+Whether a decryption identity (`MURK_KEY` / `MURK_KEY_FILE`) is available — i.e. whether `load()` can decrypt. This is not a check for whether a secret exists; use `key in vault` / `vault.keys()` for that.
 
 ### `Vault`
 
@@ -79,6 +79,16 @@ Check if a `MURK_KEY` is available in the environment.
 | `len(vault)` | `int` | Number of secrets |
 
 Scoped (per-user) overrides are applied automatically — if you have a scoped value for a key, it takes priority over the shared value.
+
+## Memory hygiene
+
+Every decrypted value murk returns is a plain Python string. murk zeroes plaintext from
+its own memory when a value is dropped, but that guarantee ends at the FFI
+boundary: once a value crosses into Python the interpreter owns it, and its
+garbage collector — not murk — controls its lifetime. This is inherent to
+reading secrets into a process (see the
+[threat model](https://github.com/iicky/murk/blob/main/THREAT_MODEL.md)); avoid
+holding decrypted values longer than you need them.
 
 ## Agent policy
 

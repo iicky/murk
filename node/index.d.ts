@@ -44,8 +44,12 @@ export declare function exportAll(vaultPath?: string | undefined | null): Record
 /** One-liner: load the vault and get a single key. */
 export declare function get(key: string, vaultPath?: string | undefined | null): string | null
 
-/** Check if a MURK_KEY is available in the environment. */
-export declare function hasKey(): boolean
+/**
+ * Whether a decryption identity (`MURK_KEY` / `MURK_KEY_FILE`) is available in
+ * the environment — i.e. whether `load` can decrypt. This does not check
+ * whether a secret exists; use `Vault.has` / `Vault.keys` for that.
+ */
+export declare function hasIdentity(): boolean
 
 /** Load a murk vault. Reads MURK_KEY from the environment. */
 export declare function load(vaultPath?: string | undefined | null): Vault

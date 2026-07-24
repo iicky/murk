@@ -56,6 +56,8 @@ The module is imported as `murk` even though the package is `murk-secrets`.
 
 ### API
 
+> Every decrypted value murk returns is a plain host-language string; see [Decrypted values in memory](#decrypted-values-in-memory) for the lifetime caveat.
+
 #### Functions
 
 | Function | Returns | Description |
@@ -63,7 +65,7 @@ The module is imported as `murk` even though the package is `murk-secrets`.
 | `murk.load(vault_path=".murk")` | `Vault` | Load and decrypt a vault |
 | `murk.get(key, vault_path=".murk")` | `str \| None` | One-liner: load, then read one key |
 | `murk.export_all(vault_path=".murk")` | `dict[str, str]` | One-liner: load, then export everything |
-| `murk.has_key()` | `bool` | Whether a `MURK_KEY` / `MURK_KEY_FILE` is set |
+| `murk.has_identity()` | `bool` | Whether a decryption identity is available (can `load` decrypt?) |
 
 #### The `Vault` object
 
@@ -104,6 +106,8 @@ exportAll();
 
 ### API
 
+> Every decrypted value murk returns is a plain host-language string; see [Decrypted values in memory](#decrypted-values-in-memory) for the lifetime caveat.
+
 #### Functions
 
 | Function | Returns | Description |
@@ -111,7 +115,7 @@ exportAll();
 | `load(vaultPath?)` | `Vault` | Load and decrypt a vault |
 | `get(key, vaultPath?)` | `string \| null` | One-liner: load, then read one key |
 | `exportAll(vaultPath?)` | `Record<string, string>` | One-liner: load, then export everything |
-| `hasKey()` | `boolean` | Whether a `MURK_KEY` / `MURK_KEY_FILE` is set |
+| `hasIdentity()` | `boolean` | Whether a decryption identity is available (can `load` decrypt?) |
 
 #### The `Vault` object
 

@@ -1,7 +1,7 @@
 //! Node.js/TypeScript bindings for murk via napi-rs.
 //!
 //! ```typescript
-//! import { load, get, exportAll, hasKey } from '@iicky/murk-secrets'
+//! import { load, get, exportAll, hasIdentity } from '@iicky/murk-secrets'
 //!
 //! const vault = load()              // reads MURK_KEY from env, .murk from cwd
 //! vault.get('DATABASE_URL')         // decrypt a single value
@@ -116,8 +116,10 @@ pub fn export_all(vault_path: Option<String>) -> napi::Result<HashMap<String, St
     load(vault_path)?.export()
 }
 
-/// Check if a MURK_KEY is available in the environment.
+/// Whether a decryption identity (`MURK_KEY` / `MURK_KEY_FILE`) is available in
+/// the environment — i.e. whether `load` can decrypt. This does not check
+/// whether a secret exists; use `Vault.has` / `Vault.keys` for that.
 #[napi]
-pub fn has_key() -> bool {
+pub fn has_identity() -> bool {
     murk_cli::resolve_key().is_ok()
 }
