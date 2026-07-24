@@ -39,7 +39,9 @@ Pre-built binaries are available for Linux (x86_64, aarch64, armhf), macOS
 murk is also published to npm as
 [`@iicky/murk-secrets`](https://www.npmjs.com/package/@iicky/murk-secrets) and
 to PyPI as [`murk-secrets`](https://pypi.org/project/murk-secrets/), if either
-fits your project's toolchain better than a system-wide binary.
+fits your project's toolchain better than a system-wide binary. Both are
+read-only bindings for reading vault secrets from your code — see
+[Library bindings](/reference/bindings/) for the API and usage.
 
 ## Verify your download
 
