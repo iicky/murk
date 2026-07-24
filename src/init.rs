@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn discover_existing_key_ignores_dotenv() {
-        // murk-82q: discover_existing_key must not read .env from CWD, even
+        // discover_existing_key must not read .env from CWD, even
         // in the init flow. A .env sitting in the current directory with an
         // inline MURK_KEY is explicitly *not* a trusted input source.
         let _lock = ENV_LOCK

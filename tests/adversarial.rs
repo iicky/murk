@@ -247,7 +247,7 @@ fn symlinked_vault_does_not_autodiscover_target_key() {
 #[cfg(unix)]
 #[test]
 fn copied_vault_cannot_borrow_key_via_dotenv() {
-    // murk-82q regression: copying a vault into repoB along with a .env that
+    // Regression: copying a vault into repoB along with a .env that
     // inlines repoA's MURK_KEY (or a MURK_KEY_FILE reference) must NOT let
     // repoB decrypt the copied vault. Runtime key resolution ignores .env —
     // the environment is the only trusted source.

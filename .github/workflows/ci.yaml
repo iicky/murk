@@ -40,6 +40,10 @@ jobs:
         run: cargo run --features doc-gen --bin gen-docs -- --check
       - name: Check guide examples map to real commands and tested demo flows
         run: node scripts/check-guide-commands.cjs
+      - name: Check for stray local-only reference IDs in committed files
+        run: |
+          node scripts/check-no-local-refs.cjs --self-test
+          node scripts/check-no-local-refs.cjs
 
   msrv:
     name: MSRV

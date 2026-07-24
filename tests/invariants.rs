@@ -1,7 +1,7 @@
 //! Source-level invariants that generic lints (clippy, fmt, cargo-deny) can't
 //! express. These scan the crate source as text — cheap, deterministic, and they
 //! fail fast when an agent or human violates a secret-handling rule that code
-//! review might miss. See murk-p9o.2.
+//! review might miss.
 //!
 //! Adding a rule here is the cheapest way to make a murk-specific invariant
 //! self-enforcing. Keep each rule precise: a false positive trains people to

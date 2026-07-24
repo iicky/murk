@@ -1427,7 +1427,7 @@ fn cmd_exec(
         // the plaintext into the block passed to `execve(2)`; that copy lives in
         // the kernel/child and is outside our control, so it is intentionally
         // not zeroized here. This is the documented boundary of best-effort
-        // zeroization (see murk-w9b).
+        // zeroization.
         cmd.envs(&secrets);
     };
 
@@ -2605,7 +2605,7 @@ fn cmd_scan(paths: &[String], vault_path: &str) {
     }
 }
 
-/// Run the MCP (Model Context Protocol) stdio server (murk-qu2.5).
+/// Run the MCP (Model Context Protocol) stdio server.
 ///
 /// Fails closed unless this is a scoped *agent* identity — a grant key plus
 /// `MURK_AGENT=1`. Running the server with the operator's stored key (or any
@@ -3778,7 +3778,7 @@ fn run() {
 
 #[cfg(test)]
 mod cli_structure {
-    //! Structural guards over the clap command tree (murk-p9o.3).
+    //! Structural guards over the clap command tree.
     //!
     //! murk keeps each command's handler in a flat `cmd_<name>` function
     //! dispatched from the exhaustive `match` in [`run`], so "every subcommand

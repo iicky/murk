@@ -15,13 +15,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/iicky/murk"
 keywords = ["secrets", "encryption", "age", "dotenv", "security"]
 categories = ["command-line-utilities", "cryptography"]
-exclude = ["CLAUDE.md", "AGENTS.md", "SPEC.md", ".beads/"]
+exclude = ["CLAUDE.md", "AGENTS.md", "SPEC.md"]
 
 [lints.clippy]
 # Secret-handling guardrail: dbg! prints the Debug of any value — including a
 # decrypted secret — and must never ship. It is allow-by-default (restriction
 # group), so `-D warnings` alone won't catch it; deny it explicitly. Source-level
-# invariants clippy can't express live in tests/invariants.rs. (murk-p9o.2)
+# invariants clippy can't express live in tests/invariants.rs.
 dbg_macro = "deny"
 
 [lib]
@@ -71,7 +71,7 @@ pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"], optiona
 walkdir = "2.5.0"
 zeroize = "1"
 # `murk mcp` — an in-process MCP (Model Context Protocol) stdio server for AI
-# agents (murk-qu2.5). rmcp is the official Rust MCP SDK; tokio + tracing are
+# agents. rmcp is the official Rust MCP SDK; tokio + tracing are
 # scoped to that subcommand only (the rest of murk stays sync). Default features
 # (incl. base64) are off — we only need the server, tool macros, the stdio
 # transport, and JSON-schema generation for tool parameters. schemars is a direct
