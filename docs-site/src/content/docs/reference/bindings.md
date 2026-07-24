@@ -56,6 +56,8 @@ The module is imported as `murk` even though the package is `murk-secrets`.
 
 ### API
 
+#### Functions
+
 | Function | Returns | Description |
 |---|---|---|
 | `murk.load(vault_path=".murk")` | `Vault` | Load and decrypt a vault |
@@ -63,7 +65,9 @@ The module is imported as `murk` even though the package is `murk-secrets`.
 | `murk.export_all(vault_path=".murk")` | `dict[str, str]` | One-liner: load, then export everything |
 | `murk.has_key()` | `bool` | Whether a `MURK_KEY` / `MURK_KEY_FILE` is set |
 
-| `Vault` member | Returns | Description |
+#### The `Vault` object
+
+| Member | Returns | Description |
 |---|---|---|
 | `vault.get(key)` | `str \| None` | Decrypted value, or `None` if the key is absent |
 | `vault.export()` | `dict[str, str]` | All readable secrets |
@@ -100,6 +104,8 @@ exportAll();
 
 ### API
 
+#### Functions
+
 | Function | Returns | Description |
 |---|---|---|
 | `load(vaultPath?)` | `Vault` | Load and decrypt a vault |
@@ -107,7 +113,9 @@ exportAll();
 | `exportAll(vaultPath?)` | `Record<string, string>` | One-liner: load, then export everything |
 | `hasKey()` | `boolean` | Whether a `MURK_KEY` / `MURK_KEY_FILE` is set |
 
-| `Vault` member | Returns | Description |
+#### The `Vault` object
+
+| Member | Returns | Description |
 |---|---|---|
 | `vault.get(key)` | `string \| null` | Decrypted value, or `null` if the key is absent |
 | `vault.export()` | `Record<string, string>` | All readable secrets |
