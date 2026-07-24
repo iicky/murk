@@ -112,7 +112,7 @@ fn init_existing_vault_no_key() {
 
 #[test]
 fn init_existing_vault_ignores_dotenv() {
-    // murk-82q: .env is no longer a trusted runtime input. With MURK_KEY and
+    // .env is no longer a trusted runtime input. With MURK_KEY and
     // MURK_KEY_FILE both absent from the environment, init must NOT silently
     // authorize by reading .env from the current directory.
     let dir = TempDir::new().unwrap();
@@ -2886,7 +2886,7 @@ fn agent_exec_sets_murk_agent_for_child() {
         .assert()
         .success();
 
-    // murk-qu2.1: agent exec marks the child as an agent context so a nested
+    // agent exec marks the child as an agent context so a nested
     // `murk` invocation defaults to strict and cannot auto-discover the
     // operator's stored key via the preserved HOME.
     let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();

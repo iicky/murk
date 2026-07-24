@@ -817,7 +817,7 @@ mod tests {
 
     #[test]
     fn resolve_key_does_not_read_dotenv() {
-        // Confirms the murk-82q fix: even if .env sits in CWD with an inline
+        // Even if .env sits in CWD with an inline
         // MURK_KEY, resolve_key_with_source must not pick it up. The runtime
         // only trusts the environment and the vault-keyed auto lookup.
         //
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn resolve_key_agent_context_disables_auto_fallback() {
-        // Regression test for murk-qu2.1: agent context (MURK_AGENT=1) must
+        // Regression test: agent context (MURK_AGENT=1) must
         // not silently fall back to the operator's stored key in
         // ~/.config/murk/keys, even when a valid key sits at the
         // auto-discovery path. This is a security fix, not a convenience
