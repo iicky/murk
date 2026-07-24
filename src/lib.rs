@@ -50,6 +50,11 @@ mod python;
 #[cfg(test)]
 pub mod testutil;
 
+// Property-based invariant tests (crypto roundtrip, tamper-evidence, scope
+// isolation). Kept in their own file so lib.rs doesn't grow.
+#[cfg(test)]
+mod property_tests;
+
 // Re-exports: keep the flat murk_cli::foo() API for main.rs
 pub use agent::{AgentPlan, AgentPlanKey, agent_plan, format_agent_plan_text};
 pub use env::{

@@ -98,6 +98,10 @@ doc-gen = ["dep:clap-markdown", "dep:clap_mangen"]
 assert_cmd = "2"
 assert_fs = "1"
 predicates = "3"
+# Property-based invariant tests (roundtrip, tamper-evidence, scope isolation)
+# for the crypto/MAC core — see src/property_tests.rs. Also the corpus that a
+# `cargo mutants` run should not leave survivors in.
+proptest = "1"
 # Client-side rmcp, test-only: an integration test drives `murk mcp` as a child
 # process over the official SDK's MCP client. Cargo unions these with the
 # server-side features above for test builds; a normal/release build ignores

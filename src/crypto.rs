@@ -498,6 +498,18 @@ mod tests {
     }
 
     #[test]
+    fn is_signing_capable_by_identity_kind() {
+        // Native age keys are signing-capable.
+        let (secret, _) = generate_keypair();
+        assert!(parse_identity(&secret).unwrap().is_signing_capable());
+
+        // Plugin/hardware identities cannot sign — no exposed signing scalar.
+        let (identity_str, pubkey_str) = make_plugin_pair("yubikey");
+        let file = format!("# public key: {pubkey_str}\n{identity_str}\n");
+        assert!(!parse_identity(&file).unwrap().is_signing_capable());
+    }
+
+    #[test]
     fn parse_identity_plugin_file_missing_pubkey_header() {
         let (identity_str, _) = make_plugin_pair("yubikey");
         let err = parse_identity(&format!("{identity_str}\n"))
