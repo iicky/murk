@@ -112,6 +112,12 @@ _murk() {
             murk,verify)
                 cmd="murk__subcmd__verify"
                 ;;
+            murk__subcmd__agent,connect)
+                cmd="murk__subcmd__agent__subcmd__connect"
+                ;;
+            murk__subcmd__agent,disconnect)
+                cmd="murk__subcmd__agent__subcmd__disconnect"
+                ;;
             murk__subcmd__agent,exec)
                 cmd="murk__subcmd__agent__subcmd__exec"
                 ;;
@@ -132,6 +138,12 @@ _murk() {
                 ;;
             murk__subcmd__agent,revoke)
                 cmd="murk__subcmd__agent__subcmd__revoke"
+                ;;
+            murk__subcmd__agent__subcmd__help,connect)
+                cmd="murk__subcmd__agent__subcmd__help__subcmd__connect"
+                ;;
+            murk__subcmd__agent__subcmd__help,disconnect)
+                cmd="murk__subcmd__agent__subcmd__help__subcmd__disconnect"
                 ;;
             murk__subcmd__agent__subcmd__help,exec)
                 cmd="murk__subcmd__agent__subcmd__help__subcmd__exec"
@@ -316,6 +328,12 @@ _murk() {
             murk__subcmd__help,verify)
                 cmd="murk__subcmd__help__subcmd__verify"
                 ;;
+            murk__subcmd__help__subcmd__agent,connect)
+                cmd="murk__subcmd__help__subcmd__agent__subcmd__connect"
+                ;;
+            murk__subcmd__help__subcmd__agent,disconnect)
+                cmd="murk__subcmd__help__subcmd__agent__subcmd__disconnect"
+                ;;
             murk__subcmd__help__subcmd__agent,exec)
                 cmd="murk__subcmd__help__subcmd__agent__subcmd__exec"
                 ;;
@@ -442,12 +460,68 @@ _murk() {
             return 0
             ;;
         murk__subcmd__agent)
-            opts="-h --help plan exec grant init ls revoke help"
+            opts="-h --help plan exec grant init ls revoke connect disconnect help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__agent__subcmd__connect)
+            opts="-h --only --allow-tag --allow-exec --ttl --name --vault --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --only)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --allow-tag)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --ttl)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --vault)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__agent__subcmd__disconnect)
+            opts="-h --rotate --name --vault --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --name)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --vault)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -512,8 +586,36 @@ _murk() {
             return 0
             ;;
         murk__subcmd__agent__subcmd__help)
-            opts="plan exec grant init ls revoke help"
+            opts="plan exec grant init ls revoke connect disconnect help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__agent__subcmd__help__subcmd__connect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__agent__subcmd__help__subcmd__disconnect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1382,8 +1484,36 @@ _murk() {
             return 0
             ;;
         murk__subcmd__help__subcmd__agent)
-            opts="plan exec grant init ls revoke"
+            opts="plan exec grant init ls revoke connect disconnect"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__help__subcmd__agent__subcmd__connect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        murk__subcmd__help__subcmd__agent__subcmd__disconnect)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

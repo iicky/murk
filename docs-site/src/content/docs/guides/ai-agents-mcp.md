@@ -210,6 +210,31 @@ never be handed your full read scope.
 MURK_KEY_FILE=~/.config/murk/agent-keys/<...>-codex MURK_AGENT=1 murk mcp
 ```
 
+### One-command wiring: `murk agent connect`
+
+Rather than hand-edit each editor's MCP config, let murk do it — minting the
+grant and writing the config in one step:
+
+```bash
+# Auto-detect the editors this repo uses and wire them all:
+murk agent connect --only STRIPE_SECRET_KEY --only DATABASE_URL --ttl 2h
+
+# ...or target one (claude, cursor, vscode):
+murk agent connect cursor --only STRIPE_SECRET_KEY
+```
+
+`connect` mints one scoped grant for the vault and writes each editor's
+project-local config — Claude Code `.mcp.json`, Cursor `.cursor/mcp.json`,
+VS Code `.vscode/mcp.json` — pointing at `murk mcp` with `MURK_KEY_FILE` and
+`MURK_AGENT=1`. It writes only a key-file **path**, never key material, and
+preserves any other servers and comments already in the file. Add
+`--allow-exec` to also expose the exec tool. Because these files are often
+committed, murk warns and offers to add the path to `.gitignore`.
+
+`murk agent disconnect [CLIENT]` removes only murk's entry, leaving other
+servers untouched; add `--rotate` to revoke the grant and rotate the keys it
+could read.
+
 The server speaks JSON-RPC over stdout and logs only to stderr, so point
 your MCP client at that command with `MURK_KEY_FILE` and `MURK_AGENT=1` in
 its environment. It exposes two always-on read tools bounded to the grant,
@@ -251,8 +276,9 @@ model), but `murk_exec` (when enabled) runs real commands as your user, so
 treat it like `murk agent exec`: a safe default, not a sandbox, with
 OS-level isolation the real boundary (see
 [Short-lived agent grants](#short-lived-agent-grants), above).
-Harness-specific wiring (e.g. an `.omp/mcp.json` entry) lives in that
-harness's setup docs.
+For an editor murk doesn't wire automatically yet, add the same `murk mcp`
+entry (with `MURK_KEY_FILE` and `MURK_AGENT=1`) to that harness's MCP config
+by hand.
 
 ## Check the code an agent wrote
 

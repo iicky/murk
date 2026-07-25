@@ -262,6 +262,29 @@ _arguments "${_arguments_options[@]}" : \
 ':name -- Grant name:_default' \
 && ret=0
 ;;
+(connect)
+_arguments "${_arguments_options[@]}" : \
+'*--only=[Keys the agent may read (required — fails closed)]:ONLY:_default' \
+'*--allow-tag=[Set the agent allow-list to these tags before granting (repeatable)]:ALLOW_TAG:_default' \
+'--ttl=[Grant time to live, e.g. 30m, 2h, 7d (advisory — see \`agent revoke\`)]:TTL:_default' \
+'--name=[Grant name (used to disconnect/revoke it later)]:NAME:_default' \
+'--vault=[Vault filename]:VAULT:_default' \
+'--allow-exec[Also expose \`murk agent exec\` to the agent (adds --allow-exec)]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::client -- Editor to configure; omit to auto-detect (claude, cursor, vscode):_default' \
+&& ret=0
+;;
+(disconnect)
+_arguments "${_arguments_options[@]}" : \
+'--name=[Grant name to revoke with --rotate]:NAME:_default' \
+'--vault=[Vault filename]:VAULT:_default' \
+'--rotate[Revoke the grant and rotate the keys it could read]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::client -- Editor to disconnect; omit for every configured editor:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_murk__subcmd__agent__subcmd__help_commands" \
@@ -295,6 +318,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (revoke)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(connect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disconnect)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -791,6 +822,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(connect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disconnect)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -1004,9 +1043,21 @@ _murk__subcmd__agent_commands() {
 'init:One-shot onboarding\: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely' \
 'ls:List active agent grants and their TTLs' \
 'revoke:Revoke an agent grant and rotate the keys it could read' \
+'connect:Wire \`murk mcp\` into an AI editor'\''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it' \
+'disconnect:Remove murk'\''s entry from an AI editor'\''s MCP config. No CLIENT clears every configured editor; \`--rotate\` also revokes the grant and rotates its keys' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'murk agent commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__agent__subcmd__connect_commands] )) ||
+_murk__subcmd__agent__subcmd__connect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk agent connect commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__agent__subcmd__disconnect_commands] )) ||
+_murk__subcmd__agent__subcmd__disconnect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk agent disconnect commands' commands "$@"
 }
 (( $+functions[_murk__subcmd__agent__subcmd__exec_commands] )) ||
 _murk__subcmd__agent__subcmd__exec_commands() {
@@ -1027,9 +1078,21 @@ _murk__subcmd__agent__subcmd__help_commands() {
 'init:One-shot onboarding\: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely' \
 'ls:List active agent grants and their TTLs' \
 'revoke:Revoke an agent grant and rotate the keys it could read' \
+'connect:Wire \`murk mcp\` into an AI editor'\''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it' \
+'disconnect:Remove murk'\''s entry from an AI editor'\''s MCP config. No CLIENT clears every configured editor; \`--rotate\` also revokes the grant and rotates its keys' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'murk agent help commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__agent__subcmd__help__subcmd__connect_commands] )) ||
+_murk__subcmd__agent__subcmd__help__subcmd__connect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk agent help connect commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__agent__subcmd__help__subcmd__disconnect_commands] )) ||
+_murk__subcmd__agent__subcmd__help__subcmd__disconnect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk agent help disconnect commands' commands "$@"
 }
 (( $+functions[_murk__subcmd__agent__subcmd__help__subcmd__exec_commands] )) ||
 _murk__subcmd__agent__subcmd__help__subcmd__exec_commands() {
@@ -1341,8 +1404,20 @@ _murk__subcmd__help__subcmd__agent_commands() {
 'init:One-shot onboarding\: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely' \
 'ls:List active agent grants and their TTLs' \
 'revoke:Revoke an agent grant and rotate the keys it could read' \
+'connect:Wire \`murk mcp\` into an AI editor'\''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it' \
+'disconnect:Remove murk'\''s entry from an AI editor'\''s MCP config. No CLIENT clears every configured editor; \`--rotate\` also revokes the grant and rotates its keys' \
     )
     _describe -t commands 'murk help agent commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__help__subcmd__agent__subcmd__connect_commands] )) ||
+_murk__subcmd__help__subcmd__agent__subcmd__connect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk help agent connect commands' commands "$@"
+}
+(( $+functions[_murk__subcmd__help__subcmd__agent__subcmd__disconnect_commands] )) ||
+_murk__subcmd__help__subcmd__agent__subcmd__disconnect_commands() {
+    local commands; commands=()
+    _describe -t commands 'murk help agent disconnect commands' commands "$@"
 }
 (( $+functions[_murk__subcmd__help__subcmd__agent__subcmd__exec_commands] )) ||
 _murk__subcmd__help__subcmd__agent__subcmd__exec_commands() {

@@ -180,6 +180,8 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'murk;agent;plan'= {
@@ -228,6 +230,23 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand -h 'Print help'
             cand --help 'Print help'
         }
+        &'murk;agent;connect'= {
+            cand --only 'Keys the agent may read (required — fails closed)'
+            cand --allow-tag 'Set the agent allow-list to these tags before granting (repeatable)'
+            cand --ttl 'Grant time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)'
+            cand --name 'Grant name (used to disconnect/revoke it later)'
+            cand --vault 'Vault filename'
+            cand --allow-exec 'Also expose `murk agent exec` to the agent (adds --allow-exec)'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'murk;agent;disconnect'= {
+            cand --name 'Grant name to revoke with --rotate'
+            cand --vault 'Vault filename'
+            cand --rotate 'Revoke the grant and rotate the keys it could read'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
         &'murk;agent;help'= {
             cand plan 'Emit schema-only context safe to paste into an AI agent prompt'
             cand exec 'Run a command with strict agent-safe defaults (clears the inherited environment, strips MURK_KEY, requires --only)'
@@ -235,6 +254,8 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'murk;agent;help;plan'= {
@@ -248,6 +269,10 @@ set edit:completion:arg-completer[murk] = {|@words|
         &'murk;agent;help;ls'= {
         }
         &'murk;agent;help;revoke'= {
+        }
+        &'murk;agent;help;connect'= {
+        }
+        &'murk;agent;help;disconnect'= {
         }
         &'murk;agent;help;help'= {
         }
@@ -525,6 +550,8 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
         }
         &'murk;help;agent;plan'= {
         }
@@ -537,6 +564,10 @@ set edit:completion:arg-completer[murk] = {|@words|
         &'murk;help;agent;ls'= {
         }
         &'murk;help;agent;revoke'= {
+        }
+        &'murk;help;agent;connect'= {
+        }
+        &'murk;help;agent;disconnect'= {
         }
         &'murk;help;mcp'= {
         }
