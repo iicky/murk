@@ -2837,6 +2837,238 @@ fn print_grant_handoff(only: &[String], key_path: &str) {
     );
 }
 
+/// The project root for MCP configs: the directory holding the vault.
+fn project_dir_of(vault_path: &str) -> std::path::PathBuf {
+    Path::new(vault_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// A project-local MCP config is often committed. It only ever holds a
+/// machine-specific key-file *path* (never key material), but committing it is
+/// per-machine noise and leaks the grant name — so warn, and offer to ignore it.
+fn offer_gitignore(project_dir: &Path, config_path: &Path) {
+    let Ok(rel) = config_path.strip_prefix(project_dir) else {
+        return;
+    };
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    let gitignore = project_dir.join(".gitignore");
+    let existing = fs::read_to_string(&gitignore).unwrap_or_default();
+    let already = existing.lines().any(|l| {
+        let l = l.trim();
+        l == rel || l == format!("/{rel}")
+    });
+    if already {
+        return;
+    }
+    eprintln!(
+        "  {} {} is project-local; committing it shares a machine path and the grant name",
+        "⚠".yellow(),
+        rel.bold()
+    );
+    if io::stdin().is_terminal() && confirm(&format!("add {rel} to .gitignore?")) {
+        let mut content = existing;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&rel);
+        content.push('\n');
+        match fs::write(&gitignore, content) {
+            Ok(()) => eprintln!("  {} added {} to .gitignore", "ok".green(), rel.bold()),
+            Err(e) => eprintln!("  {} could not update .gitignore: {e}", "✗".red()),
+        }
+    }
+}
+
+fn cmd_agent_connect(
+    client: Option<&str>,
+    only: &[String],
+    allow_tag: &[String],
+    allow_exec: bool,
+    ttl: &str,
+    name: &str,
+    vault_path: &str,
+) {
+    use murk_cli::connect;
+    let project_dir = project_dir_of(vault_path);
+    let known = || {
+        connect::ADAPTERS
+            .iter()
+            .map(|a| a.id)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let targets: Vec<&connect::ClientAdapter> = match client {
+        Some(id) => vec![connect::adapter(id).unwrap_or_else(|| {
+            die(
+                &format_args!("unknown editor '{id}' — known: {}", known()),
+                2,
+            )
+        })],
+        None => {
+            let found = connect::detect(&project_dir);
+            if found.is_empty() {
+                die(
+                    &format_args!("no AI editor config detected here — name one: {}", known()),
+                    1,
+                );
+            }
+            found
+        }
+    };
+
+    // One scoped grant for the vault; every target editor points at its key file.
+    // A second connect reuses the existing grant rather than re-minting, but only
+    // when the requested scope matches — an editor never silently gets a grant
+    // wider or narrower than the command line asked for.
+    let allow = (!allow_tag.is_empty()).then_some(allow_tag);
+    let (_v, existing, _id) = load_vault(vault_path);
+    let key_path = if let Some(entry) = existing.grants.get(name) {
+        let norm = |xs: &[String]| {
+            let mut v: Vec<String> = xs.to_vec();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        if norm(only) != norm(&entry.scope) {
+            die(
+                &format_args!(
+                    "grant '{name}' already exists scoped to [{}] — run `murk agent disconnect --name {name} --rotate` to re-scope",
+                    entry.scope.join(", ")
+                ),
+                1,
+            );
+        }
+        if !allow_tag.is_empty() {
+            eprintln!(
+                "  {} grant {} already exists — --allow-tag not re-applied",
+                "⚠".yellow(),
+                name.bold()
+            );
+        }
+        let p = try_or_die(murk_cli::agent_key_file_path(vault_path, name));
+        if !p.exists() {
+            die(
+                &format_args!(
+                    "grant '{name}' exists but its key file is gone — `murk agent disconnect --name {name} --rotate`, then reconnect"
+                ),
+                1,
+            );
+        }
+        eprintln!(
+            "{} reusing grant {} ({} key{})",
+            "◆".magenta(),
+            name.bold(),
+            entry.scope.len(),
+            if entry.scope.len() == 1 { "" } else { "s" }
+        );
+        p.display().to_string()
+    } else {
+        let Some(p) = mint_grant(name, only, ttl, None, allow, vault_path) else {
+            return;
+        };
+        p
+    };
+    let extra_args: Vec<String> = allow_exec
+        .then(|| "--allow-exec".to_string())
+        .into_iter()
+        .collect();
+
+    eprintln!();
+    let mut failed = false;
+    for adapter in &targets {
+        match connect::connect_client(adapter, &project_dir, &key_path, &extra_args) {
+            Ok(outcome) => {
+                eprintln!(
+                    "{} {} — {} {}",
+                    "ok".green().bold(),
+                    adapter.display.bold(),
+                    if outcome.created {
+                        "created"
+                    } else {
+                        "updated"
+                    },
+                    outcome.path.display().to_string().dimmed()
+                );
+                offer_gitignore(&project_dir, &outcome.path);
+            }
+            Err(e) => {
+                eprintln!("{} {}: {e}", "✗".red(), adapter.display);
+                failed = true;
+            }
+        }
+    }
+
+    eprintln!();
+    eprintln!(
+        "  {}",
+        format!(
+            "restart the editor to load the server; remove it with `murk agent disconnect --name {name}`"
+        )
+        .dimmed()
+    );
+    print_ttl_advisory();
+    if failed {
+        process::exit(1);
+    }
+}
+
+fn cmd_agent_disconnect(client: Option<&str>, rotate: bool, name: &str, vault_path: &str) {
+    use murk_cli::connect;
+    let project_dir = project_dir_of(vault_path);
+    let targets: Vec<&connect::ClientAdapter> = match client {
+        Some(id) => vec![connect::adapter(id).unwrap_or_else(|| {
+            let known = connect::ADAPTERS
+                .iter()
+                .map(|a| a.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            die(&format_args!("unknown editor '{id}' — known: {known}"), 2)
+        })],
+        None => connect::ADAPTERS.iter().collect(),
+    };
+
+    let mut removed_any = false;
+    let mut failed = false;
+    for adapter in &targets {
+        match connect::disconnect_client(adapter, &project_dir) {
+            Ok(Some(path)) => {
+                removed_any = true;
+                eprintln!(
+                    "{} {} — removed murk from {}",
+                    "ok".green().bold(),
+                    adapter.display.bold(),
+                    path.display().to_string().dimmed()
+                );
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("{} {}: {e}", "✗".red(), adapter.display);
+                failed = true;
+            }
+        }
+    }
+    if !removed_any {
+        eprintln!("{} no murk MCP entries found to remove", "◆".magenta());
+    }
+
+    if rotate {
+        eprintln!();
+        cmd_agent_revoke(name, true, vault_path);
+    } else {
+        eprintln!(
+            "  {}",
+            format!("the grant is still live — add --rotate (or `murk agent revoke {name} --rotate`) to close it")
+                .dimmed()
+        );
+    }
+    if failed {
+        process::exit(1);
+    }
+}
+
 fn cmd_agent_init(
     name: &str,
     only: &[String],
@@ -3762,6 +3994,34 @@ fn run() {
                 rotate,
                 vault,
             } => cmd_agent_revoke(&name, rotate, &murk_cli::resolve_vault_path(&vault)),
+            AgentCommand::Connect {
+                client,
+                only,
+                allow_tag,
+                allow_exec,
+                ttl,
+                name,
+                vault,
+            } => cmd_agent_connect(
+                client.as_deref(),
+                &only,
+                &allow_tag,
+                allow_exec,
+                &ttl,
+                &name,
+                &murk_cli::resolve_vault_path(&vault),
+            ),
+            AgentCommand::Disconnect {
+                client,
+                rotate,
+                name,
+                vault,
+            } => cmd_agent_disconnect(
+                client.as_deref(),
+                rotate,
+                &name,
+                &murk_cli::resolve_vault_path(&vault),
+            ),
         },
         Command::Scan { paths, vault } => {
             cmd_scan(&paths, &murk_cli::resolve_vault_path(&vault));

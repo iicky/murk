@@ -31,6 +31,8 @@ This document contains the help content for the `murk` command-line program.
 * [`murk agent init`↴](#murk-agent-init)
 * [`murk agent ls`↴](#murk-agent-ls)
 * [`murk agent revoke`↴](#murk-agent-revoke)
+* [`murk agent connect`↴](#murk-agent-connect)
+* [`murk agent disconnect`↴](#murk-agent-disconnect)
 * [`murk mcp`↴](#murk-mcp)
 * [`murk policy`↴](#murk-policy)
 * [`murk policy show`↴](#murk-policy-show)
@@ -413,6 +415,8 @@ Agent-oriented commands (schema-only output for AI agent prompts)
 * `init` — One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely
 * `ls` — List active agent grants and their TTLs
 * `revoke` — Revoke an agent grant and rotate the keys it could read
+* `connect` — Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it
+* `disconnect` — Remove murk's entry from an AI editor's MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys
 
 
 
@@ -521,6 +525,55 @@ Revoke an agent grant and rotate the keys it could read
 ###### **Options:**
 
 * `--rotate` — Rotate the keys it could read in the same session
+* `--vault <VAULT>` — Vault filename
+
+  Default value: `.murk`
+
+
+
+## `murk agent connect`
+
+Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it
+
+**Usage:** `murk agent connect [OPTIONS] --only <ONLY> [CLIENT]`
+
+###### **Arguments:**
+
+* `<CLIENT>` — Editor to configure; omit to auto-detect (claude, cursor, vscode)
+
+###### **Options:**
+
+* `--only <ONLY>` — Keys the agent may read (required — fails closed)
+* `--allow-tag <ALLOW_TAG>` — Set the agent allow-list to these tags before granting (repeatable)
+* `--allow-exec` — Also expose `murk agent exec` to the agent (adds --allow-exec)
+* `--ttl <TTL>` — Grant time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)
+
+  Default value: `2h`
+* `--name <NAME>` — Grant name (used to disconnect/revoke it later)
+
+  Default value: `mcp`
+* `--vault <VAULT>` — Vault filename
+
+  Default value: `.murk`
+
+
+
+## `murk agent disconnect`
+
+Remove murk's entry from an AI editor's MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys
+
+**Usage:** `murk agent disconnect [OPTIONS] [CLIENT]`
+
+###### **Arguments:**
+
+* `<CLIENT>` — Editor to disconnect; omit for every configured editor
+
+###### **Options:**
+
+* `--rotate` — Revoke the grant and rotate the keys it could read
+* `--name <NAME>` — Grant name to revoke with --rotate
+
+  Default value: `mcp`
 * `--vault <VAULT>` — Vault filename
 
   Default value: `.murk`

@@ -20,6 +20,7 @@
 pub(crate) mod agent;
 pub mod cli;
 pub(crate) mod codename;
+pub mod connect;
 pub mod crypto;
 pub mod edit;
 pub(crate) mod env;

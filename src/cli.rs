@@ -507,6 +507,48 @@ pub enum AgentCommand {
         #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
         vault: String,
     },
+
+    /// Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant.
+    /// No CLIENT auto-detects installed editors; give one (claude, cursor,
+    /// vscode) to target it.
+    Connect {
+        /// Editor to configure; omit to auto-detect (claude, cursor, vscode)
+        client: Option<String>,
+        /// Keys the agent may read (required — fails closed)
+        #[arg(long, required = true)]
+        only: Vec<String>,
+        /// Set the agent allow-list to these tags before granting (repeatable)
+        #[arg(long = "allow-tag")]
+        allow_tag: Vec<String>,
+        /// Also expose `murk agent exec` to the agent (adds --allow-exec)
+        #[arg(long)]
+        allow_exec: bool,
+        /// Grant time to live, e.g. 30m, 2h, 7d (advisory — see `agent revoke`)
+        #[arg(long, default_value = "2h")]
+        ttl: String,
+        /// Grant name (used to disconnect/revoke it later)
+        #[arg(long, default_value = "mcp")]
+        name: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
+
+    /// Remove murk's entry from an AI editor's MCP config. No CLIENT clears every
+    /// configured editor; `--rotate` also revokes the grant and rotates its keys.
+    Disconnect {
+        /// Editor to disconnect; omit for every configured editor
+        client: Option<String>,
+        /// Revoke the grant and rotate the keys it could read
+        #[arg(long)]
+        rotate: bool,
+        /// Grant name to revoke with --rotate
+        #[arg(long, default_value = "mcp")]
+        name: String,
+        /// Vault filename
+        #[arg(long, env = "MURK_VAULT", default_value = ".murk")]
+        vault: String,
+    },
 }
 
 #[derive(Subcommand)]
