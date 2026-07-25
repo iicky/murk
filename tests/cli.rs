@@ -5098,3 +5098,103 @@ fn mcp_exec_output_is_capped() {
                 .and(predicate::str::contains(r#"\"truncated\": true"#)),
         );
 }
+
+// ── agent connect / disconnect (MCP editor wiring) ──
+
+#[test]
+fn agent_connect_and_disconnect_wire_mcp_config() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+
+    // A secret to scope the grant to.
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("sk-secret\n")
+        .assert()
+        .success();
+
+    // connect cursor: mints a scoped grant and writes .cursor/mcp.json.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "connect",
+            "cursor",
+            "--only",
+            "API_KEY",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    let cfg = dir.path().join(".cursor/mcp.json");
+    let body = fs::read_to_string(&cfg).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["mcpServers"]["murk"]["command"], "murk");
+    assert_eq!(v["mcpServers"]["murk"]["args"][0], "mcp");
+    assert_eq!(v["mcpServers"]["murk"]["env"]["MURK_AGENT"], "1");
+    assert!(
+        v["mcpServers"]["murk"]["env"]["MURK_KEY_FILE"].is_string(),
+        "config must reference a key-file path"
+    );
+    // The config must carry only a path, never inline key material.
+    assert!(
+        !body.contains("AGE-SECRET-KEY"),
+        "config must never contain key material"
+    );
+
+    // disconnect removes murk's entry, leaving the container in place.
+    murk(&dir, &key)
+        .args(["agent", "disconnect", "cursor", "--vault", "test.murk"])
+        .assert()
+        .success();
+    let after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&cfg).unwrap()).unwrap();
+    assert!(
+        after["mcpServers"]["murk"].is_null(),
+        "disconnect must remove the murk entry"
+    );
+}
+
+#[test]
+fn agent_connect_rejects_scope_mismatch_on_reuse() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+    for k in ["API_KEY", "DB_URL"] {
+        murk(&dir, &key)
+            .args(["add", k, "--vault", "test.murk"])
+            .write_stdin("v\n")
+            .assert()
+            .success();
+    }
+
+    // First connect mints grant "mcp" scoped to API_KEY.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "connect",
+            "cursor",
+            "--only",
+            "API_KEY",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .success();
+
+    // A second connect asking for a different scope must fail closed rather than
+    // silently hand an editor a grant wider or narrower than requested.
+    murk(&dir, &key)
+        .args([
+            "agent",
+            "connect",
+            "vscode",
+            "--only",
+            "DB_URL",
+            "--vault",
+            "test.murk",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
