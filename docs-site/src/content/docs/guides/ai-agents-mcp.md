@@ -5,12 +5,30 @@ sidebar:
   order: 9
 ---
 
-AI coding agents need secrets: API keys, database URLs, service tokens. The
-common pattern is pasting them into `.env` files or chat prompts. Both are
-bad: prompts get logged, `.env` files get committed, and there's no way to
-revoke access when the session ends.
+AI coding agents need secrets to do real work: an API key to call a service, a
+database URL to run a migration. The usual way to hand them over is to paste a
+value into a prompt or point the agent at a `.env` file. Both can leak. Prompts
+are often logged, and sometimes sent to third-party APIs. `.env` files get
+committed by accident. And once a value is in a log or a prompt, you can't pull
+it back.
 
-murk gives agents access to secrets without exposing them in plaintext.
+murk splits this into two steps.
+
+To understand a project, an agent doesn't need values, it needs to know what
+secrets exist. `murk agent plan` prints the schema — key names, descriptions,
+and tags — with no decryption and no key involved. The agent writes code and
+config against those names without seeing a value.
+
+To run a command, you mint a grant: a short-lived key that decrypts only the
+secrets you name, with a time limit. The agent runs against that grant, never
+your own key, and you can revoke it. If a task only needs `STRIPE_KEY`, that's
+the only thing the grant can read.
+
+This narrows where secrets are exposed. It doesn't make a leak impossible: a
+command the agent runs can still print a value to its own output, and a grant
+key stored on disk can be read by anything running as your user. murk gives you
+least-privilege, expiring, revocable access, not a sandbox. For real isolation,
+run the agent as a separate user or in a container.
 
 ## Rules
 
@@ -219,17 +237,28 @@ grant and writing the config in one step:
 # Auto-detect the editors this repo uses and wire them all:
 murk agent connect --only STRIPE_SECRET_KEY --only DATABASE_URL --ttl 2h
 
-# ...or target one (claude, cursor, vscode):
+# ...or target one (claude, cursor, vscode, zed, gemini, omp, codex):
 murk agent connect cursor --only STRIPE_SECRET_KEY
 ```
 
 `connect` mints one scoped grant for the vault and writes each editor's
-project-local config — Claude Code `.mcp.json`, Cursor `.cursor/mcp.json`,
-VS Code `.vscode/mcp.json` — pointing at `murk mcp` with `MURK_KEY_FILE` and
-`MURK_AGENT=1`. It writes only a key-file **path**, never key material, and
-preserves any other servers and comments already in the file. Add
-`--allow-exec` to also expose the exec tool. Because these files are often
-committed, murk warns and offers to add the path to `.gitignore`.
+project-local config, pointing at `murk mcp` with `MURK_KEY_FILE` and
+`MURK_AGENT=1`:
+
+| Editor | Config file | Format |
+| --- | --- | --- |
+| Claude Code | `.mcp.json` | JSON |
+| Cursor | `.cursor/mcp.json` | JSON |
+| VS Code | `.vscode/mcp.json` | JSON |
+| Zed | `.zed/settings.json` | JSON |
+| Gemini CLI | `.gemini/settings.json` | JSON |
+| omp | `.omp/mcp.json` | JSON |
+| Codex | `.codex/config.toml` | TOML |
+
+It writes only a key-file **path**, never key material, and preserves any
+other servers and comments already in the file. Add `--allow-exec` to also
+expose the exec tool. Because these files are often committed, murk warns and
+offers to add the path to `.gitignore`.
 
 `murk agent disconnect [CLIENT]` removes only murk's entry, leaving other
 servers untouched; add `--rotate` to revoke the grant and rotate the keys it

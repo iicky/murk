@@ -79,6 +79,10 @@ The demo theme is Catppuccin Mocha but the CLI should degrade gracefully
 on any terminal. Always use the `colored` crate's semantic helpers
 (`.green().bold()`, `.dimmed()`) — never raw ANSI escapes.
 
+See [brand.md](./brand.md) for the canonical palette (ANSI slots and brand
+hex), the brand purple `#8760FF`, and the rule that the CLI stays
+theme-adaptive while fixed assets use the locked hex.
+
 ## Examples from the codebase
 
 ```rust

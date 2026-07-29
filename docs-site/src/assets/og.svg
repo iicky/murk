@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#1e1e2e"/>
+
+  <!-- brand lockup -->
+  <path d="M126 74 L170 118 L126 162 L82 118 Z" fill="#8760FF" stroke="#8760FF" stroke-width="6" stroke-linejoin="round"/>
+  <text x="200" y="150" font-family="'Helvetica Neue', Arial, sans-serif" font-size="98" font-weight="600" fill="#cdd6f4">murk</text>
+
+  <!-- tagline -->
+  <text x="88" y="236" font-family="'Helvetica Neue', Arial, sans-serif" font-size="37" font-weight="400" fill="#a6adc8">Encrypted secrets manager for developers</text>
+
+  <!-- terminal -->
+  <rect x="88" y="300" width="1024" height="266" rx="16" fill="#181825" stroke="#313244" stroke-width="2"/>
+  <path d="M88 316 a16 16 0 0 1 16 -16 h992 a16 16 0 0 1 16 16 v32 h-1024 z" fill="#11111b"/>
+  <circle cx="124" cy="324" r="8" fill="#f38ba8"/>
+  <circle cx="152" cy="324" r="8" fill="#f9e2af"/>
+  <circle cx="180" cy="324" r="8" fill="#a6e3a1"/>
+
+  <g font-family="Menlo, 'DejaVu Sans Mono', monospace" font-size="26" xml:space="preserve">
+    <text x="120" y="402"><tspan fill="#a6e3a1">$</tspan><tspan fill="#cdd6f4"> murk add DATABASE_URL</tspan></text>
+
+    <path d="M128 427 L137 436 L128 445 L119 436 Z" fill="#8760FF"/>
+    <text x="150" y="444" fill="#cdd6f4">added DATABASE_URL</text>
+
+    <text x="120" y="486"><tspan fill="#a6e3a1">$</tspan><tspan fill="#cdd6f4"> murk circle authorize </tspan><tspan fill="#6c7086">age1bob&#8230;</tspan></text>
+
+    <path d="M128 511 L137 520 L128 529 L119 520 Z" fill="#8760FF"/>
+    <text x="150" y="528" fill="#cdd6f4">authorized bob</text>
+  </g>
+</svg>
