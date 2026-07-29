@@ -469,9 +469,20 @@ pub(crate) fn remove_json_server(
 
 // ---- Client adapters -------------------------------------------------------
 
+/// The on-disk format of a client's MCP config.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ConfigFormat {
+    /// JSON/JSONC with a server-map object (Claude, Cursor, VS Code, Zed,
+    /// Gemini, omp).
+    Json,
+    /// TOML with `[mcp_servers.<name>]` tables (Codex).
+    Toml,
+}
+
 /// A supported MCP client: where its project-local config lives, the root key
-/// its server map uses, whether an entry needs a typed `"type": "stdio"`, and a
-/// marker directory whose presence signals the client is used in a project.
+/// its server map uses (or table namespace for TOML), whether an entry needs a
+/// typed `"type": "stdio"`, the on-disk format, and a marker directory whose
+/// presence signals the client is used in a project.
 pub struct ClientAdapter {
     pub id: &'static str,
     pub display: &'static str,
@@ -479,14 +490,18 @@ pub struct ClientAdapter {
     pub rel_path: &'static str,
     /// Directory whose presence auto-detects the client (besides the config).
     pub marker_dir: &'static str,
-    /// Root key holding the server map (`mcpServers`, or `servers` for VS Code).
+    /// Root key holding the server map (`mcpServers`; `servers` for VS Code;
+    /// `context_servers` for Zed) — or the table namespace (`mcp_servers`) for
+    /// TOML clients.
     pub root_key: &'static str,
     /// VS Code requires an explicit `"type": "stdio"` on each server.
     pub typed_stdio: bool,
+    /// On-disk config format.
+    pub format: ConfigFormat,
 }
 
-/// MVP clients. Each writes a project-local config so a repo's grant never
-/// leaks into a global, cross-repo config.
+/// Supported clients. Each writes a project-local config so a repo's grant
+/// never leaks into a global, cross-repo config.
 pub const ADAPTERS: &[ClientAdapter] = &[
     ClientAdapter {
         id: "claude",
@@ -495,6 +510,7 @@ pub const ADAPTERS: &[ClientAdapter] = &[
         marker_dir: ".claude",
         root_key: "mcpServers",
         typed_stdio: false,
+        format: ConfigFormat::Json,
     },
     ClientAdapter {
         id: "cursor",
@@ -503,6 +519,7 @@ pub const ADAPTERS: &[ClientAdapter] = &[
         marker_dir: ".cursor",
         root_key: "mcpServers",
         typed_stdio: false,
+        format: ConfigFormat::Json,
     },
     ClientAdapter {
         id: "vscode",
@@ -511,6 +528,43 @@ pub const ADAPTERS: &[ClientAdapter] = &[
         marker_dir: ".vscode",
         root_key: "servers",
         typed_stdio: true,
+        format: ConfigFormat::Json,
+    },
+    ClientAdapter {
+        id: "zed",
+        display: "Zed",
+        rel_path: ".zed/settings.json",
+        marker_dir: ".zed",
+        root_key: "context_servers",
+        typed_stdio: false,
+        format: ConfigFormat::Json,
+    },
+    ClientAdapter {
+        id: "gemini",
+        display: "Gemini CLI",
+        rel_path: ".gemini/settings.json",
+        marker_dir: ".gemini",
+        root_key: "mcpServers",
+        typed_stdio: false,
+        format: ConfigFormat::Json,
+    },
+    ClientAdapter {
+        id: "omp",
+        display: "omp",
+        rel_path: ".omp/mcp.json",
+        marker_dir: ".omp",
+        root_key: "mcpServers",
+        typed_stdio: false,
+        format: ConfigFormat::Json,
+    },
+    ClientAdapter {
+        id: "codex",
+        display: "Codex",
+        rel_path: ".codex/config.toml",
+        marker_dir: ".codex",
+        root_key: "mcp_servers",
+        typed_stdio: false,
+        format: ConfigFormat::Toml,
     },
 ];
 
@@ -565,7 +619,14 @@ pub fn connect_client(
         key_file: key_file.to_string(),
         typed_stdio: adapter.typed_stdio,
     };
-    let updated = upsert_json_server(existing.as_deref(), adapter.root_key, "murk", &spec)?;
+    let updated = match adapter.format {
+        ConfigFormat::Json => {
+            upsert_json_server(existing.as_deref(), adapter.root_key, "murk", &spec)?
+        }
+        ConfigFormat::Toml => {
+            upsert_toml_server(existing.as_deref(), adapter.root_key, "murk", &spec)?
+        }
+    };
     write_config(&path, &updated)?;
     Ok(ConnectOutcome { path, created })
 }
@@ -582,7 +643,11 @@ pub fn disconnect_client(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(MurkError::Io(e)),
     };
-    match remove_json_server(&existing, adapter.root_key, "murk")? {
+    let removed = match adapter.format {
+        ConfigFormat::Json => remove_json_server(&existing, adapter.root_key, "murk")?,
+        ConfigFormat::Toml => remove_toml_server(&existing, adapter.root_key, "murk")?,
+    };
+    match removed {
         Some(updated) => {
             write_config(&path, &updated)?;
             Ok(Some(path))
@@ -607,6 +672,124 @@ fn write_config(path: &Path, contents: &str) -> Result<(), MurkError> {
     tmp.as_file().sync_all().map_err(MurkError::Io)?;
     tmp.persist(path).map_err(|e| MurkError::Io(e.error))?;
     Ok(())
+}
+
+// ---- TOML writer (Codex config.toml) ---------------------------------------
+//
+// Codex stores MCP servers as `[mcp_servers.<name>]` tables (with a nested
+// `[mcp_servers.<name>.env]` table). We edit surgically like the JSON writer:
+// drop any existing murk tables, then append fresh ones, leaving every other
+// table and comment untouched. `typed_stdio` doesn't apply (Codex has no typed
+// server flag).
+
+/// The dotted key path of a TOML table header line (`[a.b]` or `[[a.b]]`),
+/// ignoring a trailing `# comment`. `None` for non-header lines.
+fn toml_table_path(line: &str) -> Option<String> {
+    let t = line.trim_start().strip_prefix('[')?;
+    let t = t.strip_prefix('[').unwrap_or(t);
+    let end = t.find(']')?;
+    Some(t[..end].trim().to_string())
+}
+
+/// Line ranges `[start, end)` of every table under `<prefix>.<server>` (each
+/// header plus its body, through the line before the next unrelated header).
+fn murk_toml_sections(lines: &[&str], prefix: &str, server: &str) -> Vec<(usize, usize)> {
+    let exact = format!("{prefix}.{server}");
+    let nested = format!("{prefix}.{server}.");
+    let owned = |p: &str| p == exact || p.starts_with(&nested);
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        match toml_table_path(lines[i]) {
+            Some(p) if owned(&p) => {
+                let start = i;
+                i += 1;
+                while i < lines.len() {
+                    match toml_table_path(lines[i]) {
+                        Some(q) if !owned(&q) => break,
+                        _ => i += 1,
+                    }
+                }
+                ranges.push((start, i));
+            }
+            _ => i += 1,
+        }
+    }
+    ranges
+}
+
+/// Render murk's `[prefix.server]` + `[prefix.server.env]` tables.
+fn render_toml_member(prefix: &str, server: &str, spec: &ServerSpec) -> String {
+    use std::fmt::Write as _;
+    let mut args = vec![quote("mcp")];
+    args.extend(spec.extra_args.iter().map(|a| quote(a)));
+    let mut out = String::new();
+    let _ = writeln!(out, "[{prefix}.{server}]");
+    let _ = writeln!(out, "command = {}", quote("murk"));
+    let _ = writeln!(out, "args = [{}]", args.join(", "));
+    let _ = writeln!(out);
+    let _ = writeln!(out, "[{prefix}.{server}.env]");
+    let _ = writeln!(out, "MURK_KEY_FILE = {}", quote(&spec.key_file));
+    let _ = writeln!(out, "MURK_AGENT = {}", quote("1"));
+    out
+}
+
+/// Remove murk's tables from a TOML config. `None` when there was nothing to
+/// remove; else the rewritten document.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn remove_toml_server(
+    existing: &str,
+    prefix: &str,
+    server: &str,
+) -> Result<Option<String>, MurkError> {
+    let lines: Vec<&str> = existing.lines().collect();
+    let sections = murk_toml_sections(&lines, prefix, server);
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    let drop: std::collections::HashSet<usize> =
+        sections.iter().flat_map(|(s, e)| *s..*e).collect();
+    let mut kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !drop.contains(i))
+        .map(|(_, l)| *l)
+        .collect();
+    while kept.last().is_some_and(|l| l.trim().is_empty()) {
+        kept.pop();
+    }
+    let mut out = kept.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    Ok(Some(out))
+}
+
+/// Upsert murk's tables into a TOML config, preserving all other tables and
+/// comments. `None`/blank input yields a fresh document.
+pub(crate) fn upsert_toml_server(
+    existing: Option<&str>,
+    prefix: &str,
+    server: &str,
+    spec: &ServerSpec,
+) -> Result<String, MurkError> {
+    let base = match existing {
+        Some(s) if !s.trim().is_empty() => {
+            if let Some(stripped) = remove_toml_server(s, prefix, server)? {
+                stripped
+            } else {
+                let mut t = s.trim_end().to_string();
+                t.push('\n');
+                t
+            }
+        }
+        _ => String::new(),
+    };
+    let block = render_toml_member(prefix, server, spec);
+    if base.trim().is_empty() {
+        return Ok(block);
+    }
+    Ok(format!("{base}\n{block}"))
 }
 
 #[cfg(test)]
@@ -764,13 +947,18 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join(".cursor")).unwrap();
         std::fs::create_dir_all(dir.path().join(".vscode")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".zed")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
         let ids: Vec<_> = detect(dir.path()).iter().map(|a| a.id).collect();
         assert!(ids.contains(&"cursor"));
         assert!(ids.contains(&"vscode"));
+        assert!(ids.contains(&"zed"));
+        assert!(ids.contains(&"codex"));
         assert!(
             !ids.contains(&"claude"),
             "no .claude dir or .mcp.json present"
         );
+        assert!(!ids.contains(&"gemini"), "no .gemini marker present");
     }
 
     #[test]
@@ -813,5 +1001,152 @@ mod tests {
         assert_eq!(v["servers"]["murk"]["type"], "stdio");
         assert_eq!(v["servers"]["murk"]["args"][0], "mcp");
         assert_eq!(v["servers"]["murk"]["args"][1], "--allow-exec");
+    }
+
+    #[test]
+    fn zed_uses_context_servers_root_without_source() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = adapter("zed").unwrap();
+        connect_client(a, dir.path(), "/keys/abc-mcp", &[]).unwrap();
+        let written = std::fs::read_to_string(a.config_path(dir.path())).unwrap();
+        let v = parse(&written);
+        assert_eq!(v["context_servers"]["murk"]["command"], "murk");
+        assert_eq!(v["context_servers"]["murk"]["args"][0], "mcp");
+        assert_eq!(
+            v["context_servers"]["murk"]["env"]["MURK_KEY_FILE"],
+            "/keys/abc-mcp"
+        );
+        // Current Zed (post m_2025_06_27 migration) takes a flat entry — no
+        // `source` discriminator. Emitting one is not required and we don't.
+        assert!(v["context_servers"]["murk"]["source"].is_null());
+        assert!(!written.contains("\"source\""));
+    }
+
+    #[test]
+    fn gemini_and_omp_use_mcpservers_root() {
+        for id in ["gemini", "omp"] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let a = adapter(id).unwrap();
+            connect_client(a, dir.path(), "/keys/abc-mcp", &[]).unwrap();
+            let v = parse(&std::fs::read_to_string(a.config_path(dir.path())).unwrap());
+            assert_eq!(v["mcpServers"]["murk"]["command"], "murk", "adapter {id}");
+            assert_eq!(v["mcpServers"]["murk"]["env"]["MURK_AGENT"], "1");
+        }
+    }
+
+    // ---- TOML writer (Codex) ----
+
+    fn toml_spec() -> ServerSpec {
+        ServerSpec {
+            extra_args: vec![],
+            key_file: "/home/alice/.config/murk/agent-keys/abc-codex".into(),
+            typed_stdio: false,
+        }
+    }
+
+    #[test]
+    fn toml_fresh_document_is_exact() {
+        let out = upsert_toml_server(None, "mcp_servers", "murk", &toml_spec()).unwrap();
+        assert_eq!(
+            out,
+            "[mcp_servers.murk]\n\
+             command = \"murk\"\n\
+             args = [\"mcp\"]\n\
+             \n\
+             [mcp_servers.murk.env]\n\
+             MURK_KEY_FILE = \"/home/alice/.config/murk/agent-keys/abc-codex\"\n\
+             MURK_AGENT = \"1\"\n"
+        );
+    }
+
+    #[test]
+    fn toml_extra_args_land_after_mcp() {
+        let mut s = toml_spec();
+        s.extra_args = vec!["--allow-exec".into()];
+        let out = upsert_toml_server(None, "mcp_servers", "murk", &s).unwrap();
+        assert!(out.contains("args = [\"mcp\", \"--allow-exec\"]"));
+    }
+
+    #[test]
+    fn toml_preserves_other_tables_and_comments() {
+        let existing = "# my codex config\n\
+                        model = \"o3\"\n\
+                        \n\
+                        [mcp_servers.other]\n\
+                        command = \"foo\"\n\
+                        args = [\"bar\"]\n";
+        let out = upsert_toml_server(Some(existing), "mcp_servers", "murk", &toml_spec()).unwrap();
+        assert!(out.contains("# my codex config"), "comment must survive");
+        assert!(out.contains("model = \"o3\""), "top-level key must survive");
+        assert!(
+            out.contains("[mcp_servers.other]"),
+            "sibling table must survive"
+        );
+        assert!(out.contains("command = \"foo\""));
+        assert_eq!(out.matches("[mcp_servers.murk]").count(), 1);
+        assert!(out.contains("[mcp_servers.murk.env]"));
+    }
+
+    #[test]
+    fn toml_idempotent_upsert_keeps_one_section() {
+        let out1 = upsert_toml_server(None, "mcp_servers", "murk", &toml_spec()).unwrap();
+        let mut s2 = toml_spec();
+        s2.extra_args = vec!["--allow-exec".into()];
+        let out2 = upsert_toml_server(Some(&out1), "mcp_servers", "murk", &s2).unwrap();
+        assert_eq!(out2.matches("[mcp_servers.murk]").count(), 1);
+        assert_eq!(out2.matches("[mcp_servers.murk.env]").count(), 1);
+        assert!(out2.contains("--allow-exec"), "update must apply new args");
+    }
+
+    #[test]
+    fn toml_remove_leaves_siblings_and_comments() {
+        let existing = "# keep me\n\
+                        [mcp_servers.other]\n\
+                        command = \"foo\"\n\
+                        \n\
+                        [mcp_servers.murk]\n\
+                        command = \"murk\"\n\
+                        args = [\"mcp\"]\n\
+                        \n\
+                        [mcp_servers.murk.env]\n\
+                        MURK_AGENT = \"1\"\n";
+        let out = remove_toml_server(existing, "mcp_servers", "murk")
+            .unwrap()
+            .expect("should remove");
+        assert!(out.contains("# keep me"));
+        assert!(out.contains("[mcp_servers.other]"));
+        assert!(!out.contains("[mcp_servers.murk]"));
+        assert!(!out.contains("[mcp_servers.murk.env]"));
+    }
+
+    #[test]
+    fn toml_remove_absent_is_none() {
+        let existing = "[mcp_servers.other]\ncommand = \"foo\"\n";
+        assert!(
+            remove_toml_server(existing, "mcp_servers", "murk")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn codex_adapter_roundtrip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = adapter("codex").unwrap();
+        assert_eq!(a.format, ConfigFormat::Toml);
+
+        connect_client(a, dir.path(), "/keys/abc-codex", &[]).unwrap();
+        let path = a.config_path(dir.path());
+        assert!(path.ends_with(".codex/config.toml"));
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("[mcp_servers.murk]"));
+        assert!(written.contains("MURK_KEY_FILE = \"/keys/abc-codex\""));
+        assert!(!written.contains("AGE-SECRET-KEY"));
+
+        assert!(disconnect_client(a, dir.path()).unwrap().is_some());
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(!after.contains("[mcp_servers.murk]"));
+        // Disconnecting again is a no-op.
+        assert!(disconnect_client(a, dir.path()).unwrap().is_none());
     }
 }
