@@ -180,7 +180,7 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
-            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it'
             cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
@@ -254,7 +254,7 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
-            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it'
             cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
@@ -550,7 +550,7 @@ set edit:completion:arg-completer[murk] = {|@words|
             cand init 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely'
             cand ls 'List active agent grants and their TTLs'
             cand revoke 'Revoke an agent grant and rotate the keys it could read'
-            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it'
+            cand connect 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it'
             cand disconnect 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys'
         }
         &'murk;help;agent;plan'= {

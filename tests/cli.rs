@@ -5198,3 +5198,59 @@ fn agent_connect_rejects_scope_mismatch_on_reuse() {
         .failure()
         .stderr(predicate::str::contains("already exists"));
 }
+
+#[test]
+fn agent_connect_covers_every_adapter() {
+    let dir = TempDir::new().unwrap();
+    let (key, _pubkey) = init_vault(&dir);
+    murk(&dir, &key)
+        .args(["add", "API_KEY", "--vault", "test.murk"])
+        .write_stdin("sk-secret\n")
+        .assert()
+        .success();
+
+    // Every supported adapter, its project-local config path, end-to-end.
+    let cases = [
+        ("claude", ".mcp.json"),
+        ("cursor", ".cursor/mcp.json"),
+        ("vscode", ".vscode/mcp.json"),
+        ("zed", ".zed/settings.json"),
+        ("gemini", ".gemini/settings.json"),
+        ("omp", ".omp/mcp.json"),
+        ("codex", ".codex/config.toml"),
+    ];
+    for (id, rel) in cases {
+        murk(&dir, &key)
+            .args([
+                "agent",
+                "connect",
+                id,
+                "--only",
+                "API_KEY",
+                "--vault",
+                "test.murk",
+            ])
+            .assert()
+            .success();
+
+        let cfg = dir.path().join(rel);
+        let body =
+            fs::read_to_string(&cfg).unwrap_or_else(|_| panic!("{id}: no config written at {rel}"));
+        assert!(body.contains("MURK_AGENT"), "{id}: missing murk entry");
+        assert!(body.contains("MURK_KEY_FILE"), "{id}: missing key-file ref");
+        assert!(
+            !body.contains("AGE-SECRET-KEY"),
+            "{id}: config leaked key material"
+        );
+
+        murk(&dir, &key)
+            .args(["agent", "disconnect", id, "--vault", "test.murk"])
+            .assert()
+            .success();
+        let after = fs::read_to_string(&cfg).unwrap();
+        assert!(
+            !after.contains("MURK_KEY_FILE"),
+            "{id}: disconnect left murk entry behind"
+        );
+    }
+}

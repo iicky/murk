@@ -201,7 +201,7 @@ Register-ArgumentCompleter -Native -CommandName 'murk' -ScriptBlock {
             [CompletionResult]::new('init', 'init', [CompletionResultType]::ParameterValue, 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely')
             [CompletionResult]::new('ls', 'ls', [CompletionResultType]::ParameterValue, 'List active agent grants and their TTLs')
             [CompletionResult]::new('revoke', 'revoke', [CompletionResultType]::ParameterValue, 'Revoke an agent grant and rotate the keys it could read')
-            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it')
+            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it')
             [CompletionResult]::new('disconnect', 'disconnect', [CompletionResultType]::ParameterValue, 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
@@ -284,7 +284,7 @@ Register-ArgumentCompleter -Native -CommandName 'murk' -ScriptBlock {
             [CompletionResult]::new('init', 'init', [CompletionResultType]::ParameterValue, 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely')
             [CompletionResult]::new('ls', 'ls', [CompletionResultType]::ParameterValue, 'List active agent grants and their TTLs')
             [CompletionResult]::new('revoke', 'revoke', [CompletionResultType]::ParameterValue, 'Revoke an agent grant and rotate the keys it could read')
-            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it')
+            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it')
             [CompletionResult]::new('disconnect', 'disconnect', [CompletionResultType]::ParameterValue, 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
@@ -651,7 +651,7 @@ Register-ArgumentCompleter -Native -CommandName 'murk' -ScriptBlock {
             [CompletionResult]::new('init', 'init', [CompletionResultType]::ParameterValue, 'One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely')
             [CompletionResult]::new('ls', 'ls', [CompletionResultType]::ParameterValue, 'List active agent grants and their TTLs')
             [CompletionResult]::new('revoke', 'revoke', [CompletionResultType]::ParameterValue, 'Revoke an agent grant and rotate the keys it could read')
-            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it')
+            [CompletionResult]::new('connect', 'connect', [CompletionResultType]::ParameterValue, 'Wire `murk mcp` into an AI editor''s MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it')
             [CompletionResult]::new('disconnect', 'disconnect', [CompletionResultType]::ParameterValue, 'Remove murk''s entry from an AI editor''s MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys')
             break
         }

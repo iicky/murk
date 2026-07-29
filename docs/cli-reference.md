@@ -415,7 +415,7 @@ Agent-oriented commands (schema-only output for AI agent prompts)
 * `init` — One-shot onboarding: optionally set the agent allow-list, mint a scoped grant, and print how to run the agent safely
 * `ls` — List active agent grants and their TTLs
 * `revoke` — Revoke an agent grant and rotate the keys it could read
-* `connect` — Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it
+* `connect` — Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it
 * `disconnect` — Remove murk's entry from an AI editor's MCP config. No CLIENT clears every configured editor; `--rotate` also revokes the grant and rotates its keys
 
 
@@ -533,13 +533,13 @@ Revoke an agent grant and rotate the keys it could read
 
 ## `murk agent connect`
 
-Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode) to target it
+Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant. No CLIENT auto-detects installed editors; give one (claude, cursor, vscode, zed, gemini, omp, codex) to target it
 
 **Usage:** `murk agent connect [OPTIONS] --only <ONLY> [CLIENT]`
 
 ###### **Arguments:**
 
-* `<CLIENT>` — Editor to configure; omit to auto-detect (claude, cursor, vscode)
+* `<CLIENT>` — Editor to configure; omit to auto-detect (claude, cursor, vscode, zed, gemini, omp, codex)
 
 ###### **Options:**
 

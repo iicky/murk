@@ -510,9 +510,10 @@ pub enum AgentCommand {
 
     /// Wire `murk mcp` into an AI editor's MCP config, minting a scoped grant.
     /// No CLIENT auto-detects installed editors; give one (claude, cursor,
-    /// vscode) to target it.
+    /// vscode, zed, gemini, omp, codex) to target it.
     Connect {
-        /// Editor to configure; omit to auto-detect (claude, cursor, vscode)
+        /// Editor to configure; omit to auto-detect
+        /// (claude, cursor, vscode, zed, gemini, omp, codex)
         client: Option<String>,
         /// Keys the agent may read (required — fails closed)
         #[arg(long, required = true)]
