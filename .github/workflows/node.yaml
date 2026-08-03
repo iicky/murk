@@ -160,6 +160,20 @@ jobs:
 
       - name: Publish
         working-directory: node
+        # TEMPORARY — interrupted-inc npm bootstrap. The @interrupted/* packages
+        # don't exist yet, and npm OIDC trusted publishing cannot do a first
+        # publish, so authenticate with a granular token for the FIRST release.
+        # NPM_CONFIG_ACCESS=public: napi publishes each platform subpackage with a
+        #   bare `npm publish`, and new scoped packages default to private.
+        # NPM_CONFIG_PROVENANCE=true: gives all 8 packages (root + 7 platform)
+        #   provenance on this token-auth release too, not just the root.
+        # AFTER the first release: add a Trusted Publisher (interrupted-inc/murk +
+        # node.yaml) to all 8 packages, then REVERT this env block and delete the
+        # NPM_TOKEN secret to return to pure OIDC.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_ACCESS: "public"
+          NPM_CONFIG_PROVENANCE: "true"
         run: |
           npm ci --ignore-scripts
           npx napi pre-publish -t npm
