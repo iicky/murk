@@ -70,6 +70,9 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
           - host: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
@@ -93,9 +96,17 @@ jobs:
         run: npm ci
 
       - name: Build (native)
-        if: ${{ !matrix.settings.docker }}
+        if: ${{ !matrix.settings.docker && !matrix.settings.cross }}
         working-directory: node
         run: npx napi build --platform --release --target ${{ matrix.settings.target }}
+
+      - name: Build (cross-compile, zig)
+        if: ${{ matrix.settings.cross }}
+        working-directory: node
+        run: |
+          python3 -m pip install --user ziglang
+          cargo install --locked cargo-zigbuild
+          npx napi build --platform --release --target ${{ matrix.settings.target }} --cross-compile
 
       - name: Build (docker)
         if: ${{ matrix.settings.docker }}
