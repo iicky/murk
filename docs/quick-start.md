@@ -5,10 +5,10 @@ You've been invited to a project that uses murk for secrets. Here's how to get s
 ## 1. Install murk
 
 ```bash
-brew tap iicky/murk && brew install murk
+brew tap interrupted-inc/murk && brew install murk
 ```
 
-Or: `cargo install murk-cli`, `pip install murk-secrets`, or download from [GitHub Releases](https://github.com/iicky/murk/releases).
+Or: `cargo install murk-cli`, `pip install murk-secrets`, or download from [GitHub Releases](https://github.com/interrupted-inc/murk/releases).
 
 ## 2. Generate your key
 

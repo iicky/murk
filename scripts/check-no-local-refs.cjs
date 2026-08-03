@@ -72,7 +72,7 @@ function selfTest(allow) {
   const pass = [
     "murk-cli",
     "the murk-key: prefix",
-    "@iicky/murk-secrets",
+    "@interrupted/murk-secrets",
     "murk-napi crate",
     "#murk-agent-plan",
     "murk-init",

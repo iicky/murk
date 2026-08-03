@@ -20,7 +20,7 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/iicky/murk",
+          href: "https://github.com/interrupted-inc/murk",
         },
       ],
       // murk docs are dark-only: no light theme, no theme toggle.

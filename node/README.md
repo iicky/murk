@@ -1,16 +1,16 @@
-# @iicky/murk-secrets
+# @interrupted/murk-secrets
 
-[![npm](https://img.shields.io/npm/v/@iicky/murk-secrets)](https://www.npmjs.com/package/@iicky/murk-secrets)
+[![npm](https://img.shields.io/npm/v/@interrupted/murk-secrets)](https://www.npmjs.com/package/@interrupted/murk-secrets)
 
-Node.js/TypeScript bindings for [murk](https://github.com/iicky/murk) — an encrypted secrets manager for developers.
+Node.js/TypeScript bindings for [murk](https://github.com/interrupted-inc/murk) — an encrypted secrets manager for developers.
 
 ## Prerequisites
 
-You need the [murk CLI](https://github.com/iicky/murk) to create and manage vaults. This package only reads them.
+You need the [murk CLI](https://github.com/interrupted-inc/murk) to create and manage vaults. This package only reads them.
 
 ```bash
 # Install the CLI first
-brew tap iicky/murk && brew install murk
+brew tap interrupted-inc/murk && brew install murk
 
 # Initialize a vault and add secrets
 murk init
@@ -21,7 +21,7 @@ murk add API_KEY
 Then add the Node package to your project:
 
 ```bash
-npm install @iicky/murk-secrets
+npm install @interrupted/murk-secrets
 ```
 
 ## Quick start
@@ -32,7 +32,7 @@ source .env
 ```
 
 ```typescript
-import { load, get, exportAll } from '@iicky/murk-secrets'
+import { load, get, exportAll } from '@interrupted/murk-secrets'
 
 // Load the vault (reads MURK_KEY from environment)
 const vault = load()
@@ -85,7 +85,7 @@ from its own memory when a value is dropped, but that guarantee ends at the FFI
 boundary: once a value crosses into JavaScript the runtime owns it, and its
 garbage collector — not murk — controls its lifetime. This is inherent to
 reading secrets into a process (see the
-[threat model](https://github.com/iicky/murk/blob/main/THREAT_MODEL.md)); avoid
+[threat model](https://github.com/interrupted-inc/murk/blob/main/THREAT_MODEL.md)); avoid
 holding decrypted values longer than you need them.
 
 ## Agent policy
@@ -95,7 +95,7 @@ When the loaded key is an agent grant (minted with `murk agent grant`), the vaul
 ## Requirements
 
 - Node.js >= 16
-- [murk CLI](https://github.com/iicky/murk) installed (to create and manage vaults)
+- [murk CLI](https://github.com/interrupted-inc/murk) installed (to create and manage vaults)
 - A `.murk` vault file in your project (created with `murk init`)
 - `MURK_KEY` or `MURK_KEY_FILE` in the environment (created by `murk init`, loaded via `source .env`)
 

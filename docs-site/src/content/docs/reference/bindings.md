@@ -8,7 +8,7 @@ sidebar:
 murk ships language bindings so a program can read its secrets directly
 instead of shelling out to the CLI. They're published as
 [`murk-secrets`](https://pypi.org/project/murk-secrets/) on PyPI and
-[`@iicky/murk-secrets`](https://www.npmjs.com/package/@iicky/murk-secrets) on
+[`@interrupted/murk-secrets`](https://www.npmjs.com/package/@interrupted/murk-secrets) on
 npm.
 
 The bindings only read: they load and decrypt an existing vault. You still
@@ -83,11 +83,11 @@ The module is imported as `murk` even though the package is `murk-secrets`.
 Requires Node.js ≥ 16. TypeScript types are bundled.
 
 ```bash
-npm install @iicky/murk-secrets
+npm install @interrupted/murk-secrets
 ```
 
 ```typescript
-import { load, get, exportAll } from "@iicky/murk-secrets";
+import { load, get, exportAll } from "@interrupted/murk-secrets";
 
 // Load the vault (reads MURK_KEY / MURK_KEY_FILE from the environment)
 const vault = load();

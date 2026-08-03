@@ -70,6 +70,9 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             docker: ghcr.io/napi-rs/napi-rs/nodejs-rust:lts-alpine
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            cross: true
           - host: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
@@ -93,9 +96,22 @@ jobs:
         run: npm ci
 
       - name: Build (native)
-        if: ${{ !matrix.settings.docker }}
+        if: ${{ !matrix.settings.docker && !matrix.settings.cross }}
         working-directory: node
         run: npx napi build --platform --release --target ${{ matrix.settings.target }}
+
+      - name: Build (cross-compile, zig)
+        if: ${{ matrix.settings.cross }}
+        working-directory: node
+        run: |
+          python3 -m pip install --user ziglang
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$HOME/.local/bin/zig"
+          chmod +x "$HOME/.local/bin/zig"
+          export PATH="$HOME/.local/bin:$PATH"
+          zig version
+          cargo install --locked cargo-zigbuild
+          npx napi build --platform --release --target ${{ matrix.settings.target }} --cross-compile
 
       - name: Build (docker)
         if: ${{ matrix.settings.docker }}
@@ -126,6 +142,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read # actions/checkout; job-level block overrides workflow default
       id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,6 +165,20 @@ jobs:
 
       - name: Publish
         working-directory: node
+        # TEMPORARY — interrupted-inc npm bootstrap. The @interrupted/* packages
+        # don't exist yet, and npm OIDC trusted publishing cannot do a first
+        # publish, so authenticate with a granular token for the FIRST release.
+        # NPM_CONFIG_ACCESS=public: napi publishes each platform subpackage with a
+        #   bare `npm publish`, and new scoped packages default to private.
+        # NPM_CONFIG_PROVENANCE=true: gives all 8 packages (root + 7 platform)
+        #   provenance on this token-auth release too, not just the root.
+        # AFTER the first release: add a Trusted Publisher (interrupted-inc/murk +
+        # node.yaml) to all 8 packages, then REVERT this env block and delete the
+        # NPM_TOKEN secret to return to pure OIDC.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_ACCESS: "public"
+          NPM_CONFIG_PROVENANCE: "true"
         run: |
           npm ci --ignore-scripts
           npx napi pre-publish -t npm

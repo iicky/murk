@@ -1,5 +1,5 @@
 {
-  "name": "@iicky/murk-secrets",
+  "name": "@interrupted/murk-secrets",
   "version": "0.10.1",
   "description": "Node.js/TypeScript bindings for murk — encrypted secrets manager",
   "main": "index.js",
@@ -7,7 +7,7 @@
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/iicky/murk"
+    "url": "https://github.com/interrupted-inc/murk"
   },
   "keywords": [
     "secrets",

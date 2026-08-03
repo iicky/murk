@@ -21,13 +21,13 @@ signed build provenance (`actions/attest-build-provenance`, Sigstore/Fulcio).
 Verify a downloaded artifact:
 
 ```bash
-gh attestation verify murk-v0.8.0-<target>.tar.gz --owner iicky
+gh attestation verify murk-v0.8.0-<target>.tar.gz --owner interrupted-inc
 ```
 
 This confirms the artifact was produced by this repository's release workflow —
 a builder you can inspect, with a signing identity an attacker cannot forge.
 
-## npm — `@iicky/murk-secrets`
+## npm — `@interrupted/murk-secrets`
 
 Published with npm provenance (`npm publish --provenance`). After installing,
 verify the registry signatures and provenance:
@@ -49,7 +49,7 @@ a downloaded file against its published provenance:
 
 ```bash
 pipx run pypi-attestations verify pypi \
-  --repository https://github.com/iicky/murk \
+  --repository https://github.com/interrupted-inc/murk \
   pypi:murk_secrets-0.8.0-<...>.whl
 ```
 
@@ -68,4 +68,4 @@ nothing to attach at publish time. Trust here rests on two things:
 This is the one gap in murk's provenance story, and it is upstream: it closes
 when crates.io ships attestation support.
 
-[releases]: https://github.com/iicky/murk/releases
+[releases]: https://github.com/interrupted-inc/murk/releases

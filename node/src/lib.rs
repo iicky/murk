@@ -1,7 +1,7 @@
 //! Node.js/TypeScript bindings for murk via napi-rs.
 //!
 //! ```typescript
-//! import { load, get, exportAll, hasIdentity } from '@iicky/murk-secrets'
+//! import { load, get, exportAll, hasIdentity } from '@interrupted/murk-secrets'
 //!
 //! const vault = load()              // reads MURK_KEY from env, .murk from cwd
 //! vault.get('DATABASE_URL')         // decrypt a single value
