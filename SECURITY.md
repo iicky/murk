@@ -27,7 +27,7 @@ For a detailed analysis of what murk protects and what it doesn't, see [THREAT_M
 Every release artifact is built and published from GitHub Actions on hosted runners, and most carry signed provenance. Release binaries include [Sigstore artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations); verify a downloaded binary:
 
 ```bash
-gh attestation verify murk-v*.tar.gz --owner iicky
+gh attestation verify murk-v*.tar.gz --owner interrupted-inc
 ```
 
 Release tags are signed with SSH. Verify a tag:
@@ -50,7 +50,7 @@ murk is pre-1.0 software. Only the latest release receives security fixes.
 
 **Do not open a public issue for security vulnerabilities.**
 
-Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) to submit a report. You'll get a response within 14 days.
+Use [GitHub's private vulnerability reporting](https://github.com/interrupted-inc/murk/security/advisories/new) to submit a report. You'll get a response within 14 days.
 
 Include:
 - Description of the vulnerability

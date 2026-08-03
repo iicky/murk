@@ -4,7 +4,7 @@ header = """
 """
 body = """
 {%- macro remote_url() -%}
-  https://github.com/iicky/murk
+  https://github.com/interrupted-inc/murk
 {%- endmacro -%}
 
 {% if version -%}

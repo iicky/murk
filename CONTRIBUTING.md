@@ -26,7 +26,7 @@ cargo run -- <command>   # Run murk with arguments
 
 ## Security
 
-If you find a security vulnerability, **do not open a public issue**. Use [GitHub's private vulnerability reporting](https://github.com/iicky/murk/security/advisories/new) instead.
+If you find a security vulnerability, **do not open a public issue**. Use [GitHub's private vulnerability reporting](https://github.com/interrupted-inc/murk/security/advisories/new) instead.
 
 ## Developer Certificate of Origin
 

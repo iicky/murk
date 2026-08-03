@@ -1,9 +1,9 @@
 #!/bin/sh
-# Install murk — https://github.com/iicky/murk
-# Usage: curl -fsSL https://raw.githubusercontent.com/iicky/murk/main/install.sh | sh
+# Install murk — https://github.com/interrupted-inc/murk
+# Usage: curl -fsSL https://raw.githubusercontent.com/interrupted-inc/murk/main/install.sh | sh
 set -e
 
-REPO="iicky/murk"
+REPO="interrupted-inc/murk"
 INSTALL_DIR="${MURK_INSTALL_DIR:-/usr/local/bin}"
 
 os=$(uname -s)

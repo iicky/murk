@@ -11,15 +11,15 @@ See [Install](/install/) to get murk in the first place, and the [threat model](
 
 ## GitHub release binaries
 
-The prebuilt binaries and `SHA256SUMS` on the [releases page](https://github.com/iicky/murk/releases) carry signed build provenance (`actions/attest-build-provenance`, Sigstore/Fulcio). Verify a downloaded artifact with the [GitHub CLI](https://cli.github.com/):
+The prebuilt binaries and `SHA256SUMS` on the [releases page](https://github.com/interrupted-inc/murk/releases) carry signed build provenance (`actions/attest-build-provenance`, Sigstore/Fulcio). Verify a downloaded artifact with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-gh attestation verify murk-<version>-<target>.tar.gz --owner iicky
+gh attestation verify murk-<version>-<target>.tar.gz --owner interrupted-inc
 ```
 
 This confirms the artifact was produced by this repository's release workflow: a builder you can inspect, with a signing identity an attacker cannot forge.
 
-## npm (`@iicky/murk-secrets`)
+## npm (`@interrupted/murk-secrets`)
 
 Published with npm provenance (`npm publish --provenance`). After installing, verify the registry signatures and provenance:
 
@@ -35,7 +35,7 @@ Programmatic verification is still maturing. The experimental [`pypi-attestation
 
 ```bash
 pipx run pypi-attestations verify pypi \
-  --repository https://github.com/iicky/murk \
+  --repository https://github.com/interrupted-inc/murk \
   pypi:murk_secrets-<version>-<...>.whl
 ```
 

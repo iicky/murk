@@ -11,13 +11,13 @@ a CI secret, and decrypt at run time.
 
 ## GitHub Actions
 
-Use [murk-action](https://github.com/iicky/murk-action) to decrypt secrets
+Use [murk-action](https://github.com/interrupted-inc/murk-action) to decrypt secrets
 into the job environment:
 
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: iicky/murk-action@v1
+  - uses: interrupted-inc/murk-action@v1
     with:
       murk-key: ${{ secrets.MURK_KEY }}
   - run: ./deploy.sh  # all vault secrets are now in the environment
