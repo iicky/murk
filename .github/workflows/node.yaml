@@ -7,6 +7,7 @@ on:
     paths:
       - "node/**"
       - ".github/workflows/node.yaml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -138,7 +139,7 @@ jobs:
 
   publish:
     name: Publish to npm
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -181,5 +182,5 @@ jobs:
           NPM_CONFIG_PROVENANCE: "true"
         run: |
           npm ci --ignore-scripts
-          npx napi pre-publish -t npm
+          npx napi pre-publish -t npm --no-gh-release
           npm publish --access public --provenance
