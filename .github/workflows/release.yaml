@@ -98,6 +98,8 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: preflight
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
     strategy:
       matrix:
         include:
@@ -125,6 +127,17 @@ jobs:
       - name: Install cross
         if: matrix.cross
         run: cargo install cross --locked --version 0.2.5
+
+      - name: Deterministic build settings
+        shell: bash
+        run: |
+          # Reproducible-build inputs: fix the build timestamp to the commit's,
+          # disable incremental artifacts, strip local path prefixes, and (on
+          # Windows) emit a content-hashed PE timestamp via /Brepro.
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+          RF="--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          if [ "${{ runner.os }}" = "Windows" ]; then RF="$RF -Clink-arg=/Brepro"; fi
+          echo "RUSTFLAGS=$RF" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
