@@ -75,24 +75,33 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
-      - name: Deterministic build settings
+      - name: Build twice from separate trees and confirm reproducibility
         shell: bash
         run: |
-          # Same knobs release.yaml applies: fixed timestamp, no incremental,
-          # stripped path prefixes, and /Brepro on Windows.
-          echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
-          RF="--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
-          if [ "${{ runner.os }}" = "Windows" ]; then RF="$RF -Clink-arg=/Brepro"; fi
-          echo "RUSTFLAGS=$RF" >> "$GITHUB_ENV"
-      - name: Build twice and confirm byte-identical output
-        shell: bash
-        run: |
+          set -euo pipefail
+          t="${{ matrix.target }}"
           bin=murk; [ "${{ runner.os }}" = "Windows" ] && bin=murk.exe
-          cargo build --release --locked --target ${{ matrix.target }} --target-dir target-a
-          cargo build --release --locked --target ${{ matrix.target }} --target-dir target-b
-          h1=$(sha256sum "target-a/${{ matrix.target }}/release/$bin" | cut -d' ' -f1)
-          h2=$(sha256sum "target-b/${{ matrix.target }}/release/$bin" | cut -d' ' -f1)
-          echo "build A: $h1"; echo "build B: $h2"
+          sde="$(git log -1 --pretty=%ct)"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          winflag=""; [ "${{ runner.os }}" = "Windows" ] && winflag="-Clink-arg=/Brepro"
+          # Build the same committed source from two different paths, each
+          # remapping its own root to /src (plus the shared build timestamp and
+          # no-incremental knobs release.yaml applies). If an independent rebuild
+          # at a different path is byte-identical, the release output is too.
+          two="$RUNNER_TEMP/murk-repro"
+          rm -rf "$two"; mkdir -p "$two"
+          git archive HEAD | tar -x -C "$two"
+          build() {
+            ( cd "$1" \
+              && SOURCE_DATE_EPOCH="$sde" \
+                 RUSTFLAGS="--remap-path-prefix=$1=/src --remap-path-prefix=$cargo_home=/cargo $winflag" \
+                 cargo build --release --locked --target "$t" )
+          }
+          build "$GITHUB_WORKSPACE"
+          build "$two"
+          h1=$(sha256sum "$GITHUB_WORKSPACE/target/$t/release/$bin" | cut -d' ' -f1)
+          h2=$(sha256sum "$two/target/$t/release/$bin" | cut -d' ' -f1)
+          echo "tree A: $h1"; echo "tree B: $h2"
           if [ "$h1" != "$h2" ]; then echo "::error::non-reproducible build ($h1 != $h2)"; exit 1; fi
 
   test:
