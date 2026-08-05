@@ -80,27 +80,36 @@ jobs:
         run: |
           set -euo pipefail
           t="${{ matrix.target }}"
-          bin=murk; [ "${{ runner.os }}" = "Windows" ] && bin=murk.exe
           sde="$(git log -1 --pretty=%ct)"
-          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          winflag=""; [ "${{ runner.os }}" = "Windows" ] && winflag="-Clink-arg=/Brepro"
+          bin=murk; winflag=""
+          # Path forms differ per OS: POSIX paths for the shell/tar, native
+          # paths for rustc --remap-path-prefix. On Windows convert via cygpath.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bin=murk.exe; winflag="-Clink-arg=/Brepro"
+            ws_p="$(cygpath -u "$GITHUB_WORKSPACE")"; ws_n="$(cygpath -m "$GITHUB_WORKSPACE")"
+            two_p="$(cygpath -u "$RUNNER_TEMP")/murk-repro"; two_n="$(cygpath -m "$RUNNER_TEMP")/murk-repro"
+            ch_n="$(cygpath -m "${CARGO_HOME:-$HOME/.cargo}")"
+          else
+            ws_p="$GITHUB_WORKSPACE"; ws_n="$ws_p"
+            two_p="$RUNNER_TEMP/murk-repro"; two_n="$two_p"
+            ch_n="${CARGO_HOME:-$HOME/.cargo}"
+          fi
           # Build the same committed source from two different paths, each
-          # remapping its own root to /src (plus the shared build timestamp and
-          # no-incremental knobs release.yaml applies). If an independent rebuild
-          # at a different path is byte-identical, the release output is too.
-          two="$RUNNER_TEMP/murk-repro"
-          rm -rf "$two"; mkdir -p "$two"
-          git archive HEAD | tar -x -C "$two"
-          build() {
+          # remapping its own root to /src (with a fixed timestamp and no
+          # incremental artifacts). A byte-identical rebuild at a different path
+          # means the release output is independently reproducible.
+          rm -rf "$two_p"; mkdir -p "$two_p"
+          git archive HEAD | tar -x -C "$two_p"
+          build() {  # $1 = POSIX dir to build in, $2 = native root for remap
             ( cd "$1" \
               && SOURCE_DATE_EPOCH="$sde" \
-                 RUSTFLAGS="--remap-path-prefix=$1=/src --remap-path-prefix=$cargo_home=/cargo $winflag" \
+                 RUSTFLAGS="--remap-path-prefix=$2=/src --remap-path-prefix=$ch_n=/cargo $winflag" \
                  cargo build --release --locked --target "$t" )
           }
-          build "$GITHUB_WORKSPACE"
-          build "$two"
-          h1=$(sha256sum "$GITHUB_WORKSPACE/target/$t/release/$bin" | cut -d' ' -f1)
-          h2=$(sha256sum "$two/target/$t/release/$bin" | cut -d' ' -f1)
+          build "$ws_p" "$ws_n"
+          build "$two_p" "$two_n"
+          h1=$(sha256sum "$ws_p/target/$t/release/$bin" | cut -d' ' -f1)
+          h2=$(sha256sum "$two_p/target/$t/release/$bin" | cut -d' ' -f1)
           echo "tree A: $h1"; echo "tree B: $h2"
           if [ "$h1" != "$h2" ]; then echo "::error::non-reproducible build ($h1 != $h2)"; exit 1; fi
 
