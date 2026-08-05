@@ -166,6 +166,8 @@ murk import .env.rotated  # bulk-update from a file
 
 ## CI/CD
 
+[![GitHub Marketplace](https://img.shields.io/badge/GitHub%20Marketplace-murk--action-2ea44f?logo=github&logoColor=white)](https://github.com/marketplace/actions/murk-action)
+
 Use [murk-action](https://github.com/interrupted-inc/murk-action) to decrypt secrets in GitHub Actions workflows:
 
 ```yaml
