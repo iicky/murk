@@ -135,9 +135,13 @@ jobs:
           # disable incremental artifacts, strip local path prefixes, and (on
           # Windows) emit a content-hashed PE timestamp via /Brepro.
           echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
-          RF="--remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
-          if [ "${{ runner.os }}" = "Windows" ]; then RF="$RF -Clink-arg=/Brepro"; fi
-          echo "RUSTFLAGS=$RF" >> "$GITHUB_ENV"
+          ws="$GITHUB_WORKSPACE"; ch="${CARGO_HOME:-$HOME/.cargo}"; win=""
+          # rustc records native paths; on Windows the remap prefix must be the
+          # cygpath -m form (matches what the reproducibility CI check verifies).
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ws="$(cygpath -m "$GITHUB_WORKSPACE")"; ch="$(cygpath -m "${CARGO_HOME:-$HOME/.cargo}")"; win=" -Clink-arg=/Brepro"
+          fi
+          echo "RUSTFLAGS=--remap-path-prefix=$ws=/src --remap-path-prefix=$ch=/cargo$win" >> "$GITHUB_ENV"
 
       - name: Build
         run: |
