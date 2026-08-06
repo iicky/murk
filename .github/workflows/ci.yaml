@@ -58,6 +58,9 @@ jobs:
 
   reproducibility:
     name: Reproducible build (${{ matrix.os }})
+    # Reproducibility is verified on main and on demand, not on every PR — the
+    # two full release builds it does per platform are too costly to run each PR.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
