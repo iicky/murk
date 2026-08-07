@@ -10,11 +10,12 @@
 # CI:            .github/workflows/mutants.yaml (scheduled + manual; never on
 #                PRs — it is slow). Green baseline; red on a real regression.
 
-# The security-critical, in-process crypto surface. These modules are covered by
-# the lib's unit + property tests, so a survivor here is a genuine assertion gap
+# The security-critical, in-process crypto surface plus the I/O-heavier vault
+# modules (key resolution, export filtering/escaping). All are covered by the
+# lib's unit + property tests, so a survivor here is a genuine assertion gap
 # rather than a test-tool artifact. The lib.rs MAC/integrity/load functions are
 # mutation-tested by a second, function-scoped invocation in mutants.yaml.
-examine_globs = ["src/crypto.rs", "src/signing.rs", "src/recovery.rs"]
+examine_globs = ["src/crypto.rs", "src/signing.rs", "src/recovery.rs", "src/env.rs", "src/export.rs"]
 
 # Only the lib's unit + property tests need to run to catch mutants in this
 # surface; skipping the slow integration/CLI tests keeps each mutant tractable.

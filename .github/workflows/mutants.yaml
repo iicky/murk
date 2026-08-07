@@ -30,9 +30,11 @@ jobs:
       - name: Prepare report directory
         run: mkdir -p target/mutants
 
-      # The in-process crypto surface (scope + --lib test args from
-      # .cargo/mutants.toml).
-      - name: Mutation test — crypto core
+      # The default examine_globs scope from .cargo/mutants.toml: the in-process
+      # crypto surface plus the I/O-heavier env (key resolution) and export
+      # (scope/policy filtering + shell escaping) modules. --lib test args keep
+      # each mutant tractable.
+      - name: Mutation test — crypto core & vault I/O modules
         run: cargo mutants --output target/mutants/crypto
 
       # The MAC / integrity / load trust boundary in lib.rs, scoped by function
@@ -42,6 +44,22 @@ jobs:
           cargo mutants --output target/mutants/mac
           --file src/lib.rs
           --re 'compute_mac|verify_mac|mac_bytes|schema_mac_bytes|decode_mac_key|generate_mac_key|signing_message|sign_vault|verify_vault_signature|check_signature|resolve_meta_state|decrypt_vault'
+
+      # The config-generation invariant for `murk agent connect`: a client config
+      # must reference a MURK_KEY_FILE *path* (+ MURK_AGENT=1) and never inline
+      # key material. Scoped by function name to the renderers, which are
+      # mutation-clean. The surrounding JSONC/TOML scanner and surgical
+      # file-editing helpers (skip_trivia, scan_*, object_members,
+      # upsert/remove_*_server, connect_client error handling) are not part of
+      # this scoped no-inline-key invariant; they preserve/splice existing
+      # config bytes and are covered by round-trip unit tests. Full-file
+      # 0-missed is deferred: their survivors/timeouts are byte-index arithmetic
+      # in bounded parse loops, many equivalent, with no key-material exposure.
+      - name: Mutation test — agent connect config generation
+        run: >
+          cargo mutants --output target/mutants/connect
+          --file src/connect.rs
+          --re 'render_value|render_member|render_toml_member|fresh_document|\bquote\b'
 
       - name: Upload mutation reports
         if: always()

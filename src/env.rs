@@ -227,8 +227,21 @@ pub fn parse_env(contents: &str) -> Vec<(String, Zeroizing<String>)> {
     pairs
 }
 
-/// Warn if `.env` has loose permissions (Unix only).
-pub fn warn_env_permissions() {
+/// The loose-permission warning for a `.env` mode, if it is group/other-readable
+/// (Unix only). `None` when the mode is owner-only.
+#[cfg(unix)]
+fn world_readable_warning(mode: u32) -> Option<String> {
+    (mode & WORLD_READABLE_MASK != 0).then(|| {
+        format!(
+            "\x1b[1;33mwarning:\x1b[0m .env is readable by others (mode {:o}). Run: \x1b[1mchmod 600 .env\x1b[0m",
+            mode & 0o777
+        )
+    })
+}
+
+/// The warning to show when `.env` in the cwd has loose permissions, else `None`.
+/// Always `None` on non-Unix platforms, where file modes are not enforced.
+pub fn env_permission_warning() -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -236,15 +249,10 @@ pub fn warn_env_permissions() {
         if env_path.exists()
             && let Ok(meta) = fs::metadata(env_path)
         {
-            let mode = meta.permissions().mode();
-            if mode & WORLD_READABLE_MASK != 0 {
-                eprintln!(
-                    "\x1b[1;33mwarning:\x1b[0m .env is readable by others (mode {:o}). Run: \x1b[1mchmod 600 .env\x1b[0m",
-                    mode & 0o777
-                );
-            }
+            return world_readable_warning(meta.permissions().mode());
         }
     }
+    None
 }
 
 /// Check whether `.env` already contains a `MURK_KEY` line.
@@ -792,7 +800,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn warn_env_permissions_no_warning_on_secure_file() {
+    fn world_readable_warning_flags_group_and_other_bits() {
+        // Owner-only mode: no warning.
+        assert_eq!(world_readable_warning(0o600), None);
+        // Group- or world-readable modes: a warning naming the octal mode.
+        for mode in [0o644, 0o640, 0o604, 0o666] {
+            let msg =
+                world_readable_warning(mode).unwrap_or_else(|| panic!("mode {mode:o} should warn"));
+            assert!(msg.contains("readable by others"));
+            assert!(
+                msg.contains(&format!("{mode:o}")),
+                "warning should name the octal mode {mode:o}: {msg}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_permission_warning_matches_dotenv_mode() {
         use std::os::unix::fs::PermissionsExt;
 
         let _cwd = CWD_LOCK
@@ -803,15 +828,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let env_path = dir.join(".env");
-        std::fs::write(&env_path, "KEY=val\n").unwrap();
-        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-
-        // Just verify it doesn't panic — output goes to stderr.
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
-        warn_env_permissions();
-        std::env::set_current_dir(original_dir).unwrap();
 
+        // No .env at all: no warning.
+        assert_eq!(env_permission_warning(), None);
+
+        // Secure .env (0o600): no warning.
+        std::fs::write(&env_path, "KEY=val\n").unwrap();
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(env_permission_warning(), None);
+
+        // Loose .env (0o644): warns.
+        std::fs::set_permissions(&env_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            env_permission_warning().is_some_and(|m| m.contains("readable by others")),
+            "a group/world-readable .env must produce a warning"
+        );
+
+        std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1265,5 +1300,185 @@ mod tests {
 
         std::env::set_current_dir(original_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn key_source_describe_renders_each_variant() {
+        assert_eq!(
+            KeySource::EnvVar.describe(),
+            "MURK_KEY environment variable"
+        );
+        let p = std::path::PathBuf::from("/keys/env-file");
+        let env_file = KeySource::EnvFile(p.clone()).describe();
+        assert!(env_file.contains("MURK_KEY_FILE"));
+        assert!(env_file.contains("/keys/env-file"));
+        assert_eq!(
+            KeySource::Auto(p.clone()).describe(),
+            p.display().to_string()
+        );
+    }
+
+    #[test]
+    fn dotenv_has_murk_key_detects_key_file_variants() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let original_dir = std::env::current_dir().unwrap();
+        // A bare MURK_KEY_FILE= line and an `export`-prefixed one both count.
+        for line in ["MURK_KEY_FILE=/path\n", "export MURK_KEY_FILE=/path\n"] {
+            let dir = std::env::temp_dir().join("murk_test_has_keyfile");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(".env"), line).unwrap();
+            std::env::set_current_dir(&dir).unwrap();
+            assert!(dotenv_has_murk_key(), "line {line:?} should be detected");
+            std::env::set_current_dir(&original_dir).unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn parse_env_comment_with_equals_is_skipped() {
+        // A comment line that happens to contain `=` must still be dropped;
+        // it must not be parsed into a `# FOO` key.
+        assert!(parse_env("# FOO=bar\n").is_empty());
+        assert!(parse_env("   # A=B\n").is_empty());
+    }
+
+    #[test]
+    fn write_key_ref_to_dotenv_creates_new() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join("murk_test_write_ref_new");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_key_ref_to_dotenv(std::path::Path::new("/keys/vault-key")).unwrap();
+        let contents = std::fs::read_to_string(dir.join(".env")).unwrap();
+        std::env::set_current_dir(&original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(contents.contains("export MURK_KEY_FILE='/keys/vault-key'"));
+    }
+
+    #[test]
+    fn write_key_ref_to_dotenv_strips_all_key_lines_and_keeps_others() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join("murk_test_write_ref_replace");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".env"),
+            "KEEP=1\n\
+             MURK_KEY=oldinline\n\
+             export MURK_KEY=oldinline2\n\
+             MURK_KEY_FILE=/oldfile\n\
+             export MURK_KEY_FILE=/oldfile2\n",
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_key_ref_to_dotenv(std::path::Path::new("/keys/new-key")).unwrap();
+        let contents = std::fs::read_to_string(dir.join(".env")).unwrap();
+        std::env::set_current_dir(&original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // Unrelated line is preserved.
+        assert!(
+            contents.contains("KEEP=1"),
+            "unrelated line dropped: {contents:?}"
+        );
+        // Exactly the new reference remains.
+        assert!(contents.contains("export MURK_KEY_FILE='/keys/new-key'"));
+        // Every prior key/key-file line (all four forms) is stripped.
+        assert!(
+            !contents.contains("oldinline"),
+            "inline key survived: {contents:?}"
+        );
+        assert!(
+            !contents.contains("/oldfile"),
+            "old key-file survived: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn write_key_ref_to_dotenv_escapes_single_quotes() {
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dir = std::env::temp_dir().join("murk_test_write_ref_escape");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        write_key_ref_to_dotenv(std::path::Path::new("/keys/a'b")).unwrap();
+        let contents = std::fs::read_to_string(dir.join(".env")).unwrap();
+        std::env::set_current_dir(&original_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // A `'` in the path is escaped so the quoted assignment can't break out.
+        assert!(
+            contents.contains("export MURK_KEY_FILE='/keys/a'\\''b'"),
+            "single quote not escaped: {contents:?}"
+        );
+    }
+
+    #[test]
+    fn config_key_paths_live_under_home_config_murk() {
+        // key_file_path / agent_key_file_path / agent_keys_dir must all resolve
+        // beneath ~/.config/murk — a stubbed empty path (mutant) would break the
+        // per-vault key isolation these paths encode.
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _cwd = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let prev_home = std::env::var_os("HOME");
+        let home = std::env::temp_dir().join("murk_test_config_paths_home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        unsafe { std::env::set_var("HOME", &home) };
+
+        let keys_root = home.join(".config").join("murk").join("keys");
+        let agent_root = home.join(".config").join("murk").join("agent-keys");
+
+        let key_path = key_file_path("/project/.murk").unwrap();
+        let agent_path = agent_key_file_path("/project/.murk", "cursor").unwrap();
+        let agent_dir = agent_keys_dir().unwrap();
+
+        unsafe {
+            match &prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+
+        assert!(
+            key_path.starts_with(&keys_root),
+            "key_file_path {key_path:?} not under {keys_root:?}"
+        );
+        assert_eq!(agent_dir, agent_root);
+        assert!(
+            agent_path.starts_with(&agent_root),
+            "agent_key_file_path {agent_path:?} not under {agent_root:?}"
+        );
+        // The grant key file is named for the grant, keeping distinct grants apart.
+        assert!(
+            agent_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("-cursor")),
+            "agent key file {agent_path:?} should end with the grant name"
+        );
     }
 }
