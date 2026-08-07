@@ -176,6 +176,8 @@ mod tests {
         assert!(validate_grant_name("codex-debug").is_ok());
         assert!(validate_grant_name("").is_err());
         assert!(validate_grant_name("has space").is_err());
+        // Boundary: 64 chars is the max accepted; 65 is rejected.
+        assert!(validate_grant_name(&"x".repeat(64)).is_ok());
         assert!(validate_grant_name(&"x".repeat(65)).is_err());
     }
 
