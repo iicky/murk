@@ -139,6 +139,21 @@ pub fn revoke_recipient(
         .map(|(name, _)| name.clone())
         .collect();
 
+    // Report keys the revoked recipient could actually decrypt — computed
+    // BEFORE the removal loop below, which strips their scoped entries. Covers
+    // shared secrets (every recipient can read), their scoped entries, and any
+    // group they belonged to.
+    let exposed_keys: Vec<String> = vault
+        .secrets
+        .iter()
+        .filter(|(_, entry)| {
+            !entry.shared.is_empty()
+                || pubkeys.iter().any(|pk| entry.private.contains_key(pk))
+                || entry.grouped.keys().any(|g| revoked_groups.contains(g))
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+
     let mut display_name = None;
     for pubkey in &pubkeys {
         vault.recipients.retain(|pk| pk != pubkey);
@@ -167,20 +182,6 @@ pub fn revoke_recipient(
     // orphaned grant record pointing at a pubkey that is no longer a recipient.
     murk.grants
         .retain(|_, grant| !pubkeys.contains(&grant.pubkey));
-
-    // Only report keys the revoked recipient could actually decrypt: shared
-    // secrets (all recipients can read), their scoped entries, and any group
-    // they were a member of.
-    let exposed_keys: Vec<String> = vault
-        .secrets
-        .iter()
-        .filter(|(_, entry)| {
-            !entry.shared.is_empty()
-                || pubkeys.iter().any(|pk| entry.private.contains_key(pk))
-                || entry.grouped.keys().any(|g| revoked_groups.contains(g))
-        })
-        .map(|(key, _)| key.clone())
-        .collect();
 
     Ok(RevokeResult {
         display_name,
