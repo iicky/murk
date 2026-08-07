@@ -31,10 +31,12 @@ jobs:
         run: mkdir -p target/mutants
 
       # The default examine_globs scope from .cargo/mutants.toml: the in-process
-      # crypto surface plus the I/O-heavier env (key resolution) and export
-      # (scope/policy filtering + shell escaping) modules. --lib test args keep
-      # each mutant tractable.
-      - name: Mutation test — crypto core & vault I/O modules
+      # crypto core plus the security-critical vault modules — env (key
+      # resolution), export (scope/policy filtering + escaping), grants
+      # (agent-grant create/revoke), recipients (who-can-decrypt), policy
+      # (agent allow-tag enforcement), and merge (three-way merge driver).
+      # --lib test args keep each mutant tractable.
+      - name: Mutation test — crypto core & vault security modules
         run: cargo mutants --output target/mutants/crypto
 
       # The MAC / integrity / load trust boundary in lib.rs, scoped by function

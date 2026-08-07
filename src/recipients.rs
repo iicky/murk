@@ -715,4 +715,81 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("(2 keys)"));
     }
+
+    #[test]
+    fn revoke_recipient_preserves_other_group_members() {
+        let (_, pk1) = generate_keypair();
+        let (_, pk2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk1.clone(), pk2.clone()];
+        let mut murk = empty_murk();
+        // A group holding both the survivor and the recipient being revoked.
+        murk.groups
+            .insert("team".into(), vec![pk1.clone(), pk2.clone()]);
+
+        revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
+
+        // Only the revoked key leaves the group; the other member stays.
+        assert_eq!(murk.groups["team"], vec![pk1.clone()]);
+    }
+
+    #[test]
+    fn revoke_recipient_keeps_unrelated_grants() {
+        let (_, pk1) = generate_keypair();
+        let (_, pk2) = generate_keypair(); // revoked agent
+        let (_, pk3) = generate_keypair(); // unrelated agent
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk1.clone(), pk2.clone(), pk3.clone()];
+        let mut murk = empty_murk();
+        murk.grants.insert(
+            "revoked".into(),
+            types::GrantEntry {
+                pubkey: pk2.clone(),
+                ..Default::default()
+            },
+        );
+        murk.grants.insert(
+            "other".into(),
+            types::GrantEntry {
+                pubkey: pk3.clone(),
+                ..Default::default()
+            },
+        );
+
+        revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
+
+        // The revoked agent's grant is dropped; the unrelated grant survives.
+        assert!(!murk.grants.contains_key("revoked"));
+        assert!(murk.grants.contains_key("other"));
+    }
+
+    #[test]
+    fn revoke_recipient_reports_scoped_only_exposed_key() {
+        let (_, pk1) = generate_keypair();
+        let (_, pk2) = generate_keypair();
+        let mut vault = empty_vault();
+        vault.recipients = vec![pk1.clone(), pk2.clone()];
+        // A secret with NO shared value, readable by pk2 only via a scoped entry.
+        // The empty shared value is what exercises the private clause of the
+        // exposed-keys OR (a shared value would short-circuit it true).
+        vault.secrets.insert(
+            "SCOPED_ONLY".into(),
+            types::SecretEntry {
+                shared: String::new(),
+                private: BTreeMap::from([(pk2.clone(), "scoped_ct".into())]),
+                grouped: std::collections::BTreeMap::default(),
+            },
+        );
+        let mut murk = empty_murk();
+        murk.private.insert(
+            "SCOPED_ONLY".into(),
+            HashMap::from([(pk2.clone(), secret("v"))]),
+        );
+
+        let result = revoke_recipient(&mut vault, &mut murk, &pk2).unwrap();
+
+        // The revoked recipient could read this scoped-only key, so it must be
+        // reported as exposed even though it has no shared value.
+        assert_eq!(result.exposed_keys, vec!["SCOPED_ONLY"]);
+    }
 }
