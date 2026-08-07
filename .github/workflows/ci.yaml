@@ -77,7 +77,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
         with:
           targets: ${{ matrix.target }}
+      # No target cache: restoring one would warm tree A but not the fresh
+      # tree B, making the two builds asymmetric and the comparison meaningless.
+      # Registry download caching stays on (the shared cargo home is symmetric).
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+        with:
+          cache-targets: false
       - name: Build twice from separate trees and confirm reproducibility
         shell: bash
         run: |
