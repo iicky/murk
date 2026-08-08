@@ -2997,6 +2997,49 @@ mod tests {
     }
 
     #[test]
+    fn resolve_meta_state_plugin_failure_is_environment_error_not_access_verdict() {
+        // When the meta blob is present and decrypt fails for a *plugin*
+        // identity (missing `age-plugin-<name>` binary / declined touch), that
+        // is an environment problem and must be surfaced verbatim — NOT reported
+        // as "you are not a recipient". The mutant that flips the
+        // `matches!(.., Plugin)` guard to `false` would misroute it into the
+        // not-a-recipient branch; asserting the plugin error survives kills it.
+        use bech32::{Bech32, Hrp};
+
+        // Meta present: a valid age ciphertext so base64 + age-header parsing
+        // succeed and `decrypt` reaches the guard.
+        let (_, other_pubkey) = generate_keypair();
+        let recipient = crypto::parse_recipient(&other_pubkey).unwrap();
+        let mut vault = empty_vault();
+        vault.meta = encrypt_value(b"{}", std::slice::from_ref(&recipient)).unwrap();
+
+        // Plugin identity for a plugin that is not installed (obscure name so an
+        // installed plugin cannot pass this for the wrong reason).
+        let hrp = Hrp::parse("age-plugin-murknosuchpluginxyz-").unwrap();
+        let identity_str = bech32::encode::<Bech32>(hrp, &[0u8; 20])
+            .unwrap()
+            .to_uppercase();
+        let plugin_identity: age::plugin::Identity = identity_str.parse().unwrap();
+        let identity = crypto::MurkIdentity::Plugin {
+            identity: plugin_identity,
+            pubkey: other_pubkey,
+        };
+
+        let Err(err) = resolve_meta_state(&vault, &identity) else {
+            panic!("plugin decrypt failure must not resolve to a valid MetaState");
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("age-plugin-murknosuchpluginxyz"),
+            "a plugin decrypt failure must surface the environment error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("not a recipient"),
+            "a plugin/environment failure must not be reported as an access verdict, got: {msg}"
+        );
+    }
+
+    #[test]
     fn load_vault_zero_secrets() {
         let _lock = ENV_LOCK
             .lock()

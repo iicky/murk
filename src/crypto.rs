@@ -557,6 +557,37 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_plugin_identity_without_binary_errs_and_never_panics() {
+        // A plugin identity whose `age-plugin-<name>` binary is not installed.
+        // The name is deliberately obscure so an installed plugin cannot make
+        // this pass for the wrong reason.
+        let (identity_str, _) = make_plugin_pair("murknosuchpluginxyz");
+        let plugin_identity: PluginIdentity = identity_str.parse().unwrap();
+        let identity = MurkIdentity::Plugin {
+            identity: plugin_identity,
+            pubkey: "age1-recipient-unused-by-decrypt".into(),
+        };
+
+        // Valid age ciphertext (to a native recipient) so the age header parses
+        // and `decrypt` reaches the plugin-dispatch arm.
+        let (_, pubkey) = generate_keypair();
+        let recipient = parse_recipient(&pubkey).unwrap();
+        let ciphertext = encrypt(b"unreadable without the plugin", &[recipient]).unwrap();
+
+        // The binary is absent, so `IdentityPluginV1::new` fails and `decrypt`
+        // surfaces a graceful "age-plugin-… unavailable" error. The mutant that
+        // drops the `MurkIdentity::Plugin` arm here would leave `plugin_holder`
+        // = None and panic at the `.expect()` below it — so reaching the arm and
+        // getting an Err (not a panic) is exactly what kills that mutant.
+        let err = decrypt(&ciphertext, &identity).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("age-plugin-murknosuchpluginxyz"),
+            "expected a plugin-unavailable error naming the plugin, got: {msg}"
+        );
+    }
+
+    #[test]
     fn parse_recipient_ssh_ed25519() {
         // A valid ssh-ed25519 public key (without comment)
         let key =
