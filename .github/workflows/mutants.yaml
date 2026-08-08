@@ -63,6 +63,21 @@ jobs:
           --file src/connect.rs
           --re 'render_value|render_member|render_toml_member|fresh_document|\bquote\b'
 
+      # The strict-mode / agent-context gates that decide whether murk falls
+      # back to the operator's stored key and honors the vault's agent policy.
+      # Scoped to the env-driven decision functions, which are platform-
+      # independent and mutation-clean. is_ram_backed and stdout_is_regular_file
+      # are deliberately out of scope: they are per-OS #[cfg] syscall wrappers
+      # (the inactive branch is dead code on any single runner) whose result
+      # depends on runtime filesystem/fd state (tmpfs availability, whether
+      # stdout is a captured pipe) that a --lib test cannot control portably —
+      # covering them to 0-missed needs a multi-OS matrix + fd redirection.
+      - name: Mutation test — strict-mode & agent gates
+        run: >
+          cargo mutants --output target/mutants/hardening
+          --file src/hardening.rs
+          --re 'strict_mode|agent_context|ci_context|self_scope|strict_from|effective_strict_from|disable_core_dumps'
+
       - name: Upload mutation reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

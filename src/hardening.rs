@@ -246,4 +246,77 @@ mod tests {
         // macOS has no tmpfs by default; the disk-backed temp dir must read false.
         assert!(!is_ram_backed(&std::env::temp_dir()));
     }
+
+    #[test]
+    fn agent_context_tracks_murk_agent() {
+        let _env = crate::testutil::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var("MURK_AGENT").ok();
+
+        unsafe { std::env::set_var("MURK_AGENT", "1") };
+        assert!(agent_context(), "MURK_AGENT=1 is agent context");
+        unsafe { std::env::remove_var("MURK_AGENT") };
+        assert!(!agent_context(), "unset MURK_AGENT is not agent context");
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("MURK_AGENT", v),
+                None => std::env::remove_var("MURK_AGENT"),
+            }
+        }
+    }
+
+    #[test]
+    fn ci_context_tracks_ci_env() {
+        let _env = crate::testutil::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var("CI").ok();
+
+        unsafe { std::env::set_var("CI", "1") };
+        assert!(ci_context(), "CI=1 is CI context");
+        unsafe { std::env::remove_var("CI") };
+        assert!(!ci_context(), "unset CI is not CI context");
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("CI", v),
+                None => std::env::remove_var("CI"),
+            }
+        }
+    }
+
+    #[test]
+    fn self_scope_from_opt_in_or_agent_context() {
+        let _env = crate::testutil::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev_ss = std::env::var("MURK_SELF_SCOPE").ok();
+        let prev_agent = std::env::var("MURK_AGENT").ok();
+        unsafe { std::env::remove_var("MURK_AGENT") };
+
+        // Explicit self-scope opt-in, no agent context → on (guards `||`).
+        unsafe { std::env::set_var("MURK_SELF_SCOPE", "1") };
+        assert!(self_scope(), "explicit MURK_SELF_SCOPE opt-in");
+
+        // Neither opt-in nor agent context → off.
+        unsafe { std::env::remove_var("MURK_SELF_SCOPE") };
+        assert!(!self_scope(), "no opt-in and no agent context");
+
+        // Agent context alone implies self-scope (binds you to the policy).
+        unsafe { std::env::set_var("MURK_AGENT", "1") };
+        assert!(self_scope(), "agent context implies self-scope");
+
+        unsafe {
+            match prev_ss {
+                Some(v) => std::env::set_var("MURK_SELF_SCOPE", v),
+                None => std::env::remove_var("MURK_SELF_SCOPE"),
+            }
+            match prev_agent {
+                Some(v) => std::env::set_var("MURK_AGENT", v),
+                None => std::env::remove_var("MURK_AGENT"),
+            }
+        }
+    }
 }
