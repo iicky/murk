@@ -46,10 +46,4 @@ timeout_multiplier = 8.0
 exclude_re = [
     "impl std::fmt::Debug",
     "impl std::fmt::Display",
-    # Plugin/hardware paths need an `age-plugin-*` binary (YubiKey/Secure Enclave)
-    # that CI runners lack, so no test can exercise them. Excluded by exact
-    # function context, so other Plugin mutants (plugin_name, is_signing_capable)
-    # stay in scope and must be caught. Tracked to cover via a mock age-plugin.
-    "delete match arm MurkIdentity::Plugin.*in decrypt",
-    "match guard matches.*MurkIdentity::Plugin.*resolve_meta_state",
 ]
