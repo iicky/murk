@@ -985,4 +985,79 @@ mod tests {
         assert_eq!(vault.schema["K"].revoked_at, None);
         assert!(rotation_health(&vault, ts("2030-01-01T00:00:00Z")).is_empty());
     }
+
+    #[test]
+    fn add_grouped_secret_scopes_to_group_and_drops_shared() {
+        let (_, operator) = generate_keypair();
+        let mut vault = empty_vault();
+        let mut murk = empty_murk();
+        // Operator is the sole member — exercises the membership guard's true arm.
+        murk.groups.insert("team".into(), vec![operator.clone()]);
+        murk.values.insert("K".into(), secret("old-shared"));
+
+        let is_new = add_grouped_secret(
+            &mut vault,
+            &mut murk,
+            "K",
+            "v",
+            None,
+            "team",
+            &[],
+            &operator,
+        )
+        .unwrap();
+
+        assert!(is_new, "a brand-new key with no description returns true");
+        assert!(
+            !murk.values.contains_key("K"),
+            "the shared value must be dropped when a key is scoped to a group"
+        );
+        assert_eq!(
+            murk.grouped
+                .get("K")
+                .and_then(|g| g.get("team"))
+                .map(|v| v.as_str()),
+            Some("v"),
+            "the value must be scoped under the named group"
+        );
+    }
+
+    #[test]
+    fn add_grouped_secret_rejects_non_member_operator() {
+        let (_, operator) = generate_keypair();
+        let (_, other) = generate_keypair();
+        let mut vault = empty_vault();
+        let mut murk = empty_murk();
+        // Operator is NOT a member of the group — must be refused.
+        murk.groups.insert("team".into(), vec![other.clone()]);
+
+        let result = add_grouped_secret(
+            &mut vault,
+            &mut murk,
+            "K",
+            "v",
+            None,
+            "team",
+            &[],
+            &operator,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rotation_health_not_overdue_at_exact_due_moment() {
+        let vault = vault_with(types::SchemaEntry {
+            rotation_interval_days: Some(10),
+            updated: Some("2026-01-01T00:00:00Z".into()),
+            ..Default::default()
+        });
+        // Exactly at the due instant (updated + 10 days): `>` means not overdue.
+        assert!(rotation_health(&vault, ts("2026-01-11T00:00:00Z")).is_empty());
+        // One second past due → overdue.
+        assert!(
+            rotation_health(&vault, ts("2026-01-11T00:00:01Z"))
+                .iter()
+                .any(|i| matches!(i, RotationIssue::Overdue { .. }))
+        );
+    }
 }

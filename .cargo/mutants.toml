@@ -14,7 +14,8 @@
 # I/O-heavier and structural modules — key resolution (env), export scope/policy
 # filtering + escaping, agent-grant creation/revoke (grants), recipient
 # add/revoke — the who-can-decrypt surface (recipients), agent allow-tag
-# enforcement (policy), and the three-way merge driver (merge). All are covered
+# enforcement (policy), the three-way merge driver (merge), and secret
+# add/rotate/group-scoping (secrets). All are covered
 # by the lib tests, so a survivor here is a genuine assertion gap rather than a
 # test-tool artifact. The lib.rs MAC/integrity/load functions are mutation-
 # tested by a second, function-scoped invocation in mutants.yaml.
@@ -28,6 +29,7 @@ examine_globs = [
     "src/recipients.rs",
     "src/policy.rs",
     "src/merge.rs",
+    "src/secrets.rs",
 ]
 
 # Only the lib's unit + property tests need to run to catch mutants in this
