@@ -1,0 +1,6 @@
+# comment
+
+export API_URL=https://example.com
+QUOTED="hi there"
+SPACED=a b c
+EMPTY=
