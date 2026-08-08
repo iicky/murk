@@ -1,8 +1,10 @@
 name: Fuzz Coverage
 
-# Line/region coverage of the fuzz targets, replaying ONLY the checked-in corpus
-# (no live fuzzing) so the numbers are deterministic run-to-run. This answers
-# "does the corpus actually drive the fuzzer into the parse/merge/recovery logic,
+# Line/region coverage of the fuzz targets, replaying ONLY the tracked seed
+# corpus in fuzz/seeds/<target>/ (no live fuzzing) so the numbers are
+# deterministic run-to-run. (fuzz/corpus/ — the large evolving corpus — is
+# gitignored, so seeds are the committed inputs.) This answers
+# "do the seeds actually drive the fuzzer into the parse/merge/recovery logic,
 # or just bounce off the first error return?" — a diagnostic, not a gate. It is
 # deliberately NOT uploaded to Codecov: coverage-by-fuzzing is weaker than
 # coverage-by-assertion and would dilute the unit-test gate. Manual dispatch only.
@@ -45,8 +47,14 @@ jobs:
           mkdir -p fuzz-cov
           for t in $targets; do
             echo "::group::coverage $t"
-            # `coverage` replays the checked-in corpus once — it does not fuzz.
-            cargo fuzz coverage "$t" --target x86_64-unknown-linux-gnu
+            # Loud guard: a target with no seeds is a gap to fix, not a silent
+            # skip — coverage over an empty corpus is meaningless, so fail.
+            if [ ! -d "fuzz/seeds/$t" ] || [ -z "$(ls -A "fuzz/seeds/$t" 2>/dev/null)" ]; then
+              echo "no seeds in fuzz/seeds/$t — add at least one input" >&2
+              exit 1
+            fi
+            # `coverage` replays the tracked seed corpus once — it does not fuzz.
+            cargo fuzz coverage --target x86_64-unknown-linux-gnu "$t" "$PWD/fuzz/seeds/$t"
             # cargo-fuzz's target-dir and profile layout vary across versions
             # (root target/ vs fuzz/target/, fuzz/coverage/ vs coverage/), so
             # discover both artifacts rather than hardcode a path.
