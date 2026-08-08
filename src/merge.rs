@@ -299,20 +299,19 @@ fn merge_secrets(
     theirs_changed_recipients: bool,
     conflicts: &mut Vec<MergeConflict>,
 ) -> BTreeMap<String, SecretEntry> {
-    // If one side changed recipients, all its ciphertext differs from base.
-    // Use the re-encrypted side as the "new base" and apply the other side's diffs.
-    if ours_changed_recipients && !theirs_changed_recipients {
-        return merge_secrets_with_reencrypted_side(base, ours, theirs, "theirs", conflicts);
+    // If a side changed recipients, all its ciphertext differs from base, so
+    // ciphertext-equality cannot detect that side's edits. Route on which
+    // side(s) re-encrypted: use the re-encrypted side as the new baseline and
+    // apply the other side's key-level diffs; if both did, only additions and
+    // removals can be merged without decryption.
+    match (ours_changed_recipients, theirs_changed_recipients) {
+        (true, false) => {
+            merge_secrets_with_reencrypted_side(base, ours, theirs, "theirs", conflicts)
+        }
+        (false, true) => merge_secrets_with_reencrypted_side(base, theirs, ours, "ours", conflicts),
+        (true, true) => merge_secrets_both_reencrypted(base, ours, theirs, conflicts),
+        (false, false) => merge_secrets_normal(base, ours, theirs, conflicts),
     }
-    if theirs_changed_recipients && !ours_changed_recipients {
-        return merge_secrets_with_reencrypted_side(base, theirs, ours, "ours", conflicts);
-    }
-    if ours_changed_recipients && theirs_changed_recipients {
-        return merge_secrets_both_reencrypted(base, ours, theirs, conflicts);
-    }
-
-    // Normal case: neither side changed recipients. Ciphertext comparison works.
-    merge_secrets_normal(base, ours, theirs, conflicts)
 }
 
 /// Normal secret merge: compare ciphertext against base to detect changes.
@@ -1396,5 +1395,377 @@ mod tests {
         // Divergent change is flagged, not silently resolved; ours is kept.
         assert!(r.conflicts.iter().any(|c| c.field == "policy"));
         assert_eq!(r.vault.policy, Some(policy(&["agents"])));
+    }
+
+    // -- merge_btree (schema) key-level resolution --
+
+    #[test]
+    fn merge_schema_both_add_same_key_no_conflict() {
+        let base = base_vault();
+        let entry = SchemaEntry {
+            description: "new".into(),
+            example: None,
+            tags: vec![],
+            ..Default::default()
+        };
+        let mut ours = base.clone();
+        ours.schema.insert("NEW".into(), entry.clone());
+        let mut theirs = base.clone();
+        theirs.schema.insert("NEW".into(), entry.clone());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            r.conflicts.is_empty(),
+            "identical add must not conflict: {:?}",
+            r.conflicts
+        );
+        assert!(r.vault.schema.contains_key("NEW"));
+    }
+
+    #[test]
+    fn merge_schema_both_change_to_same_value_no_conflict() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.schema.get_mut("DB_URL").unwrap().description = "converged".into();
+        let mut theirs = base.clone();
+        theirs.schema.get_mut("DB_URL").unwrap().description = "converged".into();
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            !r.conflicts.iter().any(|c| c.field.contains("schema")),
+            "identical change must not conflict: {:?}",
+            r.conflicts
+        );
+        assert_eq!(r.vault.schema["DB_URL"].description, "converged");
+    }
+
+    #[test]
+    fn merge_schema_theirs_changes_ours_unchanged_takes_theirs() {
+        let base = base_vault();
+        let mut theirs = base.clone();
+        theirs.schema.get_mut("DB_URL").unwrap().description = "theirs desc".into();
+
+        let r = merge_vaults(&base, &base, &theirs);
+        assert!(r.conflicts.is_empty());
+        // Ours untouched, theirs changed — theirs value wins.
+        assert_eq!(r.vault.schema["DB_URL"].description, "theirs desc");
+    }
+
+    #[test]
+    fn merge_schema_removed_one_side_unchanged_other_conflicts() {
+        // A schema-only key isolates the merge_btree removal path (no secret).
+        let mut base = base_vault();
+        base.schema.insert(
+            "TAGGED".into(),
+            SchemaEntry {
+                description: "d".into(),
+                example: None,
+                tags: vec![],
+                ..Default::default()
+            },
+        );
+
+        // Theirs removes it; ours leaves it unchanged → conflict, key kept.
+        let ours = base.clone();
+        let mut theirs = base.clone();
+        theirs.schema.remove("TAGGED");
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            r.conflicts.iter().any(|c| c.field == "schema.TAGGED"),
+            "removal-vs-unchanged must conflict: {:?}",
+            r.conflicts
+        );
+        assert!(r.vault.schema.contains_key("TAGGED"));
+
+        // Symmetric: ours removes, theirs unchanged.
+        let mut ours2 = base.clone();
+        ours2.schema.remove("TAGGED");
+        let theirs2 = base.clone();
+        let r2 = merge_vaults(&base, &ours2, &theirs2);
+        assert!(r2.conflicts.iter().any(|c| c.field == "schema.TAGGED"));
+        assert!(r2.vault.schema.contains_key("TAGGED"));
+    }
+
+    // -- merge_scoped (private) entry resolution --
+
+    #[test]
+    fn merge_scoped_both_add_same_entry_no_conflict() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "same-scope".into());
+        let mut theirs = base.clone();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "same-scope".into());
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            r.conflicts.is_empty(),
+            "identical scoped add must not conflict: {:?}",
+            r.conflicts
+        );
+        assert_eq!(r.vault.secrets["DB_URL"].private["age1alice"], "same-scope");
+    }
+
+    #[test]
+    fn merge_scoped_modified_vs_removed_conflicts() {
+        let mut base = base_vault();
+        base.secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "base-scope".into());
+
+        // Ours modifies the scoped entry; theirs removes it → conflict, ours kept.
+        let mut ours = base.clone();
+        ours.secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "ours-scope".into());
+        let mut theirs = base.clone();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .remove("age1alice");
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            r.conflicts.iter().any(|c| c
+                .reason
+                .contains("modified on our side but removed on theirs")),
+            "conflicts: {:?}",
+            r.conflicts
+        );
+        assert_eq!(
+            r.vault.secrets["DB_URL"]
+                .private
+                .get("age1alice")
+                .map(String::as_str),
+            Some("ours-scope")
+        );
+
+        // Symmetric: ours removes, theirs modifies → conflict, theirs kept.
+        let mut ours2 = base.clone();
+        ours2
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .remove("age1alice");
+        let mut theirs2 = base.clone();
+        theirs2
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "theirs-scope".into());
+        let r2 = merge_vaults(&base, &ours2, &theirs2);
+        assert!(
+            r2.conflicts.iter().any(|c| c
+                .reason
+                .contains("removed on our side but modified on theirs")),
+            "conflicts: {:?}",
+            r2.conflicts
+        );
+        assert_eq!(
+            r2.vault.secrets["DB_URL"]
+                .private
+                .get("age1alice")
+                .map(String::as_str),
+            Some("theirs-scope")
+        );
+    }
+
+    #[test]
+    fn merge_scoped_theirs_change_and_identical_change() {
+        let mut base = base_vault();
+        base.secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "base-scope".into());
+
+        // Theirs changes the scoped entry, ours unchanged → theirs wins.
+        let mut theirs = base.clone();
+        theirs
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "theirs-scope".into());
+        let r = merge_vaults(&base, &base, &theirs);
+        assert!(r.conflicts.is_empty(), "conflicts: {:?}", r.conflicts);
+        assert_eq!(
+            r.vault.secrets["DB_URL"].private["age1alice"],
+            "theirs-scope"
+        );
+
+        // Both change the scoped entry to the SAME value → no conflict.
+        let mut ours2 = base.clone();
+        ours2
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "converged".into());
+        let mut theirs2 = base.clone();
+        theirs2
+            .secrets
+            .get_mut("DB_URL")
+            .unwrap()
+            .private
+            .insert("age1alice".into(), "converged".into());
+        let r2 = merge_vaults(&base, &ours2, &theirs2);
+        assert!(
+            r2.conflicts.is_empty(),
+            "identical scoped change must not conflict: {:?}",
+            r2.conflicts
+        );
+        assert_eq!(r2.vault.secrets["DB_URL"].private["age1alice"], "converged");
+    }
+
+    // -- merge_secrets_normal: removed-vs-unchanged reason --
+
+    #[test]
+    fn merge_secret_removed_ours_unchanged_theirs_reports_unchanged() {
+        let base = base_vault();
+        // Ours removes DB_URL; theirs leaves it exactly as base.
+        let mut ours = base.clone();
+        ours.secrets.remove("DB_URL");
+        ours.schema.remove("DB_URL");
+        let theirs = base.clone();
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        assert!(
+            r.conflicts.iter().any(|c| c.field == "secrets.DB_URL"
+                && c.reason
+                    .contains("removed on one side, unchanged on the other")),
+            "conflicts: {:?}",
+            r.conflicts
+        );
+        assert!(r.vault.secrets.contains_key("DB_URL"));
+    }
+
+    // -- merge_secrets_both_reencrypted: key-level union when both re-encrypt --
+
+    #[test]
+    fn merge_both_change_recipients_merges_secret_keys() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        ours.recipients.push("age1charlie".into());
+        ours.secrets.get_mut("DB_URL").unwrap().shared = "ours-reenc-db".into();
+        ours.secrets.insert(
+            "OURS_KEY".into(),
+            SecretEntry {
+                shared: "ours-only".into(),
+                private: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
+            },
+        );
+        let mut theirs = base.clone();
+        theirs.recipients.push("age1dave".into());
+        theirs.secrets.get_mut("DB_URL").unwrap().shared = "theirs-reenc-db".into();
+        theirs.secrets.insert(
+            "THEIRS_KEY".into(),
+            SecretEntry {
+                shared: "theirs-only".into(),
+                private: BTreeMap::new(),
+                grouped: std::collections::BTreeMap::default(),
+            },
+        );
+
+        let r = merge_vaults(&base, &ours, &theirs);
+        // Both re-encrypted: a base key takes ours; each side's added key survives.
+        assert_eq!(r.vault.secrets["DB_URL"].shared, "ours-reenc-db");
+        assert!(r.vault.secrets.contains_key("OURS_KEY"));
+        assert!(r.vault.secrets.contains_key("THEIRS_KEY"));
+    }
+
+    // -- recipient_label: conflict field names the truncated pubkey --
+
+    #[test]
+    fn merge_recipient_conflict_label_is_truncated_pubkey() {
+        let base = base_vault();
+        let mut ours = base.clone();
+        // Longer than the 12-char label window.
+        ours.recipients.push("age1charlie9999".into());
+        let r = merge_vaults(&base, &ours, &base);
+        assert!(
+            r.conflicts
+                .iter()
+                .any(|c| c.field == "recipients.age1charlie9"),
+            "conflict field must be the 12-char-truncated pubkey: {:?}",
+            r.conflicts
+        );
+    }
+
+    // -- regenerate_meta: rebuilds names, prunes stale groups --
+
+    #[test]
+    fn regenerate_meta_rebuilds_names_and_prunes_stale_groups() {
+        use crate::testutil::{ENV_LOCK, generate_keypair, make_identity, make_recipient};
+
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let (secret, pubkey) = generate_keypair();
+        let recipient = make_recipient(&pubkey);
+        let identity = make_identity(&secret);
+
+        // Meta with a name for pubkey, a live group, and a stale group whose
+        // only member is no longer a recipient of the merged vault.
+        let source_meta = crate::types::Meta {
+            recipients: std::collections::HashMap::from([(pubkey.clone(), "alice".to_string())]),
+            groups: BTreeMap::from([
+                ("team".to_string(), vec![pubkey.clone()]),
+                ("ghost".to_string(), vec!["age1stranger".to_string()]),
+            ]),
+            ..Default::default()
+        };
+        let meta_ct = crate::encrypt_value(
+            &serde_json::to_vec(&source_meta).unwrap(),
+            std::slice::from_ref(&recipient),
+        )
+        .unwrap();
+
+        let mut ours = base_vault();
+        ours.recipients = vec![pubkey.clone()];
+        ours.meta = meta_ct;
+        let theirs = ours.clone();
+        let mut merged = ours.clone();
+        // The merged vault recognizes only `pubkey`; age1stranger is gone.
+        merged.recipients = vec![pubkey.clone()];
+
+        // ENV_LOCK is held, so set + clear is safe; no need to read the prior
+        // value (reading MURK_KEY outside env.rs trips the read-path invariant).
+        unsafe { std::env::set_var("MURK_KEY", &secret) };
+        let out = regenerate_meta(&mut merged, &ours, &theirs);
+        unsafe { std::env::remove_var("MURK_KEY") };
+
+        assert!(
+            out.is_some(),
+            "regenerate_meta must succeed with MURK_KEY set"
+        );
+        let meta = crate::decrypt_meta(&merged, &identity).expect("merged meta must decrypt");
+        assert_eq!(
+            meta.recipients.get(&pubkey).map(String::as_str),
+            Some("alice")
+        );
+        // Live group survives; the stale group is pruned to empty and dropped.
+        assert!(meta.groups.contains_key("team"), "live group must survive");
+        assert!(
+            !meta.groups.contains_key("ghost"),
+            "stale now-empty group must be pruned"
+        );
     }
 }

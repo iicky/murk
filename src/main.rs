@@ -197,7 +197,9 @@ fn resolve_key() -> age::secrecy::SecretString {
 }
 
 fn load_vault(vault: &str) -> (types::Vault, types::Murk, MurkIdentity) {
-    murk_cli::warn_env_permissions();
+    if let Some(warning) = murk_cli::env_permission_warning() {
+        eprintln!("{warning}");
+    }
     let result = try_or_die(murk_cli::load_vault(vault));
     if result.1.legacy_mac {
         eprintln!(
